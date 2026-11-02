@@ -107,16 +107,6 @@
   object-fit: cover;
 }
 
-.summaryInitial {
-  display: grid;
-  place-items: center;
-  width: 100%;
-  height: 100%;
-  color: #5235a5;
-  font-size: 25px;
-  font-weight: 800;
-}
-
 .summary .statusOpen,
 .summary .statusPaused {
   margin-top: 8px;
@@ -778,54 +768,109 @@
   margin-top: 20px;
 }
 
-/* These components live in a separate CSS module from the shared shell, so
-   key off its semantic attribute for consistent retail colors on every route. */
-:global([data-storefront-theme="light"]) .chip,
-:global([data-storefront-theme="light"]) .shareButton {
-  background: #f5f5f7;
-  border-color: #858c98;
-  color: #292c33;
+
+/* App-style horizontal category shelf: real BROKA subcategory photography. */
+.categoryRail {
+  display: flex;
+  gap: 9px;
+  overflow-x: auto;
+  margin: 10px -13px 0;
+  padding: 0 13px 5px;
+  scrollbar-width: none;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.categoryRail::-webkit-scrollbar { display: none; }
+.categoryTile {
+  position: relative;
+  isolation: isolate;
+  display: block;
+  flex: 0 0 108px;
+  height: 108px;
+  overflow: hidden;
+  border: 1px solid rgb(42 202 221 / 45%);
+  border-radius: 16px;
+  background: #10182b;
+  color: #f4f3ff;
+  box-shadow: 0 7px 20px rgb(0 0 0 / 23%);
+  text-decoration: none;
+  transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease;
+}
+.categoryTile:hover {
+  transform: translateY(-2px);
+  border-color: rgb(117 104 255 / 82%);
+  box-shadow: 0 12px 24px rgb(33 45 107 / 44%);
+}
+.categoryTile:focus-visible {
+  outline: 3px solid #b8adff;
+  outline-offset: 3px;
+}
+.categoryTileSelected {
+  border-color: #a08bff;
+  box-shadow: 0 0 0 1px rgb(160 139 255 / 45%), 0 8px 22px rgb(83 66 180 / 34%);
+}
+.categoryTileImage {
+  position: absolute;
+  z-index: -2;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform .3s ease;
+}
+.categoryTile:hover .categoryTileImage { transform: scale(1.04); }
+.categoryTileScrim {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background: linear-gradient(180deg, rgb(4 8 18 / 5%) 17%, rgb(4 8 18 / 24%) 48%, rgb(4 7 15 / 91%) 100%);
+}
+.categoryTileCopy {
+  position: absolute;
+  right: 8px;
+  bottom: 7px;
+  left: 8px;
+  display: grid;
+  gap: 2px;
+  text-shadow: 0 1px 7px rgb(0 0 0 / 92%);
+}
+.categoryTileCopy strong {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #f8f7ff;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.12;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.categoryTileCopy small {
+  color: rgb(231 234 248 / 88%);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.1;
+}
+.categoryTileFallback {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 25% 20%, rgb(41 193 224 / 28%), transparent 55%),
+    linear-gradient(145deg, #182344, #080d1b);
+  color: #a9a4ff;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 46px;
+  font-weight: 800;
 }
 
-:global([data-storefront-theme="light"]) .summaryLogo {
-  background: #f0edf8;
-  border-color: #e2e4e8;
+@media (min-width: 760px) {
+  .categoryRail { gap: 12px; margin-inline: 0; padding-inline: 0; }
+  .categoryTile { flex-basis: 132px; height: 124px; }
+  .categoryTileCopy strong { font-size: 13px; }
 }
 
-:global([data-storefront-theme="light"]) .summaryInitial {
-  color: #5235a5;
-}
-
-:global([data-storefront-theme="light"]) .ownerFacts div {
-  background: #f5f5f7;
-  border-color: #e2e4e8;
-}
-
-:global([data-storefront-theme="light"]) .detailsAction,
-:global([data-storefront-theme="light"]) .infoList a,
-:global([data-storefront-theme="light"]) .reviewsRetry {
-  color: #5235a5;
-}
-
-:global([data-storefront-theme="light"]) .infoList div + div {
-  border-top-color: #e2e4e8;
-}
-
-:global([data-storefront-theme="light"]) .bigPrice {
-  background: none;
-  color: #5235a5;
-  -webkit-background-clip: initial;
-  -webkit-text-fill-color: #5235a5;
-}
-
-:global([data-storefront-theme="light"]) .fact {
-  background: #f5f5f7;
-  border-color: #e5e6ea;
-  color: #292c33;
-}
-
-:global([data-storefront-theme="light"]) .unavailable {
-  background: #fff5f5;
-  border-color: #d77a7a;
-  color: #8b1e1e;
+@media (prefers-reduced-motion: reduce) {
+  .categoryTile,
+  .categoryTileImage { transition: none; }
 }

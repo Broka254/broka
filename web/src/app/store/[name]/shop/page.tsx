@@ -11,7 +11,7 @@ import Link from 'next/link'
 import { notFound, permanentRedirect } from 'next/navigation'
 
 import { CartDrawer } from '@/components/CartDrawer'
-import { CategoryPills } from '@/components/CategoryPills'
+import { CategoryPills, hasStoreCategoryTiles } from '@/components/CategoryPills'
 import { Icon } from '@/components/Icon'
 import { ProductGrid } from '@/components/ProductGrid'
 import { StoreFooter } from '@/components/StoreFooter'
@@ -78,6 +78,7 @@ export default async function StoreShopPage({ params, searchParams }: Props) {
         getStoreListings(store.id, {
           q: filters.q,
           category: filters.category ?? undefined,
+          subcategoryId: filters.subcategoryId ?? undefined,
           sort: filters.sort,
           condition: filters.condition,
           price: filters.price,
@@ -85,10 +86,12 @@ export default async function StoreShopPage({ params, searchParams }: Props) {
       ])
     : [[], []]
   const products = listings.map((l) => toProductCard(l, store.slug, API_URL))
-  const filtered = Boolean(filters.q || filters.category || panelActive(filters))
+  const selectedSubcategory = categories.flatMap((category) => category.subcategories ?? []).find((item) => item.id === filters.subcategoryId)
+  const filtered = Boolean(filters.q || filters.category || filters.subcategoryId || panelActive(filters))
   // The chips over the grid: each filter in force, with a link that drops it.
   const applied = [
     filters.q && { label: `“${filters.q}”`, to: { q: '' } },
+    filters.subcategoryId && { label: selectedSubcategory?.name ?? 'Category', to: { subcategoryId: null } },
     filters.sort !== 'featured' && { label: SORTS.find((x) => x.key === filters.sort)!.label, to: { sort: 'featured' as const } },
     filters.condition && { label: CONDITIONS.find((c) => c.key === filters.condition)!.label, to: { condition: null } },
     filters.price && { label: `KES ${PRICE_BANDS.find((b) => b.key === filters.price)!.label}`, to: { price: null } },
@@ -112,12 +115,18 @@ export default async function StoreShopPage({ params, searchParams }: Props) {
         <h1 className={styles.detailsTitle}>Shop {store.name}</h1>
         {store.is_active && (
           <section aria-labelledby="catalogue-title" className={shop.catalogue}>
-            {categories.length > 1 && (
-              <CategoryPills basePath={path} categories={categories} total={store.listing_count} filters={filters} />
+            {hasStoreCategoryTiles(categories) && (
+              <div className={shop.homeSection}>
+                <div className={shop.sectionHead}>
+                  <h2>Shop by category</h2>
+                  <Link href={path} className={shop.seeAll}>All products <Icon name="chevron" size={14} /></Link>
+                </div>
+                <CategoryPills basePath={path} categories={categories} filters={filters} />
+              </div>
             )}
             <div className={shop.toolbar}>
               <h2 id="catalogue-title">
-                {filters.category ?? 'All products'}
+                {selectedSubcategory?.name ?? filters.category ?? 'All products'}
                 {count != null && <span className={shop.countTag}>{count}</span>}
               </h2>
               {applied.length > 0 && (
@@ -136,7 +145,7 @@ export default async function StoreShopPage({ params, searchParams }: Props) {
               <p className={styles.resultNote} role="status">
                 {products.length === 0 ? 'No products' : products.length >= PAGE_SIZE ? 'Products' : `${products.length} product${products.length === 1 ? '' : 's'}`}
                 {filters.q ? ` matching “${filters.q}”` : ''}
-                {filters.category ? ` in ${filters.category}` : ''} · <a href={path}>Show everything</a>
+                {filters.category ? ` in ${filters.category}` : selectedSubcategory ? ` in ${selectedSubcategory.name}` : ''} · <a href={path}>Show everything</a>
               </p>
             )}
             {products.length > 0 ? (

@@ -121,6 +121,10 @@ describe('catalogue filters', () => {
       price: null,
     })
     expect(readFilters({ q: ['a', 'b'] }).q).toBe('a')
+    expect(readFilters({ subcategory_id: 'electronics-laptops' })).toMatchObject({
+      category: null,
+      subcategoryId: 'electronics-laptops',
+    })
   })
   it('write only what differs from the defaults', () => {
     expect(filtersQuery({ q: '', category: null, sort: 'featured' })).toBe('')
@@ -129,6 +133,9 @@ describe('catalogue filters', () => {
     )
     expect(filtersQuery({ q: '', category: null, sort: 'featured', condition: 'new', price: 'over100k' })).toBe(
       '?condition=new&price=over100k',
+    )
+    expect(filtersQuery({ category: null, subcategoryId: 'electronics-laptops' })).toBe(
+      '?subcategory_id=electronics-laptops',
     )
   })
   it('say when the filter panel narrows anything', () => {
@@ -181,8 +188,10 @@ describe('product cards', () => {
     expect(card.price).toBe(18000)
     expect(card.condition).toBe('New')
     expect(card.maxQuantity).toBe(1)
+    expect(card.quantity).toBeNull()
     expect(toProductCard(listing({ quantity: 12, price_unit: 'bag' }), 'clanix', API)).toMatchObject({
       maxQuantity: 12,
+      quantity: 12,
       unit: 'bag',
       priceLabel: 'KES 18,000 / bag',
     })

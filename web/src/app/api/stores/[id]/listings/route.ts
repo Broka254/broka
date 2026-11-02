@@ -23,6 +23,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     const listings = await getStoreListings(id, {
       q: filters.q,
       category: filters.category ?? undefined,
+      subcategoryId: filters.subcategoryId ?? undefined,
       sort: filters.sort,
       condition: filters.condition,
       price: filters.price,

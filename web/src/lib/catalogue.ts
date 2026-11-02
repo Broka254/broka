@@ -31,6 +31,7 @@ export const PRICE_BANDS: ReadonlyArray<{ key: PriceBandKey; label: string; min:
 export interface CatalogueFilters {
   q: string
   category: string | null
+  subcategoryId?: string | null
   sort: SortKey
   condition?: ConditionKey | null
   price?: PriceBandKey | null
@@ -48,21 +49,26 @@ const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v
 /** The catalogue filters in a page's search params, validated. */
 export function readFilters(params: RawParams): CatalogueFilters {
   const q = (first(params.q) ?? '').replace(/\s+/g, ' ').trim().slice(0, 100)
-  const category = canonicalCategory(first(params.category))
+  const rawSubcategoryId = first(params.subcategory_id)
+  const subcategoryId = rawSubcategoryId && /^[A-Za-z0-9_-]{1,64}$/.test(rawSubcategoryId)
+    ? rawSubcategoryId
+    : null
+  const category = subcategoryId ? null : canonicalCategory(first(params.category))
   const sortRaw = first(params.sort)
   const sort = SORTS.some((s) => s.key === sortRaw) ? (sortRaw as SortKey) : 'featured'
   const conditionRaw = first(params.condition)
   const condition = CONDITIONS.some((c) => c.key === conditionRaw) ? (conditionRaw as ConditionKey) : null
   const priceRaw = first(params.price)
   const price = PRICE_BANDS.some((b) => b.key === priceRaw) ? (priceRaw as PriceBandKey) : null
-  return { q, category, sort, condition, price }
+  return { q, category, sort, condition, price, ...(subcategoryId ? { subcategoryId } : {}) }
 }
 
 /** The query string for a set of filters (defaults left out). */
 export function filtersQuery(f: Partial<CatalogueFilters>): string {
   const p = new URLSearchParams()
   if (f.q) p.set('q', f.q)
-  if (f.category) p.set('category', f.category)
+  if (f.subcategoryId) p.set('subcategory_id', f.subcategoryId)
+  else if (f.category) p.set('category', f.category)
   if (f.sort && f.sort !== 'featured') p.set('sort', f.sort)
   if (f.condition) p.set('condition', f.condition)
   if (f.price) p.set('price', f.price)
@@ -87,6 +93,8 @@ export interface ProductCardData {
   condition: string | null
   /** How many can go in a cart: the listing's stock, one for a single item. */
   maxQuantity: number
+  /** Exact public stock, null when the seller did not state a quantity. */
+  quantity?: number | null
   /** "Ends in 2d 3h" when the server says this listing is ending soon. */
   endsLabel?: string | null
 }
@@ -109,6 +117,7 @@ export function toProductCard(listing: Listing, storeSlug: string, apiUrl: strin
     isAuction: listing.listing_type === 'auction',
     condition: conditionLabel(listing.condition),
     maxQuantity: Math.max(1, Math.floor(listing.quantity ?? 1)),
+    quantity: listing.quantity ?? null,
     endsLabel: listing.time_left?.is_expiring_soon
       ? `Ends in ${listing.time_left.label.replace(/ left$/, '')}`
       : null,

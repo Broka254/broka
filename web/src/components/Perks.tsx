@@ -11,8 +11,8 @@ import styles from './shop.module.css'
 export function Perks({ verified }: { verified: boolean }) {
   const perks: Array<[IconName, string, string]> = [
     ['check', PERK_SEE_FIRST.title, PERK_SEE_FIRST.sub],
-    ['phone', PERK_PAY_DIRECT.title, PERK_PAY_DIRECT.sub],
-    ['truck', 'Delivery or pickup', 'Agreed with the store'],
+    ['phone', 'M-Pesa', PERK_PAY_DIRECT.sub],
+    ['truck', 'Delivery', 'Agreed with the store'],
   ]
   if (verified) perks.push(['verified', 'Verified seller', 'Holds the BROKA Verified badge'])
   return (

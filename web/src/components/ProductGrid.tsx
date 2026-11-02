@@ -33,6 +33,7 @@ export function ProductGrid({
     const params = new URLSearchParams({ slug, offset: String(items.length) })
     if (filters.q) params.set('q', filters.q)
     if (filters.category) params.set('category', filters.category)
+    if (filters.subcategoryId) params.set('subcategory_id', filters.subcategoryId)
     if (filters.sort !== 'featured') params.set('sort', filters.sort)
     if (filters.condition) params.set('condition', filters.condition)
     if (filters.price) params.set('price', filters.price)

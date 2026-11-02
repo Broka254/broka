@@ -39,6 +39,11 @@ export function ProductCard({ product, storeId }: { product: ProductCardData; st
         <div className={styles.productBody}>
           <p className={styles.productName}>{product.name}</p>
           <p className={styles.productPrice}>{product.priceLabel}</p>
+          {product.quantity != null && product.quantity > 0 && (
+            <p className={`${styles.stockLine} ${product.quantity > 3 ? styles.stockLineIn : ''}`}>
+              {product.quantity <= 3 ? `Only ${product.quantity} left` : 'In stock'}
+            </p>
+          )}
         </div>
       </Link>
       <div className={styles.productAction}>

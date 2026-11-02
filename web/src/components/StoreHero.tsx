@@ -1,42 +1,28 @@
-// The store's banner card, as the app opens a store: the shop's cover
-// photo across the top, its logo and name under it, what and where it
-// sells, whether the owner is around, the store's score and the seller's
-// record, and the way in - shop the products, or the Store details page
-// for everything else. The shop's own photo or none at all: never a
-// placeholder picture passed off as the shop's own.
+// The store's cover-led opening card: its own sign and name, what and where
+// it sells, a compact trust row, then the two useful next actions.
 import Link from 'next/link'
 
-import type { ProductCardData } from '@/lib/catalogue'
+import { categoryArtPath } from '@/lib/category-art'
 import { placeLine, plural } from '@/lib/format'
-import { storeDetailsPath, storeShopPath } from '@/lib/links'
+import { asset, storeDetailsPath, storeShopPath } from '@/lib/links'
 import type { StoreView } from '@/lib/storefront'
 
 import { Icon } from './Icon'
 import styles from './shop.module.css'
 
-export function StoreHero({ view, showcase = [] }: { view: StoreView; showcase?: ProductCardData[] }) {
+export function StoreHero({ view }: { view: StoreView }) {
   const { store } = view
   const owner = store.owner
   const subtitle = [store.category, view.isVirtual ? view.delivery : placeLine(store.subcounty, store.county)]
     .filter(Boolean)
     .join(' · ')
   const deals = owner?.completed_deals ?? 0
-  // Buyer reviews, not deals, make a seller average. A seller with a hundred
-  // deals and no review has no average, and the legacy 5.0 account default
-  // must never stand in for one (backend reviews/stats.py).
   const ownerReviews = owner?.review_count ?? 0
   const sellerRating = ownerReviews > 0 && owner?.rating != null ? owner.rating : null
-  // The SHOP's own rating, 0-10, from its reviews, reply speed and tenure
-  // (backend stores/rating.py). Shown ahead of the owner's seller rating:
-  // a buyer is judging this shop, not the person's whole history. Absent
-  // from older API builds, which keeps the seller rating as the fallback.
   const storeRating = store.rating ?? null
   const reviewCount = store.review_count ?? 0
-  const pictures = showcase.filter((p) => p.image).slice(0, 3)
+  const fallbackArt = categoryArtPath(store.category)
 
-  // The score for this shop: the shop's own 0-10 score, labelled, linking
-  // to the buyer reviews behind it; then the seller's 1-5 record; then
-  // nothing rather than a number nobody earned.
   const score = storeRating != null ? (
     <Link
       href={`${storeDetailsPath(store.slug)}#reviews`}
@@ -59,61 +45,55 @@ export function StoreHero({ view, showcase = [] }: { view: StoreView; showcase?:
 
   return (
     <section className={styles.storeCard} aria-labelledby="store-name">
-      {view.cover && (
-        <div className={styles.storeBanner}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
+      <div className={styles.storeBanner} aria-hidden={!view.cover}>
+        {view.cover ? (
+          // eslint-disable-next-line @next/next/no-img-element
           <img src={view.cover.src} srcSet={view.cover.srcSet ?? undefined} alt={`${store.name} storefront`} />
-        </div>
-      )}
+        ) : fallbackArt ? (
+          // Match the app: category artwork is the fallback, not a generic BROKA promo.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={fallbackArt} alt="" />
+        ) : null}
+      </div>
       <div className={styles.storeCardBody}>
         <div className={styles.storeHead}>
-          {/* Only show an uploaded store logo; otherwise use its own initial
-              rather than suggesting BROKA's mark is the shop's brand. */}
           <div className={styles.storeAvatar} data-testid="store-logo">
-            {view.logo ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={view.logo} alt="" />
-            ) : (
-              <span className={styles.storeInitial} aria-hidden="true">{view.initial}</span>
-            )}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={view.logo ?? asset('/logo.png')} alt="" />
           </div>
           <div className={styles.storeHeadText}>
-            <div className={styles.heroChips}>
-              {owner?.verified ? (
-                <span className={`${styles.glassChip} ${styles.chipVerified}`}>
-                  <Icon name="verified" size={16} className={styles.verified} role="img" aria-label="Verified seller" aria-hidden={false} />
-                  Verified store
-                </span>
-              ) : (
-                <span className={styles.glassChip}>
-                  <Icon name="store" size={15} />
-                  Store on BROKA
-                </span>
-              )}
-              {owner?.online ? (
-                <span className={`${styles.glassChip} ${styles.online}`} data-testid="presence">
-                  <span className={styles.liveDot} /> Online now
-                </span>
-              ) : owner?.last_active ? (
-                <span className={`${styles.glassChip} ${styles.away}`} data-testid="presence">
-                  <span className={styles.awayDot} /> {owner.last_active}
-                </span>
-              ) : null}
-            </div>
             <h1 id="store-name" className={styles.storeName}>{store.name}</h1>
             {subtitle && <p className={styles.storePlace}>{subtitle}</p>}
           </div>
         </div>
 
-        <ul className={styles.heroFacts}>
+        <div className={styles.heroChips} aria-label="Store status">
+          {owner?.verified && (
+            <span className={`${styles.glassChip} ${styles.chipVerified}`}>
+              <Icon name="verified" size={15} className={styles.verified} role="img" aria-label="Verified seller" aria-hidden={false} />
+              Verified store
+            </span>
+          )}
+          {owner?.online ? (
+            <span className={`${styles.glassChip} ${styles.online}`} data-testid="presence">
+              <span className={styles.liveDot} /> Online now
+            </span>
+          ) : owner?.last_active ? (
+            <span className={`${styles.glassChip} ${styles.away}`} data-testid="presence">
+              <span className={styles.awayDot} /> {owner.last_active}
+            </span>
+          ) : null}
+        </div>
+
+        <ul className={styles.heroFacts} aria-label="Store information">
           <li className={styles.fact}>
-            <Icon name="star" size={15} className={styles.starIcon} /> {score}
+            <Icon name="star" size={14} className={styles.starIcon} /> {score}
           </li>
           <li className={styles.fact}>
-            <Icon name="handshake" size={15} className={styles.dealIcon} /> {plural(deals, 'deal')}
+            <Icon name="handshake" size={14} className={styles.dealIcon} /> {plural(deals, 'deal')}
           </li>
           <li className={`${styles.fact} ${styles.factProducts}`}>
-            <Icon name="bag" size={15} className={styles.bagIcon} /> {plural(store.listing_count, 'product')}
+            <Icon name="bag" size={14} className={styles.bagIcon} /> {plural(store.listing_count, 'product')}
           </li>
           <li className={styles.fact}>
             {store.is_active ? 'Open now' : 'Taking a break'}
@@ -129,22 +109,12 @@ export function StoreHero({ view, showcase = [] }: { view: StoreView; showcase?:
             className={styles.moreWidget}
             aria-label={`Store details for ${store.name}`}
           >
-            <Icon name="grid" size={18} />
+            <Icon name="grid" size={17} />
             <span>Store details</span>
-            <Icon name="chevron" size={18} />
+            <Icon name="chevron" size={17} />
           </Link>
         </div>
       </div>
-
-      {pictures.length > 0 && (
-        <div className={styles.showcase} aria-hidden="true">
-          {pictures.map((p, i) => (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img key={p.id} src={p.image!} alt="" className={styles[`card${i + 1}` as 'card1']} />
-          ))}
-        </div>
-      )}
-
       {!store.is_active && (
         <p className={styles.paused} role="status">
           {store.name} is taking a break. Its products will be back soon.

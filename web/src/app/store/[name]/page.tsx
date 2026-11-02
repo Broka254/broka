@@ -11,7 +11,7 @@ import Link from 'next/link'
 import { notFound, permanentRedirect } from 'next/navigation'
 
 import { CartDrawer } from '@/components/CartDrawer'
-import { CategoryPills } from '@/components/CategoryPills'
+import { CategoryPills, hasStoreCategoryTiles } from '@/components/CategoryPills'
 import { Icon } from '@/components/Icon'
 import { Perks } from '@/components/Perks'
 import { ProductCard } from '@/components/ProductCard'
@@ -24,7 +24,6 @@ import shop from '@/components/shop.module.css'
 import styles from '@/components/store.module.css'
 import { getStore, getStoreCategories, getStoreListings } from '@/lib/api'
 import { filtersQuery, readFilters, toProductCard } from '@/lib/catalogue'
-import { categoryVisual } from '@/lib/categories'
 import { monthYearOf } from '@/lib/format'
 import { campaignToken, storeCartPath, storeShopPath, viaTag } from '@/lib/links'
 import { API_URL } from '@/lib/server-config'
@@ -75,7 +74,7 @@ export default async function StorePage({ params, searchParams }: Props) {
   // Filtered catalogue views live on /shop now: an old shared link with
   // search or filters lands there with them intact.
   const filters = readFilters(query)
-  if (filters.q || filters.category || filters.sort !== 'featured' || filters.condition || filters.price) {
+  if (filters.q || filters.category || filters.subcategoryId || filters.sort !== 'featured' || filters.condition || filters.price) {
     const q = new URLSearchParams(filtersQuery(filters).slice(1))
     if (via) q.set('via', via)
     if (campaign) q.set('c', campaign)
@@ -97,17 +96,17 @@ export default async function StorePage({ params, searchParams }: Props) {
     .map((l) => toProductCard(l, store.slug, API_URL))
     .filter((p) => !featuredIds.has(p.id))
     .slice(0, 8)
-  const hasCatalogue = featuredCards.length > 0 || categories.length > 1
+  const hasCatalogue = featuredCards.length > 0 || hasStoreCategoryTiles(categories)
 
   return (
     <StorefrontShell>
       <StoreHeader view={view} active="home" searchBase={shopPath} />
       <main className={`page ${shop.storePage}`}>
-        <StoreHero view={view} showcase={featuredCards} />
+        <StoreHero view={view} />
         {store.is_active && (
           <>
             <Perks verified={Boolean(store.owner?.verified)} />
-            {categories.length > 1 && (
+            {hasStoreCategoryTiles(categories) && (
               <section aria-labelledby="departments-title" className={shop.homeSection}>
                 <div className={shop.sectionHead}>
                   <h2 id="departments-title">Shop by category</h2>
@@ -115,7 +114,7 @@ export default async function StorePage({ params, searchParams }: Props) {
                     All products <Icon name="chevron" size={14} />
                   </Link>
                 </div>
-                <CategoryPills basePath={shopPath} categories={categories} total={store.listing_count} filters={filters} />
+                <CategoryPills basePath={shopPath} categories={categories} filters={filters} />
               </section>
             )}
             {featuredCards.length > 0 && (
@@ -165,26 +164,20 @@ export default async function StorePage({ params, searchParams }: Props) {
                 </Link>
               </div>
             )}
-            {view.sellCategories.length > 0 && (
+            {view.sellCategories.length > 1 && !hasStoreCategoryTiles(categories) && (
               <section aria-labelledby="sell-title" className={shop.homeSection}>
                 <div className={shop.sectionHead}>
-                  <h2 id="sell-title">What we sell</h2>
+                  <h2 id="sell-title">Shop by category</h2>
                   <Link href={shopPath} className={shop.seeAll}>
                     Visit the shop <Icon name="chevron" size={14} />
                   </Link>
                 </div>
-                <ul className={shop.sellGrid}>
-                  {view.sellCategories.map((c) => (
-                    <li key={c}>
-                      <Link href={`${shopPath}${filtersQuery({ category: c })}`} className={shop.sellTile}>
-                        <span className={shop.sellEmoji} aria-hidden="true">
-                          {categoryVisual(c).emoji}
-                        </span>
-                        <span className={shop.sellName}>{c}</span>
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
+                <CategoryPills
+                  basePath={shopPath}
+                  categories={view.sellCategories.map((name) => ({ name, count: 0 }))}
+                  filters={filters}
+                  showCounts={false}
+                />
               </section>
             )}
             {store.owner && (

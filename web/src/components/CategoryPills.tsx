@@ -1,64 +1,96 @@
 import Link from 'next/link'
 
 import { type CatalogueFilters, filtersQuery } from '@/lib/catalogue'
-import { categoryVisual, gradientCss } from '@/lib/categories'
+import { categoryArtPath } from '@/lib/category-art'
 import type { StoreCategory } from '@/lib/types'
 
 import styles from './store.module.css'
 
-/**
- * The store's categories, drawn like the app's home category rail: a
- * gradient ring around the category's emoji, its name underneath, and here
- * how many products it has. Plain links, so they work without JavaScript.
- */
-const ONLINE_STORE_EXCLUDED = new Set([
-  'Property',
-  'Automobiles',
-  'Land',
-  'Services',
-  'Other',
-])
+type CategoryTile = {
+  name: string
+  parent: string
+  count: number
+  category: string | null
+  subcategoryId: string | null
+  art: string | null
+}
+
+/** The same shelves as the app: actual subcategories when present, otherwise their parent category. */
+export function storeCategoryTiles(categories: StoreCategory[]): CategoryTile[] {
+  return categories
+    .flatMap<CategoryTile>((category) => {
+      if (category.subcategories?.length) {
+        return category.subcategories.map((subcategory) => ({
+          name: subcategory.name,
+          parent: category.name,
+          count: subcategory.count,
+          category: null,
+          subcategoryId: subcategory.id,
+          art: categoryArtPath(category.name, subcategory.name),
+        }))
+      }
+      return [{
+        name: category.name,
+        parent: category.name,
+        count: category.count,
+        category: category.name,
+        subcategoryId: null,
+        art: categoryArtPath(category.name),
+      }]
+    })
+}
+
+export function hasStoreCategoryTiles(categories: StoreCategory[]): boolean {
+  return storeCategoryTiles(categories).length > 1
+}
 
 export function CategoryPills({
   basePath,
   categories,
-  total,
   filters,
+  showCounts = true,
+  ariaLabel = 'Shop by category',
 }: {
   basePath: string
   categories: StoreCategory[]
-  total: number
   filters: CatalogueFilters
+  showCounts?: boolean
+  ariaLabel?: string
 }) {
-  // Online stores never browse by Property, Automobiles, Land, Services or
-  // Other - same rule as the app and the backend goods rail.
-  const visible = categories.filter((c) => !ONLINE_STORE_EXCLUDED.has(c.name))
-  const items = [
-    { value: null as string | null, label: 'All', emoji: '✨', gradient: categoryVisual('Other').gradient, count: total },
-    ...visible.map((c) => {
-      const v = categoryVisual(c.name)
-      return { value: c.name, label: c.name, emoji: v.emoji, gradient: v.gradient, count: c.count }
-    }),
-  ]
+  const tiles = storeCategoryTiles(categories)
+  if (tiles.length < 2) return null
+
   return (
-    <nav className={styles.pills} aria-label="Categories">
-      {items.map((item) => {
-        const selected = item.value === filters.category
+    <nav className={styles.categoryRail} aria-label={ariaLabel}>
+      {tiles.map((tile) => {
+        const selected = tile.subcategoryId
+          ? tile.subcategoryId === filters.subcategoryId
+          : tile.category === filters.category
+        const href = filtersQuery({
+          ...filters,
+          category: tile.category,
+          subcategoryId: tile.subcategoryId,
+        })
         return (
           <Link
-            key={item.label}
-            href={`${basePath}${filtersQuery({ ...filters, category: item.value })}`}
-            className={`${styles.pill} ${selected ? styles.pillSelected : ''}`}
+            key={tile.subcategoryId ?? tile.name}
+            href={`${basePath}${href}`}
+            className={`${styles.categoryTile} ${selected ? styles.categoryTileSelected : ''}`}
             aria-current={selected ? 'page' : undefined}
+            aria-label={showCounts ? `${tile.name}, ${tile.count} product${tile.count === 1 ? '' : 's'}` : tile.name}
             scroll={false}
           >
-            <span className={styles.ring} style={{ background: gradientCss(item.gradient) }}>
-              <span className={styles.ringInner} aria-hidden="true">
-                {item.emoji}
-              </span>
-              <span className={styles.count}>{item.count}</span>
+            {tile.art ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img className={styles.categoryTileImage} src={tile.art} alt="" loading="lazy" decoding="async" />
+            ) : (
+              <span className={styles.categoryTileFallback} aria-hidden="true">{tile.parent.slice(0, 1)}</span>
+            )}
+            <span className={styles.categoryTileScrim} />
+            <span className={styles.categoryTileCopy}>
+              <strong>{tile.name}</strong>
+            {showCounts && <small>{tile.count} {tile.count === 1 ? 'item' : 'items'}</small>}
             </span>
-            <span className={styles.pillLabel}>{item.label}</span>
           </Link>
         )
       })}

@@ -119,6 +119,7 @@ export interface OpenStatus {
 export interface StoreCategory {
   name: string
   count: number
+  subcategories?: Array<{ id: string; name: string; count: number }>
 }
 
 /** Server-computed time before a listing/store goes offline. */

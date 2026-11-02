@@ -67,6 +67,7 @@ export async function getStoreReviews(storeId: string): Promise<StoreReviews | n
 export interface CatalogueQuery {
   q?: string
   category?: string
+  subcategoryId?: string
   sort?: SortKey
   condition?: ConditionKey | null
   price?: PriceBandKey | null
@@ -81,6 +82,7 @@ export async function getStoreListings(storeId: string, query: CatalogueQuery = 
   })
   if (query.q) params.set('search', query.q)
   if (query.category) params.set('category', query.category)
+  if (query.subcategoryId) params.set('subcategory_id', query.subcategoryId)
   if (query.sort && query.sort !== 'featured') params.set('sort', query.sort)
   if (query.condition) params.set('condition', query.condition)
   const band = PRICE_BANDS.find((b) => b.key === query.price)

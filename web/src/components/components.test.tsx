@@ -111,15 +111,17 @@ const shop = (over: Partial<Store> = {}): Store => ({
 })
 
 describe('StoreHero', () => {
-  it("wears the shop's logo top-left, or its own initial when no logo is public", () => {
+  it("wears the shop's logo top-left, or BROKA's when it uploaded none", () => {
     const { rerender } = render(<StoreHero view={storeView(shop())} />)
     expect(screen.getByRole('heading', { name: 'Clanix' })).toBeTruthy()
     expect(screen.getByRole('img', { name: 'Verified seller' })).toBeTruthy()
     expect(screen.getByText('Verified store')).toBeTruthy()
     expect(screen.getByText('Electronics · Starehe, Nairobi')).toBeTruthy()
-    // No public logo: use the store's own initial, not the platform mark.
-    expect(screen.getByTestId('store-logo').querySelector('img')).toBeNull()
-    expect(screen.getByTestId('store-logo').textContent).toBe('C')
+    // No logo uploaded: BROKA's mark stands in - never an initial.
+    expect(screen.getByTestId('store-logo').querySelector('img')!.getAttribute('src')).toBe(
+      '/store-assets/logo.png',
+    )
+    expect(screen.queryByText('C')).toBeNull()
     // The owner's buyer rating is out of 5 and counts its reviews.
     expect(screen.getByText('4.8/5')).toBeTruthy()
     expect(screen.getByText('(12)')).toBeTruthy()
@@ -145,13 +147,16 @@ describe('StoreHero', () => {
     expect(screen.queryByTestId('presence')).toBeNull()
   })
 
-  it('shows the cover photo and fans out the first product photos', () => {
-    const { container } = render(
-      <StoreHero view={storeView(shop())} showcase={[{ ...card('a'), image: 'https://cdn/a.webp' }, card('b')]} />,
-    )
+  it('uses a store cover, or the store category art, without enlarging the hero with product photos', () => {
+    const { container, rerender } = render(<StoreHero view={storeView(shop())} />)
     expect([...container.querySelectorAll('img')].map((i) => i.getAttribute('src'))).toEqual([
       'https://media.broka.co.ke/img/c1/large.webp',
-      'https://cdn/a.webp',
+      '/store-assets/logo.png',
+    ])
+    rerender(<StoreHero view={storeView(shop({ cover: null, photo_images: [] }))} />)
+    expect([...container.querySelectorAll('img')].map((i) => i.getAttribute('src'))).toEqual([
+      '/store-assets/category-art/electronics.webp',
+      '/store-assets/logo.png',
     ])
   })
 
@@ -188,7 +193,8 @@ describe('Perks', () => {
   it('says what buying here means, and adds verified only for a verified seller', () => {
     const { rerender } = render(<Perks verified={false} />)
     expect(screen.getByText('See it, then pay')).toBeTruthy()
-    expect(screen.getByText('Pay the store directly')).toBeTruthy()
+    expect(screen.getByText('M-Pesa')).toBeTruthy()
+    expect(screen.getByText('Delivery')).toBeTruthy()
     // BROKA holds no payments while they're paused: no "BROKA escrow"
     // perk - escrow is named only as a way to pay the store.
     expect(screen.queryByText('Escrow protected')).toBeNull()
@@ -300,9 +306,8 @@ describe('StoreDetails', () => {
     expect(screen.queryByText('5.0')).toBeNull()
     expect(within(screen.getByText('On BROKA since').parentElement!).getByText('–')).toBeTruthy()
     expect(screen.getByText('Not verified yet')).toBeTruthy()
-    // No public logo: the profile uses its store-specific initial.
-    expect(document.querySelector('img[src="/store-assets/logo.png"]')).toBeNull()
-    expect(screen.getByText('C', { selector: 'span' })).toBeTruthy()
+    // No logo uploaded: BROKA's stands in for it.
+    expect(document.querySelector('img[src="/store-assets/logo.png"]')).not.toBeNull()
     // An API from before the owner's name was sent.
     expect(screen.getByText('The owner of Clanix')).toBeTruthy()
     expect(screen.getByText('Taking a break')).toBeTruthy()
@@ -566,26 +571,28 @@ describe('Checkout', () => {
 })
 
 describe('CategoryPills', () => {
-  it('keeps the search and sort when switching category, and marks the current one', () => {
+  it('renders image shelves, keeps search and sort, and marks the active subcategory', () => {
     render(
       <CategoryPills
         basePath="/store/clanix"
         categories={[
-          { name: 'Electronics', count: 12 },
+          { name: 'Electronics', count: 12, subcategories: [
+            { id: 'phones-1', name: 'Phones', count: 9 },
+            { id: 'laptops-1', name: 'Laptops & Computers', count: 3 },
+          ] },
           { name: 'Home & Furniture', count: 3 },
         ]}
-        total={15}
-        filters={{ q: 'tv', category: 'Electronics', sort: 'price_low' }}
+        filters={{ q: 'tv', category: null, subcategoryId: 'phones-1', sort: 'price_low' }}
       />,
     )
     const links = screen.getAllByRole('link')
     expect(links.map((l) => l.getAttribute('href'))).toEqual([
-      '/store/clanix?q=tv&sort=price_low',
-      '/store/clanix?q=tv&category=Electronics&sort=price_low',
+      '/store/clanix?q=tv&subcategory_id=phones-1&sort=price_low',
+      '/store/clanix?q=tv&subcategory_id=laptops-1&sort=price_low',
       '/store/clanix?q=tv&category=Home+%26+Furniture&sort=price_low',
     ])
-    expect(links[1]!.getAttribute('aria-current')).toBe('page')
-    expect(screen.getByText('15')).toBeTruthy()
+    expect(links[0]!.getAttribute('aria-current')).toBe('page')
+    expect(screen.getByText('9 items')).toBeTruthy()
   })
 })
 
@@ -597,14 +604,14 @@ describe('ProductGrid', () => {
       <ProductGrid
         storeId="s1"
         slug="clanix"
-        filters={{ q: 'tv', category: null, sort: 'newest' }}
+        filters={{ q: 'tv', category: null, subcategoryId: 'phones-1', sort: 'newest' }}
         initial={[card('p1'), card('p2')]}
         pageSize={2}
       />,
     )
     fireEvent.click(screen.getByText('Show more products'))
     await waitFor(() => expect(screen.getAllByRole('link')).toHaveLength(3))
-    expect(fetchMock).toHaveBeenCalledWith('/api/stores/s1/listings?slug=clanix&offset=2&q=tv&sort=newest')
+    expect(fetchMock).toHaveBeenCalledWith('/api/stores/s1/listings?slug=clanix&offset=2&q=tv&subcategory_id=phones-1&sort=newest')
     // A page with a duplicate means fewer than a full page of new items.
     expect(screen.getByText('Show more products')).toBeTruthy()
   })
