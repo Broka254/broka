@@ -1,3 +1,24 @@
+# Store conversations live in the Inbox (2026-11-02)
+
+"Message Store" borrowed the store's first listing as its chat thread, so
+the conversation moved whenever that listing changed, disappeared with
+it, and a store with nothing live could not be messaged at all - buyers
+reported the chat was never in their Inbox. Store chats are now their own
+thread, keyed by (store, buyer) with no listing (`NegotiationMessage.store_id`,
+schema rev 11): they survive listings being added, archived or sold, work
+for empty stores, and arrive in both inboxes labelled with the shop, with
+the usual unread, delivered and seen state, live socket, push, and
+photo/voice uploads. The web storefront's "Message this store in the
+BROKA app" opens the same thread (`?message=1`). Product chats are
+unchanged; chats started the old way stay where they were, as product
+threads.
+
+Tests: `backend/tests/test_store_conversations.py` (both inboxes, empty
+store, archived-listing survival, buyer isolation, resend dedupe - all six
+fail on the old code), the full backend suite, Flutter
+`storefront_engage_test.dart` / `inbox_screen_test.dart` /
+`storefront_test.dart`, and web `components.test.tsx`.
+
 # Zeno's AssemblyAI voice is Jane (US) (2026-10-25)
 
 The owner asked for AssemblyAI's `jane`, a US women's voice, in place of

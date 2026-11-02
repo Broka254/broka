@@ -3631,16 +3631,17 @@ async def _validate_reply_reference(
     db,
     reply_to_id: Optional[str],
     *,
-    listing_id: str,
-    buyer_id: Optional[str],
+    listing_id: Optional[str] = None,
+    buyer_id: Optional[str] = None,
+    store_id: Optional[str] = None,
 ) -> tuple[Optional[NegotiationMessage], Optional[dict]]:
     """Check a quote-reply points at a genuine direct-chat message in the
-    same listing/buyer thread. Refuses cross-listing, cross-thread, and
+    same listing/buyer (or store/buyer) thread. Refuses cross-thread and
     private via_ai/broker rows - replying must never become a way to read
     the other party's private Zeno conversation."""
     if not reply_to_id:
         return None, None
-    # visibility-ok: reply validation by id; thread, listing and via_ai/broker
+    # visibility-ok: reply validation by id; thread and via_ai/broker
     # audience are enforced in Python below before anything is returned
     result = await db.execute(
         select(NegotiationMessage).where(NegotiationMessage.id == reply_to_id)
@@ -3648,7 +3649,11 @@ async def _validate_reply_reference(
     ref = result.scalar_one_or_none()
     if ref is None:
         raise HTTPException(status_code=404, detail="Replied message not found")
-    if ref.listing_id != listing_id:
+    if store_id is not None:
+        if getattr(ref, "store_id", None) != store_id:
+            raise HTTPException(
+                status_code=403, detail="Cannot reply to a message from another conversation")
+    elif ref.listing_id != listing_id:
         raise HTTPException(
             status_code=403, detail="Cannot reply to a message from another listing")
     ref_buyer = getattr(ref, "buyer_id", None)
@@ -3826,11 +3831,12 @@ class MessageEditIn(BaseModel):
 
 async def _own_direct_message(
     db: AsyncSession, message_id: str, current_uid: str,
-) -> tuple[NegotiationMessage, Listing, str]:
+) -> tuple[NegotiationMessage, Optional[Listing], str]:
     """Fetch a message and prove the caller is the human who sent it.
 
     Raises 404/403/400 rather than returning an optional, because every
     failure here is a refusal the client should show - not a silent no-op.
+    Store-general messages have no listing: their seller is the store owner.
     """
     # visibility-ok: authorizes by sender_id before any content is returned
     result = await db.execute(
@@ -3839,6 +3845,22 @@ async def _own_direct_message(
     msg = result.scalar_one_or_none()
     if msg is None:
         raise HTTPException(status_code=404, detail="Message not found")
+    store_id = getattr(msg, "store_id", None)
+    if store_id and not msg.listing_id:
+        from api.models.store import Store
+        store = (await db.execute(
+            select(Store).where(Store.id == store_id)
+        )).scalar_one_or_none()
+        if store is None:
+            raise HTTPException(status_code=404, detail="Store not found")
+        actual_role = "seller" if current_uid == store.owner_id else "buyer"
+        if msg.sender_id != current_uid or msg.role != actual_role:
+            raise HTTPException(status_code=403,
+                detail="You can only change a message you sent.")
+        if bool(getattr(msg, "via_ai", False)):
+            raise HTTPException(status_code=403,
+                detail="Messages sent through Zeno are private to your AI thread and cannot be changed here.")
+        return msg, None, actual_role
     listing = (await db.execute(
         select(Listing).where(Listing.id == msg.listing_id)
     )).scalar_one_or_none()
@@ -3890,13 +3912,17 @@ async def edit_message(
 
     if msg.buyer_id:
         try:
-            from api.routers.media import broadcast_message_update
-            await broadcast_message_update(msg.listing_id, msg.buyer_id, {
+            from api.routers.media import broadcast_message_update, broadcast_store_message_update
+            payload_out = {
                 "type":      "message_edited",
                 "id":        msg.id,
                 "content":   msg.content,
                 "edited_at": (msg.edited_at.isoformat() + "Z") if msg.edited_at else None,
-            })
+            }
+            if getattr(msg, "store_id", None) and not msg.listing_id:
+                await broadcast_store_message_update(msg.store_id, msg.buyer_id, payload_out)
+            else:
+                await broadcast_message_update(msg.listing_id, msg.buyer_id, payload_out)
         except Exception as exc:
             logger.debug("[negotiate] edit broadcast failed: %s", exc)
     return {"ok": True, "message": _direct_message_out(msg)}
@@ -3932,12 +3958,16 @@ async def unsend_message(
         await db.refresh(msg)
         if msg.buyer_id:
             try:
-                from api.routers.media import broadcast_message_update
-                await broadcast_message_update(msg.listing_id, msg.buyer_id, {
+                from api.routers.media import broadcast_message_update, broadcast_store_message_update
+                payload_out = {
                     "type":       "message_deleted",
                     "id":         msg.id,
                     "deleted_at": (msg.deleted_at.isoformat() + "Z") if msg.deleted_at else None,
-                })
+                }
+                if getattr(msg, "store_id", None) and not msg.listing_id:
+                    await broadcast_store_message_update(msg.store_id, msg.buyer_id, payload_out)
+                else:
+                    await broadcast_message_update(msg.listing_id, msg.buyer_id, payload_out)
             except Exception as exc:
                 logger.debug("[negotiate] delete broadcast failed: %s", exc)
     return {"ok": True, "message": _direct_message_out(msg)}
@@ -4173,8 +4203,8 @@ async def _resolve_role_and_buyer(
 
 
 async def _thread_unread_and_seen(
-    db: AsyncSession, listing_id: str, buyer_id: str, my_role: str, last_msg,
-    *, messages_only: bool = False,
+    db: AsyncSession, listing_id: Optional[str], buyer_id: str, my_role: str, last_msg,
+    *, messages_only: bool = False, store_id: Optional[str] = None,
 ):
     """
     Returns (unread_count, was_my_last_message_seen, was_my_last_message_delivered).
@@ -4191,8 +4221,14 @@ async def _thread_unread_and_seen(
       to separate.
     """
     counterpart_role = "seller" if my_role == "buyer" else "buyer"
+    if store_id:
+        _trs_cond = (ThreadReadState.store_id == store_id)
+        _msg_cond = (NegotiationMessage.store_id == store_id)
+    else:
+        _trs_cond = (ThreadReadState.listing_id == listing_id)
+        _msg_cond = (NegotiationMessage.listing_id == listing_id)
     rows = await db.execute(select(ThreadReadState).where(
-        ThreadReadState.listing_id == listing_id,
+        _trs_cond,
         ThreadReadState.buyer_id   == buyer_id,
     ))
     marks = {r.role: (r.last_read_at, r.last_delivered_at)
@@ -4216,7 +4252,7 @@ async def _thread_unread_and_seen(
     # Only messages the viewer is actually entitled to see are counted.
     # visibility-ok: counts counterpart human messages only, no content reaches the response
     unread_q = select(func.count(NegotiationMessage.id)).where(
-        NegotiationMessage.listing_id == listing_id,
+        _msg_cond,
         NegotiationMessage.buyer_id   == buyer_id,
         NegotiationMessage.role       == counterpart_role,
         or_(NegotiationMessage.via_ai.is_(False),
@@ -4247,7 +4283,8 @@ async def _thread_unread_and_seen(
 
 
 async def _unread_by_kind(
-    db: AsyncSession, listing_id: str, buyer_id: str, my_role: str,
+    db: AsyncSession, listing_id: Optional[str], buyer_id: str, my_role: str,
+    *, store_id: Optional[str] = None,
 ) -> tuple[Optional[dict], Optional[dict]]:
     """The other side's newest unread message, and their newest unread
     missed call, in one thread - each None when there is none.
@@ -4264,13 +4301,19 @@ async def _unread_by_kind(
     hung up before it was answered.
     """
     counterpart_role = "seller" if my_role == "buyer" else "buyer"
+    if store_id:
+        _trs_cond = (ThreadReadState.store_id == store_id)
+        _msg_cond = (NegotiationMessage.store_id == store_id)
+    else:
+        _trs_cond = (ThreadReadState.listing_id == listing_id)
+        _msg_cond = (NegotiationMessage.listing_id == listing_id)
     my_last_read = (await db.execute(select(ThreadReadState.last_read_at).where(
-        ThreadReadState.listing_id == listing_id,
+        _trs_cond,
         ThreadReadState.buyer_id   == buyer_id,
         ThreadReadState.role       == my_role,
     ))).scalar_one_or_none()
     conds = [
-        NegotiationMessage.listing_id == listing_id,
+        _msg_cond,
         NegotiationMessage.buyer_id   == buyer_id,
         NegotiationMessage.role       == counterpart_role,
         or_(NegotiationMessage.via_ai.is_(False),
@@ -4351,8 +4394,8 @@ async def _zeno_unread(db: AsyncSession, listing_id: str, buyer_id: str, my_role
 
 
 async def _touch_watermark(
-    db: AsyncSession, listing_id: str, buyer_id: str, role: str,
-    *, delivered: bool, read: bool,
+    db: AsyncSession, listing_id: Optional[str], buyer_id: str, role: str,
+    *, delivered: bool, read: bool, store_id: Optional[str] = None,
 ):
     """Advance one side's delivery and/or read watermark to now.
 
@@ -4362,15 +4405,19 @@ async def _touch_watermark(
     already been shown - a tick that un-ticks is worse than a late tick.
     """
     now = _dt.utcnow()
+    if store_id:
+        _trs_cond = (ThreadReadState.store_id == store_id)
+    else:
+        _trs_cond = (ThreadReadState.listing_id == listing_id)
     existing = await db.execute(select(ThreadReadState).where(
-        ThreadReadState.listing_id == listing_id,
+        _trs_cond,
         ThreadReadState.buyer_id   == buyer_id,
         ThreadReadState.role       == role,
     ))
     row = existing.scalar_one_or_none()
     if row is None:
         db.add(ThreadReadState(
-            listing_id=listing_id, buyer_id=buyer_id, role=role,
+            listing_id=listing_id, store_id=store_id, buyer_id=buyer_id, role=role,
             last_read_at=now if read else _dt(1970, 1, 1),
             last_delivered_at=now if (delivered or read) else None,
         ))
@@ -4552,6 +4599,281 @@ def _listing_image_for(listing, assets: dict) -> Optional[str]:
     return None
 
 
+# ── Store-general conversations ───────────────────────────────────────────
+# A buyer talking to a shop, not about one product. Thread identity is
+# (store_id, buyer_id) on NegotiationMessage with listing_id NULL, so the
+# conversation survives any single listing being archived, sold or added -
+# the failure of the old "anchor to the first listing" Message Store.
+
+class StoreMessageIn(BaseModel):
+    sender_role: str
+    sender_id: str
+    content: str = Field(max_length=CHAT_CONTENT_MAX_CHARS)
+    buyer_id: Optional[str] = None
+    client_msg_id: Optional[str] = Field(default=None, max_length=64)
+    reply_to_message_id: Optional[str] = Field(default=None, max_length=64)
+
+
+async def _store_for_chat(db: AsyncSession, store_id: str):
+    from api.models.store import Store
+    store = (await db.execute(
+        select(Store).where(Store.id == store_id, Store.deleted_at.is_(None))
+    )).scalar_one_or_none()
+    if store is None:
+        raise HTTPException(status_code=404, detail="Store not found")
+    return store
+
+
+async def _store_default_buyer(db: AsyncSession, store_id: str) -> Optional[str]:
+    # visibility-ok: selects buyer_id only, no message content
+    result = await db.execute(
+        select(NegotiationMessage.buyer_id)
+        .where(
+            NegotiationMessage.store_id == store_id,
+            NegotiationMessage.role == "buyer",
+            NegotiationMessage.buyer_id.isnot(None),
+        )
+        .order_by(NegotiationMessage.created_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+def _store_role(store, uid: str) -> str:
+    return "seller" if uid == store.owner_id else "buyer"
+
+
+async def _resolve_store_thread(db, store_id: str, buyer_id_param, current: dict):
+    """(store, role, effective_buyer_id) for a store thread."""
+    store = await _store_for_chat(db, store_id)
+    role = _store_role(store, current["id"])
+    if role == "buyer":
+        return store, role, current["id"]
+    effective = buyer_id_param or await _store_default_buyer(db, store_id) or ""
+    return store, role, effective
+
+
+@router.post("/store/{store_id}/direct-message")
+async def store_direct_message(
+    store_id: str,
+    data: StoreMessageIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Persist a direct buyer↔store-owner message (no AI, no listing)."""
+    authenticated_uid = current_user["id"]
+    store = await _store_for_chat(db, store_id)
+    actual_role = _store_role(store, authenticated_uid)
+    if data.sender_role != actual_role:
+        raise HTTPException(status_code=403,
+            detail=f"Role mismatch: you are the {actual_role} of this store.")
+    if data.sender_id != authenticated_uid:
+        raise HTTPException(status_code=403,
+            detail="sender_id does not match authenticated user.")
+    content = (data.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+    if actual_role == "seller" and authenticated_uid == store.owner_id and not data.buyer_id:
+        # An owner opening their own store chat with nobody to talk to.
+        pass
+    effective_buyer_id: Optional[str] = (
+        authenticated_uid if actual_role == "buyer" else data.buyer_id
+    )
+    if actual_role == "buyer" and authenticated_uid == store.owner_id:
+        raise HTTPException(status_code=400, detail="You cannot message your own store.")
+    if not effective_buyer_id:
+        effective_buyer_id = await _store_default_buyer(db, store_id)
+        if not effective_buyer_id:
+            raise HTTPException(status_code=400, detail="buyer_id required")
+
+    from api.routers.media import sent_with_client_id
+    client_msg_id = (data.client_msg_id or "").strip() or None
+    if client_msg_id:
+        earlier = await sent_with_client_id(db, authenticated_uid, client_msg_id)
+        if earlier is not None:
+            return {"ok": True, "message": _direct_message_out(earlier)}
+
+    _ref, _preview = await _validate_reply_reference(
+        db, (data.reply_to_message_id or "").strip() or None,
+        store_id=store_id, buyer_id=effective_buyer_id,
+    )
+    recipient = "seller" if actual_role == "buyer" else "buyer"
+    direct_msg = NegotiationMessage(
+        listing_id=None,
+        store_id=store_id,
+        sender_id=data.sender_id,
+        role=data.sender_role,
+        recipient_role=recipient,
+        content=content,
+        buyer_id=effective_buyer_id,
+        via_ai=False,
+        msg_type="text",
+        client_msg_id=client_msg_id,
+        reply_to_message_id=((data.reply_to_message_id or "").strip() or None),
+        reply_snapshot=_reply_snapshot_json(_preview),
+    )
+    db.add(direct_msg)
+    try:
+        await db.flush()
+        await _audit_off_platform_solicitation(
+            db, sender_id=authenticated_uid, message_id=direct_msg.id,
+            listing_id=f"store:{store_id}", role=actual_role, content=content,
+        )
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        if client_msg_id:
+            earlier = await sent_with_client_id(db, authenticated_uid, client_msg_id)
+            if earlier is not None:
+                return {"ok": True, "message": _direct_message_out(earlier)}
+        raise
+    await db.refresh(direct_msg)
+    try:
+        from api.routers.media import broadcast_store_text_message
+        await broadcast_store_text_message(
+            store_id, effective_buyer_id,
+            direct_msg, authenticated_uid, actual_role == "seller"
+        )
+    except Exception:
+        pass
+    return {"ok": True, "message": _direct_message_out(direct_msg)}
+
+
+@router.get("/store/{store_id}/history", response_model=List[MessageOut])
+async def get_store_history(
+    store_id: str,
+    buyer_id: Optional[str] = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Direct-chat history for one store thread. Buyer: own thread only.
+    Seller (owner): the named buyer's thread, else the most recent."""
+    store, actual_role, effective_buyer_id = await _resolve_store_thread(
+        db, store_id, buyer_id, current_user)
+    if not effective_buyer_id:
+        return []
+    # visibility-ok: store thread rows filtered to this buyer below; only
+    # direct (via_ai false) buyer/seller rows exist on store threads.
+    result = await db.execute(
+        select(NegotiationMessage)
+        .where(
+            NegotiationMessage.store_id == store_id,
+            NegotiationMessage.buyer_id == effective_buyer_id,
+        )
+        .order_by(NegotiationMessage.created_at)
+    )
+    out: List[MessageOut] = []
+    for m in result.scalars().all():
+        if m.role not in ("buyer", "seller") or bool(getattr(m, "via_ai", False)):
+            continue
+        deleted = getattr(m, "deleted_at", None) is not None
+        out.append(MessageOut(
+            id=m.id, role=m.role,
+            content="" if deleted else (m.content or ""),
+            via_ai=False,
+            msg_type="deleted" if deleted else (m.msg_type or "text"),
+            media_url=None if deleted else getattr(m, "media_url", None),
+            duration_secs=None if deleted else getattr(m, "duration_secs", None),
+            call_type=getattr(m, "call_type", None),
+            created_at=(m.created_at.isoformat() + "Z") if m.created_at else None,
+            client_msg_id=getattr(m, "client_msg_id", None) if m.sender_id == current_user["id"] else None,
+            edited_at=(m.edited_at.isoformat() + "Z") if getattr(m, "edited_at", None) else None,
+            deleted_at=(m.deleted_at.isoformat() + "Z") if getattr(m, "deleted_at", None) else None,
+            deleted=deleted,
+            reply_to_message_id=getattr(m, "reply_to_message_id", None),
+        ))
+    # Quote previews from send-time snapshots (same rule as /history).
+    try:
+        import json as _json
+        by_id = {}
+        # visibility-ok: reply-preview lookup inside this store thread; rows are
+        # re-checked for store, via_ai and role before any preview is built
+        result2 = await db.execute(
+            select(NegotiationMessage).where(NegotiationMessage.store_id == store_id)
+        )
+        for r in result2.scalars().all():
+            by_id[r.id] = r
+        for o in out:
+            src = by_id.get(o.id)
+            raw = getattr(src, "reply_snapshot", None) if src is not None else None
+            if raw:
+                try:
+                    o.reply_preview = _json.loads(raw) if isinstance(raw, str) else raw
+                except Exception:
+                    o.reply_preview = None
+            if o.reply_to_message_id and o.reply_preview is None:
+                ref = by_id.get(o.reply_to_message_id)
+                if ref is not None and getattr(ref, "store_id", None) == store_id \
+                        and not bool(getattr(ref, "via_ai", False)) and ref.role in ("buyer", "seller"):
+                    o.reply_preview = _reply_preview_for(ref)
+    except Exception:
+        pass
+    return out
+
+
+@router.post("/store/{store_id}/mark-delivered")
+async def mark_store_delivered(
+    store_id: str, payload: MarkDeliveredRequest,
+    db: AsyncSession = Depends(get_db), current: dict = Depends(get_current_user),
+):
+    _, role, effective_buyer_id = await _resolve_store_thread(db, store_id, payload.buyer_id, current)
+    if not effective_buyer_id:
+        raise HTTPException(status_code=400, detail="buyer_id required")
+    now = await _touch_watermark(db, None, effective_buyer_id, role, delivered=True, read=False, store_id=store_id)
+    try:
+        from api.routers.media import broadcast_store_receipt
+        await broadcast_store_receipt(store_id, effective_buyer_id, role, exclude_uid=current["id"], delivered_at=now, read_at=None)
+    except Exception as exc:
+        logger.debug("[negotiate] store receipt broadcast failed: %s", exc)
+    return {"status": "ok", "last_delivered_at": now.isoformat() + "Z"}
+
+
+@router.post("/store/{store_id}/mark-read")
+async def mark_store_read(
+    store_id: str, payload: MarkReadRequest,
+    db: AsyncSession = Depends(get_db), current: dict = Depends(get_current_user),
+):
+    _, role, effective_buyer_id = await _resolve_store_thread(db, store_id, payload.buyer_id, current)
+    if not effective_buyer_id:
+        raise HTTPException(status_code=400, detail="buyer_id required")
+    now = await _touch_watermark(db, None, effective_buyer_id, role, delivered=True, read=True, store_id=store_id)
+    try:
+        from api.routers.media import broadcast_store_receipt
+        await broadcast_store_receipt(store_id, effective_buyer_id, role, exclude_uid=current["id"], delivered_at=now, read_at=now)
+    except Exception as exc:
+        logger.debug("[negotiate] store receipt broadcast failed: %s", exc)
+    return {"status": "ok", "last_read_at": now.isoformat() + "Z"}
+
+
+@router.get("/store/{store_id}/read-status")
+async def get_store_read_status(
+    store_id: str, buyer_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db), current: dict = Depends(get_current_user),
+):
+    _, role, effective_buyer_id = await _resolve_store_thread(db, store_id, buyer_id, current)
+    if not effective_buyer_id:
+        return {"buyer_last_read": None, "seller_last_read": None,
+                "buyer_last_delivered": None, "seller_last_delivered": None,
+                "unread": 0, "zeno_unread": 0}
+    rows = await db.execute(select(ThreadReadState).where(
+        ThreadReadState.store_id == store_id,
+        ThreadReadState.buyer_id == effective_buyer_id,
+    ))
+    out = {"buyer_last_read": None, "seller_last_read": None,
+           "buyer_last_delivered": None, "seller_last_delivered": None}
+    for row in rows.scalars().all():
+        if row.role not in ("buyer", "seller"):
+            continue
+        if row.last_read_at:
+            out[f"{row.role}_last_read"] = row.last_read_at.isoformat() + "Z"
+        if row.last_delivered_at:
+            out[f"{row.role}_last_delivered"] = row.last_delivered_at.isoformat() + "Z"
+    out["unread"], _, _ = await _thread_unread_and_seen(
+        db, None, effective_buyer_id, role, None, messages_only=True, store_id=store_id)
+    out["zeno_unread"] = 0
+    return out
+
+
 @router.get("/inbox/{user_id}")
 async def get_inbox(
     user_id: str,
@@ -4589,10 +4911,11 @@ async def get_inbox(
     # visibility-ok: selects listing_id only, no message content
     buyer_lid_result = await db.execute(
         select(NegotiationMessage.listing_id)
-        .where(NegotiationMessage.buyer_id == user_id)
+        .where(NegotiationMessage.buyer_id == user_id,
+               NegotiationMessage.listing_id.isnot(None))
         .distinct()
     )
-    buyer_listing_ids = [r[0] for r in buyer_lid_result.all()]
+    buyer_listing_ids = [r[0] for r in buyer_lid_result.all() if r[0]]
 
     # Batched: one query for every Listing+User this buyer's threads touch,
     # instead of one query per listing (was a real N+1 - a buyer active on
@@ -4885,6 +5208,164 @@ async def get_inbox(
                 "time_ago":          _time_ago(last_msg.created_at),
                 "my_role":           "seller",
             })
+
+    # ── Store-general threads: one per (store, buyer) ─────────────────────
+    # Buyer: stores they wrote to. Seller: buyers who wrote to their stores.
+    # listing_* fields carry store fallbacks so older app builds render a
+    # row (under the shop's name) instead of dropping a null listing_id.
+    try:
+        from api.models.store import Store
+        # visibility-ok: selects store/buyer ids only, no message content
+        buyer_store_ids = [r[0] for r in (await db.execute(
+            select(NegotiationMessage.store_id)
+            .where(NegotiationMessage.buyer_id == user_id,
+                   NegotiationMessage.store_id.isnot(None))
+            .distinct()
+        )).all() if r[0]]
+        owned_store_ids = [r[0] for r in (await db.execute(
+            select(Store.id).where(Store.owner_id == user_id,
+                                   Store.deleted_at.is_(None))
+        )).all()]
+        store_thread_keys: list[tuple[str, str, str]] = []  # (store_id, buyer_id, my_role)
+        for sid in buyer_store_ids:
+            store_thread_keys.append((sid, user_id, "buyer"))
+        for sid in owned_store_ids:
+            # visibility-ok: selects buyer_id only, no message content
+            bids = [r[0] for r in (await db.execute(
+                select(NegotiationMessage.buyer_id)
+                .where(NegotiationMessage.store_id == sid,
+                       NegotiationMessage.buyer_id.isnot(None),
+                       NegotiationMessage.role == "buyer")
+                .distinct()
+            )).all() if r[0]]
+            for bid in bids:
+                if bid == user_id:
+                    continue
+                store_thread_keys.append((sid, bid, "seller"))
+        # De-dupe while keeping order (a user cannot be both sides, but a
+        # re-used id must never double a row).
+        _seen_keys: set = set()
+        _uniq_keys = []
+        for k in store_thread_keys:
+            if k not in _seen_keys:
+                _seen_keys.add(k)
+                _uniq_keys.append(k)
+        stores_by_id: dict = {}
+        counterpart_ids: set = set()
+        if _uniq_keys:
+            srows = (await db.execute(
+                select(Store).where(Store.id.in_([k[0] for k in _uniq_keys]))
+            )).scalars().all()
+            stores_by_id = {s.id: s for s in srows}
+            counterpart_ids = {k[1] for k in _uniq_keys if k[2] == "seller"}
+            counterpart_ids.update(s.owner_id for s in srows)
+        users_by_id: dict = {}
+        if counterpart_ids:
+            urows = (await db.execute(
+                select(User).where(User.id.in_(list(counterpart_ids)))
+            )).scalars().all()
+            users_by_id = {u.id: u for u in urows}
+        # Store logos via the same asset resolution the store payload uses.
+        store_logo_by_id: dict = {}
+        try:
+            from api.domains.media.service import asset_urls, legacy_image_or_none
+            logo_assets: dict = {}
+            logo_ids = [s.logo_id for s in stores_by_id.values() if getattr(s, "logo_id", None)]
+            if logo_ids:
+                from api.models.media import MediaAsset
+                arows = (await db.execute(
+                    select(MediaAsset).where(MediaAsset.id.in_(logo_ids))
+                )).scalars().all()
+                logo_assets = {a.id: a for a in arows}
+            for s in stores_by_id.values():
+                url = None
+                asset = logo_assets.get(s.logo_id) if getattr(s, "logo_id", None) else None
+                if asset is not None:
+                    urls = asset_urls(asset)
+                    url = urls.get("thumb") or urls.get("medium") or urls.get("large") if urls else None
+                if not url:
+                    url = legacy_image_or_none(getattr(s, "logo_url", None))
+                store_logo_by_id[s.id] = url
+        except Exception as exc:
+            logger.debug("[negotiate] inbox store logos unavailable: %s", exc)
+        for sid, bid, my_role in _uniq_keys:
+            store = stores_by_id.get(sid)
+            if store is None or getattr(store, "deleted_at", None) is not None:
+                continue
+            # visibility-ok: thread_visible_to_role_clause applies audience rules
+            last_msg = (await db.execute(
+                select(NegotiationMessage)
+                .where(
+                    NegotiationMessage.store_id == sid,
+                    NegotiationMessage.buyer_id == bid,
+                    thread_visible_to_role_clause(my_role),
+                )
+                .order_by(NegotiationMessage.created_at.desc())
+                .limit(1)
+            )).scalar_one_or_none()
+            if not last_msg:
+                continue
+            owner = users_by_id.get(store.owner_id)
+            buyer_user = users_by_id.get(bid)
+            if my_role == "buyer":
+                counterpart = owner
+                counterpart_name = store.name
+            else:
+                counterpart = buyer_user
+                counterpart_name = buyer_user.name if buyer_user else "Buyer"
+            is_on, last_seen_str = _online_str(counterpart.last_seen if counterpart else None)
+            unread, seen_flag, delivered_flag = await _thread_unread_and_seen(
+                db, None, bid, my_role, last_msg, store_id=sid)
+            unread_message, unread_missed_call = (
+                await _unread_by_kind(db, None, bid, my_role, store_id=sid)
+                if unread else (None, None))
+            threads.append({
+                "_sort_ts":          last_msg.created_at.timestamp() if last_msg.created_at else 0.0,
+                "thread_type":       "store",
+                "store_id":          store.id,
+                "store_name":        store.name,
+                "store_logo":        store_logo_by_id.get(store.id),
+                "listing_id":        None,
+                "listing_name":      store.name,
+                "listing_category":  getattr(store, "category", None) or "Store",
+                "listing_image":     store_logo_by_id.get(store.id),
+                "listing_price":     0,
+                "location_name":     getattr(store, "county", None),
+                "listing_type":      "direct",
+                "seller_id":         store.owner_id,
+                "seller_name":       owner.name if owner else None,
+                "seller_photo":      owner.profile_photo if owner else None,
+                "buyer_id":          bid,
+                "buyer_name":        buyer_user.name if buyer_user else None,
+                "buyer_photo":       buyer_user.profile_photo if buyer_user else None,
+                "counterpart_id":    store.owner_id if my_role == "buyer" else bid,
+                "counterpart_name":  counterpart_name,
+                "counterpart_photo": (owner.profile_photo if owner else None) if my_role == "buyer" else (buyer_user.profile_photo if buyer_user else None),
+                "counterpart_avatar": ((owner.profile_photo if owner else None) or "") if my_role == "buyer" else ((buyer_user.profile_photo if buyer_user else None) or ""),
+                "is_online":         is_on,
+                "last_seen":         last_seen_str,
+                "last_message":      ("Message deleted" if getattr(last_msg, "deleted_at", None)
+                                      else (last_msg.content or "[media]"))[:80],
+                "last_role":         last_msg.role,
+                "last_message_id":   last_msg.id,
+                "last_message_at":   (last_msg.created_at.isoformat() + "Z") if last_msg.created_at else None,
+                "last_msg_type":     getattr(last_msg, "msg_type", None) or "text",
+                "last_call_type":    getattr(last_msg, "call_type", None),
+                "unread_count":      unread,
+                "unread":            unread,
+                "zeno_unread":       0,
+                "unread_message":     unread_message,
+                "unread_missed_call": unread_missed_call,
+                "last_message_seen": seen_flag,
+                "last_message_delivered": delivered_flag,
+                "time_ago":          _time_ago(last_msg.created_at),
+                "my_role":           my_role,
+            })
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # A store-thread failure must never take the listing inbox down.
+        logger.warning("[negotiate] inbox store threads failed: %s", exc)
 
     threads.sort(key=lambda x: x["_sort_ts"], reverse=True)
     for t in threads:

@@ -853,8 +853,10 @@ class NotificationService {
   }) async {
     if (data['type'] != 'new_message') return;
     if (data['screen'] == 'zeno') return;
+    final isStore = data['screen'] == 'store-chat';
     final listingId = data['listingId'] as String?;
-    if (listingId == null || listingId.isEmpty) return;
+    final storeId = data['storeId'] as String?;
+    if (isStore ? (storeId == null || storeId.isEmpty) : (listingId == null || listingId.isEmpty)) return;
     try {
       if (restoreSession) {
         // SharedPreferences caches per isolate, and the app may have
@@ -871,20 +873,26 @@ class NotificationService {
         await ApiService.loadSavedSession();
         try {
           if (!ApiService.isLoggedIn) return;
-          await ApiService.markThreadDelivered(
-            listingId,
-            buyerId: data['buyerId'] as String?,
-          );
+          if (isStore) {
+            await ApiService.markStoreDelivered(
+              storeId!, buyerId: data['buyerId'] as String?);
+          } else {
+            await ApiService.markThreadDelivered(
+              listingId!, buyerId: data['buyerId'] as String?);
+          }
         } finally {
           if (previousUserId != null) ApiService.currentUserId = previousUserId;
         }
         return;
       }
       if (!ApiService.isLoggedIn) return;
-      await ApiService.markThreadDelivered(
-        listingId,
-        buyerId: data['buyerId'] as String?,
-      );
+      if (isStore) {
+        await ApiService.markStoreDelivered(
+          storeId!, buyerId: data['buyerId'] as String?);
+      } else {
+        await ApiService.markThreadDelivered(
+          listingId!, buyerId: data['buyerId'] as String?);
+      }
     } catch (_) {}
   }
 
@@ -1202,6 +1210,15 @@ class NotificationService {
     }
     if (type == 'new_message' || type == 'missed_call') {
       final role = data['myRole'] as String? ?? 'buyer';
+      if (data['screen'] == 'store-chat') {
+        nav.pushNamed('/store-chat', arguments: {
+          'storeId': data['storeId'] as String?,
+          'storeName': data['listingName'] as String?,
+          'role': role,
+          'buyer_id': data['buyerId'] as String?,
+        });
+        return;
+      }
       // A message from Zeno is read in Zeno's room; everything else - the
       // other person's messages, a missed call - in the direct chat.
       final route = data['screen'] == 'zeno' ? '/negotiate' : '/direct-chat';

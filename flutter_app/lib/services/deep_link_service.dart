@@ -23,6 +23,7 @@ import 'package:flutter/widgets.dart';
 
 import '../core/utils/result.dart';
 import '../features/stores/data/repositories/stores_repository.dart';
+import 'api_service.dart';
 
 /// Where a link points.
 @immutable
@@ -34,6 +35,7 @@ class StoreLinkTarget {
     this.details = false,
     this.cart,
     this.chat = false,
+    this.storeChat = false,
   });
 
   final String slug;
@@ -61,6 +63,9 @@ class StoreLinkTarget {
   /// conversation any listing outside a store has.
   final bool chat;
 
+  /// A store link with ?message=1: open the store-general conversation.
+  final bool storeChat;
+
   /// At most this many products come in through one link.
   static const maxCartItems = 30;
 
@@ -80,7 +85,10 @@ class StoreLinkTarget {
     final slug = parts[1].toLowerCase();
     if (!_slugPattern.hasMatch(slug)) return null;
     final via = uri.queryParameters['via'];
-    if (parts.length == 2) return StoreLinkTarget(slug: slug, via: via);
+    if (parts.length == 2) {
+      return StoreLinkTarget(
+          slug: slug, via: via, storeChat: uri.queryParameters['message'] == '1');
+    }
     if (parts.length == 3 && parts[2] == 'about') {
       return StoreLinkTarget(slug: slug, via: via, details: true);
     }
@@ -117,10 +125,11 @@ class StoreLinkTarget {
       other.via == via &&
       other.details == details &&
       other.chat == chat &&
+      other.storeChat == storeChat &&
       mapEquals(other.cart, cart);
 
   @override
-  int get hashCode => Object.hash(slug, listingId, via, details, cart?.length);
+  int get hashCode => Object.hash(slug, listingId, via, details, chat, storeChat, cart?.length);
 
   @override
   String toString() =>
@@ -203,6 +212,8 @@ class DeepLinkService {
         if (target.chat) 'openChat': true,
       });
       _countProductVisit(target);
+    } else if (target.storeChat) {
+      unawaited(_openStoreChat(target));
     } else {
       // The store screen counts its own visit, with the link's tag, and
       // opens its details on top for an /about link.
@@ -213,6 +224,34 @@ class DeepLinkService {
         if (target.cart != null) ...{'view': 'cart', 'items': target.cart},
       });
     }
+  }
+
+  Future<void> _openStoreChat(StoreLinkTarget target) async {
+    final nav = _navigator?.currentState;
+    if (nav == null) {
+      _pending = target;
+      return;
+    }
+    if (!ApiService.isLoggedIn) {
+      // The store page's Message Store runs the sign-in gate; land there.
+      nav.pushNamed('/store-view', arguments: {
+        'slug': target.slug,
+        'via': target.via,
+      });
+      return;
+    }
+    final store = await _repo.getStoreBySlug(target.slug);
+    store.fold(
+      onSuccess: (s) => nav.pushNamed('/store-chat', arguments: {
+        'storeId': s.id,
+        'storeName': s.name,
+        'role': 'buyer',
+      }),
+      onFailure: (_, __) => nav.pushNamed('/store-view', arguments: {
+        'slug': target.slug,
+        'via': target.via,
+      }),
+    );
   }
 
   /// Someone arriving at a product from a store link visited the store.

@@ -367,34 +367,19 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
   void _openCart(Store store) => openStoreCart(context,
       storeId: store.id, storeName: store.name, animateBackground: widget.animateBackground);
 
-  /// Message the store: straight into a direct chat with the seller, no
-  /// Zeno in between, and no picker in between either: one tap lands in
-  /// the chat. A chat is always about one product (the thread the inbox,
-  /// receipts and nudges all hang off), so the thread quietly anchors to
-  /// the store's first listing - the buyer just talks to the shop.
+  /// Message the store: straight into the store-general chat with the
+  /// owner, no Zeno and no product in between. The thread is keyed by the
+  /// store itself, so it stays in the Inbox whatever happens to any one
+  /// listing - and a store with nothing live can still be talked to.
   Future<void> _messageStore(Store store) async {
     if (!await requireAuth(context, reason: 'to message this store')) return;
     if (!mounted) return;
-    final result = await _repo.getStoreListings(store.id, limit: 1);
-    if (!mounted) return;
-    switch (result) {
-      case Failure(:final message):
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-        return;
-      case Success(:final data):
-        if (data.isEmpty) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('This store has nothing to ask about yet.')));
-          return;
-        }
-        _openDirectChat(data.first.id);
-    }
+    Navigator.pushNamed(context, '/store-chat', arguments: {
+      'storeId': store.id,
+      'storeName': store.name,
+      'role': 'buyer',
+    });
   }
-
-  /// The buyer's direct thread with the seller about one product - the
-  /// same screen the inbox opens, which fetches the listing itself.
-  void _openDirectChat(String listingId) => Navigator.pushNamed(
-      context, '/direct-chat', arguments: {'listingId': listingId, 'role': 'buyer'});
 
   /// Follows the store, or takes the follow back. Shown at once; put
   /// back, with a word, if the server says no.

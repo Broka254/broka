@@ -86,6 +86,10 @@ def thread_tag(listing_id: str, buyer_id: str) -> str:
     return f"thread_{listing_id}_{buyer_id}"
 
 
+def store_tag(store_id: str, buyer_id: str) -> str:
+    return f"thread_store_{store_id}_{buyer_id}"
+
+
 def recipients_of(role: str, recipient_role: Optional[str], via_ai: Optional[bool],
                   msg_type: Optional[str]) -> set:
     """Which side(s) of the thread a new message is news for - /history's
@@ -127,9 +131,14 @@ def preview_of(msg_type: Optional[str], content: Optional[str]) -> str:
 @event.listens_for(Session, "after_flush")
 def _collect(session, flush_context) -> None:
     for obj in session.new:
-        if isinstance(obj, NegotiationMessage) and obj.buyer_id and obj.listing_id:
+        if isinstance(obj, NegotiationMessage) and obj.buyer_id:
             roles = recipients_of(obj.role, obj.recipient_role, obj.via_ai, obj.msg_type)
-            if roles:
+            if not roles:
+                continue
+            if getattr(obj, "store_id", None) and not obj.listing_id:
+                session.info.setdefault(_SESSION_KEY + "_store", []).append(
+                    (obj.store_id, obj.buyer_id, frozenset(roles)))
+            elif obj.listing_id:
                 session.info.setdefault(_SESSION_KEY, []).append(
                     (obj.listing_id, obj.buyer_id, frozenset(roles)))
 
@@ -137,19 +146,23 @@ def _collect(session, flush_context) -> None:
 @event.listens_for(Session, "after_rollback")
 def _discard(session) -> None:
     session.info.pop(_SESSION_KEY, None)
+    session.info.pop(_SESSION_KEY + "_store", None)
 
 
 @event.listens_for(Session, "after_commit")
 def _dispatch(session) -> None:
     batch = session.info.pop(_SESSION_KEY, None)
-    if not batch or not push_enabled():
+    store_batch = session.info.pop(_SESSION_KEY + "_store", None)
+    if (not batch and not store_batch) or not push_enabled():
         return
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return  # committed outside an event loop (a script): nothing to push from
-    for listing_id, buyer_id, roles in batch:
+    for listing_id, buyer_id, roles in (batch or []):
         schedule(loop, listing_id, buyer_id, roles)
+    for store_id, buyer_id, roles in (store_batch or []):
+        schedule_store(loop, store_id, buyer_id, roles)
 
 
 def push_enabled() -> bool:
@@ -382,6 +395,143 @@ async def push_thread(
         return sent
 
 
+# ── Store-general threads ──────────────────────────────────────────────────
+# Same debounce/dedupe discipline as listing threads, keyed by
+# ("store", store_id, buyer_id) so the two namespaces never collide.
+
+_store_pending_roles: dict = {}
+_store_pending_tasks: dict = {}
+_store_generations: dict = {}
+
+
+def schedule_store(loop, store_id: str, buyer_id: str, roles) -> None:
+    key = ("store", store_id, buyer_id)
+    _store_generations[key] = _store_generations.get(key, 0) + 1
+    _store_pending_roles.setdefault(key, set()).update(roles)
+    task = _store_pending_tasks.get(key)
+    if task is not None and not task.done():
+        return
+    task = loop.create_task(_push_store_after_debounce(key), context=contextvars.Context())
+    _store_pending_tasks[key] = task
+    _inflight.add(task)
+    task.add_done_callback(_inflight.discard)
+
+
+async def _push_store_after_debounce(key: tuple) -> None:
+    try:
+        if PUSH_DEBOUNCE_SECONDS > 0:
+            await asyncio.sleep(PUSH_DEBOUNCE_SECONDS)
+    finally:
+        _store_pending_tasks.pop(key, None)
+        roles = _store_pending_roles.pop(key, set())
+    generation = _store_generations.get(key, 0)
+    _, store_id, buyer_id = key
+    for role in sorted(roles):
+        try:
+            await push_store_thread(store_id, buyer_id, role, generation=generation)
+        except Exception as exc:
+            logger.warning("[message_push] store thread %s:%s role=%s failed: %s",
+                           store_id, buyer_id, role, exc)
+
+
+async def build_store_notification(db, store_id: str, buyer_id: str, role: str) -> Optional[dict]:
+    from api.models.store import Store
+    from api.routers.negotiate import _thread_unread_and_seen
+    store = (await db.execute(
+        select(Store).where(Store.id == store_id, Store.deleted_at.is_(None))
+    )).scalar_one_or_none()
+    if store is None:
+        return None
+    recipient_id = buyer_id if role == "buyer" else store.owner_id
+    if not recipient_id:
+        return None
+    from api.core.message_visibility import visible_to_role_clause
+    M = NegotiationMessage
+    # visibility-ok: visible_to_role_clause applies /history audience rules
+    newest = (await db.execute(
+        select(NegotiationMessage)
+        .where(M.store_id == store_id, M.buyer_id == buyer_id,
+               visible_to_role_clause(role),
+               or_(M.msg_type.is_(None), M.msg_type != "call"),
+               M.deleted_at.is_(None))
+        .order_by(NegotiationMessage.created_at.desc()).limit(1)
+    )).scalar_one_or_none()
+    if newest is None:
+        return None
+    unread, _, _ = await _thread_unread_and_seen(
+        db, None, buyer_id, role, None, messages_only=True, store_id=store_id)
+    count = int(unread or 0)
+    if count <= 0:
+        return None
+    other_id = store.owner_id if role == "buyer" else buyer_id
+    sender_name = (await db.execute(
+        select(User.name).where(User.id == other_id)
+    )).scalar_one_or_none() or ("Seller" if role == "buyer" else "Buyer")
+    if role == "buyer":
+        sender_name = store.name
+    sender_photo = None
+    try:
+        from api.domains.media.service import avatar_url
+        sender_photo = await avatar_url(db, other_id)
+    except Exception as exc:
+        logger.warning("[message_push] no photo for user=%s: %s", other_id, exc)
+    preview = preview_of(newest.msg_type, newest.content)
+    body = preview if count == 1 else f"{count} new messages · {preview}"
+    return {
+        "user_id": recipient_id,
+        "message_id": newest.id,
+        "title": f"{sender_name} · {store.name}" if role == "seller" else store.name,
+        "body": body,
+        "data": {
+            "type": "new_message", "storeId": store_id, "buyerId": buyer_id,
+            "myRole": role, "messageId": newest.id, "screen": "store-chat",
+            "senderName": sender_name, "listingName": store.name,
+            "count": count, "preview": preview,
+            **({"senderPhoto": sender_photo} if sender_photo else {}),
+        },
+    }
+
+
+async def push_store_thread(store_id: str, buyer_id: str, role: str,
+                            generation: Optional[int] = None, force: bool = False) -> int:
+    from api.core import push_devices
+    async with AsyncSessionLocal() as db:
+        note = await build_store_notification(db, store_id, buyer_id, role)
+    if note is None:
+        return 0
+    dedupe_key = ("store", store_id, buyer_id, role)
+    lock = _send_locks.setdefault(dedupe_key, asyncio.Lock())
+    async with lock:
+        if generation is not None and _store_generations.get(("store", store_id, buyer_id), 0) != generation:
+            return 0
+        announced = _last_pushed.get(dedupe_key)
+        repeat = announced is not None and announced[0] == note["message_id"]
+        if repeat and not force:
+            return 0
+        told = frozenset()
+        phones = await _phones_for(note["user_id"])
+        if repeat:
+            told = announced[1]
+            phones = [p for p in phones if p not in told]
+            if not phones:
+                return 0
+        tokens = phones or None
+        tag = store_tag(store_id, buyer_id)
+        sent = await push_devices.push_user(
+            note["user_id"], title=note["title"], body=note["body"], data=note["data"],
+            tokens=tokens, android_tag=tag, android_channel_id=MESSAGES_CHANNEL_ID,
+            apns_thread_id=tag,
+        )
+        if sent > 0:
+            _last_pushed[dedupe_key] = (note["message_id"], told | frozenset(tokens or ()))
+            _last_pushed.move_to_end(dedupe_key)
+            while len(_last_pushed) > _LAST_PUSHED_MAX:
+                _last_pushed.popitem(last=False)
+        logger.info("[message_push] STORE_PUSHED thread=%s:%s role=%s phones=%d",
+                    store_id, buyer_id, role, sent)
+        return sent
+
+
 async def _phones_for(user_id: str) -> list:
     """Every phone `user_id` is signed in on, so a send can skip the ones
     already told about this message. Empty on a lookup failure: push_user
@@ -429,12 +579,44 @@ async def push_unread_for_user(user_id: str) -> int:
         )).all()
         pairs.update((lid, bid, "seller") for lid, bid in seller_rows)
     sent = 0
-    for listing_id, buyer_id, role in sorted(pairs):
+    for listing_id, buyer_id, role in sorted(pairs, key=lambda p: (str(p[0]), str(p[1]), p[2])):
+        if listing_id is None:
+            continue
         try:
             sent += await push_thread(listing_id, buyer_id, role, force=True)
         except Exception as exc:
             logger.warning("[message_push] unread re-push thread %s:%s role=%s failed: %s",
                            listing_id, buyer_id, role, exc)
+    # Store-general threads unread for this user.
+    try:
+        from api.models.store import Store
+        store_pairs: set = set()
+        async with AsyncSessionLocal() as db:
+            # visibility-ok: thread ids only, no content
+            sbuyer = (await db.execute(
+                select(NegotiationMessage.store_id, NegotiationMessage.buyer_id)
+                .where(NegotiationMessage.buyer_id == user_id,
+                       NegotiationMessage.store_id.isnot(None))
+                .distinct()
+            )).all()
+            store_pairs.update((sid, bid, "buyer") for sid, bid in sbuyer if sid)
+            # visibility-ok: thread ids only, no content
+            sseller = (await db.execute(
+                select(NegotiationMessage.store_id, NegotiationMessage.buyer_id)
+                .join(Store, Store.id == NegotiationMessage.store_id)
+                .where(Store.owner_id == user_id,
+                       NegotiationMessage.buyer_id.isnot(None))
+                .distinct()
+            )).all()
+            store_pairs.update((sid, bid, "seller") for sid, bid in sseller if sid)
+        for store_id, sbuyer_id, srole in sorted(store_pairs):
+            try:
+                sent += await push_store_thread(store_id, sbuyer_id, srole, force=True)
+            except Exception as exc:
+                logger.warning("[message_push] unread re-push store %s:%s role=%s failed: %s",
+                               store_id, sbuyer_id, srole, exc)
+    except Exception as exc:
+        logger.warning("[message_push] unread re-push stores failed: %s", exc)
     return sent
 
 

@@ -3,7 +3,7 @@
 // stock line.
 //
 // Covers what storefront_test.dart's first act doesn't:
-//   1. Message Store opens a direct chat about the picked product;
+//   1. Message Store opens the store-general chat (no product anchor);
 //   2. Follow follows and unfollows, moving the count;
 //   3. Shop by Category shows types of item with their pictures, and
 //      filters the catalogue by them;
@@ -185,12 +185,12 @@ Future<void> _pumpStore(WidgetTester tester, _Backend backend,
   addTearDown(tester.view.reset);
   await tester.pumpWidget(MaterialApp(
     navigatorObservers: observers ?? const [],
-    // The message flow pushes the direct chat; the test records where
+    // The message flow pushes the store chat; the test records where
     // it would have gone instead of opening a real thread.
     onGenerateRoute: (settings) => MaterialPageRoute(
       settings: settings,
-      builder: (_) => settings.name == '/direct-chat'
-          ? const Scaffold(body: Text('direct chat'))
+      builder: (_) => settings.name == '/store-chat'
+          ? const Scaffold(body: Text('store chat'))
           : StoreHomeScreen(
               storeId: 's1',
               repository: backend.repo,
@@ -223,10 +223,10 @@ void main() {
       await tester.pumpAndSettle();
       // The account sheet, not the chat.
       expect(find.textContaining('Create a free account'), findsOneWidget);
-      expect(find.text('direct chat'), findsNothing);
+      expect(find.text('store chat'), findsNothing);
     });
 
-    testWidgets('one tap lands straight in the direct chat',
+    testWidgets('one tap lands straight in the store chat',
         (tester) async {
       await _signIn();
       final backend = _Backend();
@@ -235,13 +235,13 @@ void main() {
       await _pumpStore(tester, backend, observers: [observer]);
       await tester.tap(find.byKey(const Key('store-message-button')));
       await tester.pumpAndSettle();
-      // No picker: the tap itself opens the chat, anchored to the
-      // store's first listing (what the thread hangs off).
+      // No picker and no borrowed listing: the tap opens the
+      // store-general thread, which the Inbox keys by the store itself.
       final chat =
-          pushed.where((r) => r.name == '/direct-chat').singleOrNull;
-      expect(chat, isNotNull, reason: 'no direct chat was opened');
-      expect(
-          chat!.arguments, {'listingId': 'l1', 'role': 'buyer'});
+          pushed.where((r) => r.name == '/store-chat').singleOrNull;
+      expect(chat, isNotNull, reason: 'no store chat was opened');
+      expect(chat!.arguments,
+          {'storeId': 's1', 'storeName': 'Clanix Electronics', 'role': 'buyer'});
     });
   });
 

@@ -130,6 +130,9 @@ class GlobalPollerService {
   static String threadKeyFor(String listingId, String? buyerId) =>
       '$listingId::${buyerId ?? ''}';
 
+  static String storeThreadKeyFor(String storeId, String? buyerId) =>
+      'store:$storeId::${buyerId ?? ''}';
+
   // listing_id -> room_id of an incoming-call notification we've posted and
   // not yet taken down. Lets a later poll cancel the exact notification it
   // raised once that call stops ringing.
@@ -179,6 +182,14 @@ class GlobalPollerService {
   /// thread that never notifies again.
   void markScreenInactive(String listingId, {String? buyerId}) {
     _activelyViewedThreads.remove(threadKeyFor(listingId, buyerId));
+  }
+
+  void markStoreScreenActive(String storeId, {String? buyerId}) {
+    _activelyViewedThreads.add(storeThreadKeyFor(storeId, buyerId));
+  }
+
+  void markStoreScreenInactive(String storeId, {String? buyerId}) {
+    _activelyViewedThreads.remove(storeThreadKeyFor(storeId, buyerId));
   }
 
   /// start(), [delay] from now - for an app started to answer a call
@@ -399,10 +410,19 @@ class GlobalPollerService {
     }
   }
 
-  bool _isOnScreen(Map<String, dynamic> thread) =>
-      _appInForeground &&
-      _activelyViewedThreads.contains(
-          threadKeyFor(thread['listing_id'] as String, thread['buyer_id'] as String?));
+  bool _isOnScreen(Map<String, dynamic> thread) {
+    if (!_appInForeground) return false;
+    if (thread['thread_type'] == 'store') {
+      final sid = thread['store_id'] as String?;
+      if (sid == null) return false;
+      return _activelyViewedThreads
+          .contains(storeThreadKeyFor(sid, thread['buyer_id'] as String?));
+    }
+    final lid = thread['listing_id'] as String?;
+    if (lid == null) return false;
+    return _activelyViewedThreads
+        .contains(threadKeyFor(lid, thread['buyer_id'] as String?));
+  }
 
   Future<void> _checkAll() async {
     if (_checking) return; // avoid overlapping runs if one is slow
@@ -423,8 +443,7 @@ class GlobalPollerService {
           threads.length > 300 ? threads.sublist(0, 300) : threads));
       // The thread on screen is being read as it arrives; its count is
       // about to be zero (the chat marks it read), so don't flash it.
-      unreadTotal.value = unreadIn(threads.where(
-          (t) => t['listing_id'] is String && !_isOnScreen(t)));
+      unreadTotal.value = unreadIn(threads.where((t) => !_isOnScreen(t)));
       final prefs = await SharedPreferences.getInstance();
       // Incoming calls: one request for all of them. It used to be one
       // GET /calls/pending per thread on every sweep - forty requests every
@@ -466,6 +485,30 @@ class GlobalPollerService {
         }
       }
       for (final thread in threads) {
+        if (thread['thread_type'] == 'store') {
+          // Store threads: record delivery so the sender's tick moves,
+          // without the listing-only call/message announcements below.
+          final sid = thread['store_id'] as String?;
+          if (sid == null || _isOnScreen(thread)) continue;
+          final sunread = (thread['unread_count'] as int?) ??
+              (thread['unread'] as int?) ?? 0;
+          if (sunread > 0) {
+            final sbuyer = thread['buyer_id'] as String?;
+            final skey = storeThreadKeyFor(sid, sbuyer);
+            final ssig =
+                '${thread['last_message_id'] ?? ''}|${thread['last_message_at'] ?? ''}';
+            if (_deliveredMarks[skey] != ssig) {
+              _deliveredMarks[skey] = ssig;
+              unawaited(ApiService.markStoreDelivered(sid, buyerId: sbuyer)
+                  .then((ok) {
+                if (!ok && _deliveredMarks[skey] == ssig) {
+                  _deliveredMarks.remove(skey);
+                }
+              }));
+            }
+          }
+          continue;
+        }
         final listingId = thread['listing_id'] as String?;
         if (listingId == null) continue;
         if (_isOnScreen(thread)) {

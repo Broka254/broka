@@ -53,6 +53,36 @@ Map<String, dynamic> _thread({
       'is_online': true,
     };
 
+Map<String, dynamic> _storeThread() => {
+      'thread_type': 'store',
+      'store_id': 's1',
+      'store_name': 'Clanix Electronics',
+      'store_logo': null,
+      'listing_id': null,
+      'listing_name': 'Clanix Electronics',
+      'listing_category': 'Electronics',
+      'listing_price': 0,
+      'location_name': 'Nairobi',
+      'listing_type': 'direct',
+      'seller_id': 'owner-1',
+      'seller_name': 'Jane Wanjiru',
+      'buyer_id': 'buyer-Amina Wanjiru',
+      'buyer_name': 'Amina Wanjiru',
+      'counterpart_name': 'Amina Wanjiru',
+      'counterpart_avatar': '',
+      'my_role': 'seller',
+      'last_message': 'Do you deliver?',
+      'last_role': 'buyer',
+      'last_msg_type': 'text',
+      'unread': 1,
+      'unread_count': 1,
+      'zeno_unread': 0,
+      'last_message_seen': false,
+      'last_message_delivered': false,
+      'time_ago': '2m',
+      'is_online': false,
+    };
+
 void main() {
   setUpAll(() async {
     installFakeApi();
@@ -122,6 +152,24 @@ void main() {
     // new: the thread opens where they are (chat_screen_memory_test.dart).
     expect(pushed.last.name, '/direct-chat');
     expect((pushed.last.arguments as Map)['buyer_id'], 'buyer-Amina Wanjiru');
+  });
+
+  testWidgets('a store conversation shows under the shop and opens its chat',
+      (tester) async {
+    pushed.clear();
+    setFakeRoute((uri) =>
+        uri.path == '/negotiate/inbox/u1' ? [_storeThread()] : null);
+    await tester.pumpWidget(app());
+    await _settle(tester);
+    expect(tester.takeException(), isNull);
+    expect(find.text('Clanix Electronics'), findsOneWidget);
+    expect(find.text('Store'), findsOneWidget);
+    // The single group auto-expands, so the buyer row is visible.
+    expect(find.text('Amina Wanjiru'), findsOneWidget);
+    await tester.tap(find.text('Amina Wanjiru'));
+    await _settle(tester);
+    expect(pushed.last.name, '/store-chat');
+    expect((pushed.last.arguments as Map)['storeId'], 's1');
   });
 
   testWidgets('my last message ticks: single dull sent, dull double received, '

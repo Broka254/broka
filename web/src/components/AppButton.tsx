@@ -11,16 +11,21 @@ export function AppButton({
   label,
   className = 'button',
   chat = false,
+  storeChat = false,
 }: {
   label: string
   className?: string
   /** On a product page: open the chat with its seller in the app, as a
    *  listing outside a store does (deep_link_service.dart reads ?chat=1). */
   chat?: boolean
+  /** On a store page: open the store-general conversation in the app
+   *  (deep_link_service.dart reads ?message=1 on the store link). */
+  storeChat?: boolean
 }) {
   const android = useIsAndroid()
   const pageUrl = usePageUrl()
-  const href = android && pageUrl ? androidAppLink(chat ? withChat(pageUrl) : pageUrl) : APP_DOWNLOAD_URL
+  const target = storeChat && pageUrl ? withStoreChat(pageUrl) : chat && pageUrl ? withChat(pageUrl) : pageUrl
+  const href = android && target ? androidAppLink(target) : APP_DOWNLOAD_URL
   return (
     <a className={className} href={href} rel="nofollow">
       {label}
@@ -32,5 +37,12 @@ export function AppButton({
 export function withChat(url: string): string {
   const u = new URL(url)
   u.searchParams.set('chat', '1')
+  return u.toString()
+}
+
+/** [url] with ?message=1, so the app opens the store conversation. */
+export function withStoreChat(url: string): string {
+  const u = new URL(url)
+  u.searchParams.set('message', '1')
   return u.toString()
 }

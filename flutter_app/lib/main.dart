@@ -55,6 +55,7 @@ import 'features/premium/presentation/premium_screen.dart';
 import 'features/stores/presentation/my_store_screen.dart';
 import 'features/stores/presentation/setup/store_setup_screen.dart';
 import 'features/stores/presentation/store_home_screen.dart';
+import 'features/stores/presentation/store_chat_screen.dart';
 import 'features/zeno_assistant/presentation/zeno_session_host.dart';
 import 'features/zeno_assistant/zeno_session.dart';
 import 'services/api_service.dart';
@@ -751,6 +752,7 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
         },
         '/negotiate':        (_) => const NegotiateScreen(),
         '/direct-chat':      (_) => const NegotiationScreen(),
+        '/store-chat':       (_) => const StoreChatScreen(),
         '/assistant':        (_) => const AiAssistantScreen(),
         '/product':          (_) => const ProductScreen(),
         '/zeno':             (_) => const ZenoScreen(),

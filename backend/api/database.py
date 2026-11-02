@@ -514,6 +514,12 @@ class NegotiationMessage(Base):
     __tablename__ = "negotiation_messages"
     id             = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     listing_id     = Column(String, ForeignKey("listings.id"))
+    # Store-general conversation: a buyer talking to a shop, not about one
+    # product. Set (with listing_id NULL) only on direct store messages;
+    # listing threads leave it NULL. Without it, "Message Store" had to
+    # borrow the store's first listing as its thread, so the conversation
+    # moved or vanished whenever that listing changed.
+    store_id       = Column(String, ForeignKey("stores.id"), nullable=True, index=True)
     sender_id      = Column(String, nullable=False)
     role           = Column(String, nullable=False)
     recipient_role = Column(String, nullable=True)
@@ -577,6 +583,7 @@ class NegotiationMessage(Base):
     # gets its own index above.
     __table_args__ = (
         Index("ix_negotiation_messages_listing_buyer", "listing_id", "buyer_id"),
+        Index("ix_negotiation_messages_store_buyer", "store_id", "buyer_id"),
         Index("uq_negotiation_messages_sender_client_msg",
               "sender_id", "client_msg_id", unique=True),
     )
@@ -594,7 +601,11 @@ class ThreadReadState(Base):
     """
     __tablename__ = "thread_read_state"
     id            = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    listing_id    = Column(String, ForeignKey("listings.id"), nullable=False)
+    # Exactly one of listing_id / store_id names the thread: a product
+    # thread or a store-general thread. Both nullable here so a store row
+    # needs no fake listing; callers always set exactly one.
+    listing_id    = Column(String, ForeignKey("listings.id"), nullable=True)
+    store_id      = Column(String, ForeignKey("stores.id"), nullable=True, index=True)
     buyer_id      = Column(String, nullable=False)
     role          = Column(String, nullable=False)  # "buyer" | "seller" - whose watermark this is
     last_read_at  = Column(DateTime, nullable=False, default=datetime.utcnow)
@@ -612,8 +623,13 @@ class ThreadReadState(Base):
     # per thread instead of a status column on every message.
     last_delivered_at = Column(DateTime, nullable=True)
 
+    # Two uniques, one per thread kind: NULLs never collide, so the
+    # listing constraint ignores store rows and vice versa, while each
+    # kind still gets exactly one watermark row per (thread, buyer, role).
     __table_args__ = (
         UniqueConstraint("listing_id", "buyer_id", "role", name="uq_thread_read_state"),
+        UniqueConstraint("store_id", "buyer_id", "role", name="uq_thread_read_state_store"),
+        Index("ix_thread_read_state_store_buyer", "store_id", "buyer_id"),
     )
 
 
@@ -1460,7 +1476,7 @@ async def _apply_optional_statements(conn, statements) -> None:
         await conn.execute(text(prepared))
 
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 SCHEMA_REVISIONS = (
     (1, "legacy_schema_adoption"),
     (2, "durable_payment_intents_and_callbacks"),
@@ -1480,6 +1496,9 @@ SCHEMA_REVISIONS = (
     # Launch offers (first 50 listings / 10 stores free) + expiry-SMS dedup.
     # New tables only, from create_all().
     (10, "launch_offers_and_expiry_notifications"),
+    # Store-general conversations: NegotiationMessage.store_id and
+    # ThreadReadState.store_id (+ listing_id made nullable there).
+    (11, "store_conversations"),
 )
 
 # Tables/columns that must exist before an API process is safe to serve
@@ -1977,6 +1996,13 @@ async def _init_db_impl():
             # originals never block the migration on either database.
             "ALTER TABLE negotiation_messages ADD COLUMN reply_to_message_id VARCHAR",
             "ALTER TABLE negotiation_messages ADD COLUMN reply_snapshot TEXT",
+            # Store-general conversations (rev 11): a store thread needs no
+            # listing, so thread_read_state.listing_id drops its NOT NULL
+            # (PostgreSQL wording; SQLite swallows the failure and its
+            # create_all tables already allow NULL).
+            "ALTER TABLE negotiation_messages ADD COLUMN store_id VARCHAR",
+            "ALTER TABLE thread_read_state ADD COLUMN store_id VARCHAR",
+            "ALTER TABLE thread_read_state ALTER COLUMN listing_id DROP NOT NULL",
             # Zeno conversation durability (2026-11): one row per
             # (owner, mode, listing). The expression unique index in
             # index_patches enforces it - PostgreSQL treats NULL listing
@@ -2156,6 +2182,10 @@ async def _init_db_impl():
             "CREATE INDEX IF NOT EXISTS ix_negotiation_messages_buyer_id ON negotiation_messages(buyer_id)",
             "CREATE INDEX IF NOT EXISTS ix_negotiation_messages_created_at ON negotiation_messages(created_at)",
             "CREATE INDEX IF NOT EXISTS ix_negotiation_messages_listing_buyer ON negotiation_messages(listing_id, buyer_id)",
+            "CREATE INDEX IF NOT EXISTS ix_negotiation_messages_store_id ON negotiation_messages(store_id)",
+            "CREATE INDEX IF NOT EXISTS ix_negotiation_messages_store_buyer ON negotiation_messages(store_id, buyer_id)",
+            "CREATE INDEX IF NOT EXISTS ix_thread_read_state_store_buyer ON thread_read_state(store_id, buyer_id)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_thread_read_state_store ON thread_read_state(store_id, buyer_id, role)",
             # Store feature (Phase 1): store_id is marked index=True on the
             # Listing model, which - like every column above - only takes
             # effect for a table create_all() creates fresh. An already-

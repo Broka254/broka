@@ -57,6 +57,10 @@ def _thread_key(listing_id: str, buyer_id: str) -> str:
     return f"{listing_id}:{buyer_id}"
 
 
+def _store_thread_key(store_id: str, buyer_id: str) -> str:
+    return f"store:{store_id}:{buyer_id}"
+
+
 # Keepalive for the chat socket. The server pings every interval; a socket
 # that has sent nothing at all - not a ping, not a pong - for STALE seconds
 # is dead in a way TCP hasn't noticed (a mobile radio drop sends no FIN) and
@@ -346,7 +350,8 @@ MAX_IMAGE_MB = 10
 
 @router.post("/upload")
 async def upload_media(
-    listing_id:    str       = Form(...),
+    listing_id:    Optional[str] = Form(default=None),
+    store_id:      Optional[str] = Form(default=None),
     sender_role:   str       = Form(...),
     sender_id:     str       = Form(...),
     content_type:  str       = Form(...),   # "audio" | "image"
@@ -371,13 +376,25 @@ async def upload_media(
     authenticated_uid = current_user["id"]
     if sender_id != authenticated_uid:
         raise HTTPException(status_code=403, detail="sender_id mismatch")
+    if bool(listing_id) == bool(store_id):
+        raise HTTPException(status_code=400, detail="listing_id or store_id required")
 
-    result = await db.execute(select(Listing).where(Listing.id == listing_id))
-    listing = result.scalar_one_or_none()
-    if not listing:
-        raise HTTPException(status_code=404, detail="Listing not found")
-
-    actual_role = "seller" if authenticated_uid == listing.seller_id else "buyer"
+    listing = None
+    store = None
+    if store_id:
+        from api.models.store import Store
+        store = (await db.execute(
+            select(Store).where(Store.id == store_id, Store.deleted_at.is_(None))
+        )).scalar_one_or_none()
+        if not store:
+            raise HTTPException(status_code=404, detail="Store not found")
+        actual_role = "seller" if authenticated_uid == store.owner_id else "buyer"
+    else:
+        result = await db.execute(select(Listing).where(Listing.id == listing_id))
+        listing = result.scalar_one_or_none()
+        if not listing:
+            raise HTTPException(status_code=404, detail="Listing not found")
+        actual_role = "seller" if authenticated_uid == listing.seller_id else "buyer"
     if sender_role != actual_role:
         raise HTTPException(status_code=403,
             detail=f"Role mismatch: you are the {actual_role}")
@@ -425,17 +442,18 @@ async def upload_media(
     if not effective_buyer_id:
         # As in /negotiate/direct-message: a NULL thread is every buyer's
         # thread, so a seller's photo without a buyer_id reached them all.
-        from api.routers.negotiate import seller_default_buyer
-        effective_buyer_id = await seller_default_buyer(db, listing_id)
+        if store_id:
+            from api.routers.negotiate import _store_default_buyer
+            effective_buyer_id = await _store_default_buyer(db, store_id)
+        else:
+            from api.routers.negotiate import seller_default_buyer
+            effective_buyer_id = await seller_default_buyer(db, listing_id)
         if not effective_buyer_id:
             raise HTTPException(status_code=400, detail="buyer_id required")
 
-    # A voice note or a photo of the item is a message to the seller, so it
-    # arms the same 5-minute availability reminder a text does
-    # (core/interest_arming). Before this, a buyer who only ever sent photos
-    # or voice notes never had their question chased - which is exactly the
-    # buyer most likely to be ignored.
-    if actual_role == "buyer":
+    # Listing threads only: a photo to a seller arms the availability
+    # reminder. Store threads have no single listing to chase.
+    if actual_role == "buyer" and listing is not None:
         from api.core.interest_arming import arm_availability_nudge
         await arm_availability_nudge(
             db, listing_id, authenticated_uid, seller_id=listing.seller_id,
@@ -448,11 +466,12 @@ async def upload_media(
 
     _ref, _preview = await _validate_reply_reference(
         db, (reply_to_message_id or "").strip() or None,
-        listing_id=listing_id, buyer_id=effective_buyer_id,
+        listing_id=listing_id, buyer_id=effective_buyer_id, store_id=store_id,
     )
     msg_type = "voice" if content_type == "audio" else "image"
     nm = NegotiationMessage(
         listing_id=listing_id,
+        store_id=store_id,
         sender_id=authenticated_uid,
         role=actual_role,
         recipient_role="seller" if actual_role == "buyer" else "buyer",
@@ -480,7 +499,7 @@ async def upload_media(
 
     # Broadcast to WebSocket clients in the thread (not back to the sender -
     # they already see their own voice note/image immediately client-side)
-    key = _thread_key(listing_id, effective_buyer_id)
+    key = _store_thread_key(store_id, effective_buyer_id) if store_id else _thread_key(listing_id, effective_buyer_id)
     payload = _msg_to_dict(nm, authenticated_uid, actual_role == "seller")
     await _broadcast(key, payload, exclude_uid=authenticated_uid)
 
@@ -549,6 +568,148 @@ async def broadcast_message_update(
     key = _thread_key(listing_id, buyer_id)
     if _thread_connections.get(key):
         await _broadcast(key, payload)
+
+
+async def broadcast_store_text_message(
+    store_id: str, buyer_id: str, msg: NegotiationMessage, uid: str, is_seller: bool,
+) -> None:
+    key = _store_thread_key(store_id, buyer_id)
+    if key in _thread_connections and _thread_connections[key]:
+        await _broadcast(key, _msg_to_dict(msg, uid, is_seller), exclude_uid=uid)
+
+
+async def broadcast_store_message_update(store_id: str, buyer_id: str, payload: dict) -> None:
+    key = _store_thread_key(store_id, buyer_id)
+    if _thread_connections.get(key):
+        await _broadcast(key, payload)
+
+
+async def broadcast_store_receipt(
+    store_id: str, buyer_id: str, role: str, *,
+    exclude_uid: str, delivered_at: Optional[_dt], read_at: Optional[_dt],
+) -> None:
+    key = _store_thread_key(store_id, buyer_id)
+    if not _thread_connections.get(key):
+        return
+
+    def _iso(dt: Optional[_dt]) -> Optional[str]:
+        return (dt.isoformat() + "Z") if dt else None
+
+    await _broadcast(key, {
+        "type": "receipt", "role": role,
+        "last_delivered": _iso(delivered_at), "last_read": _iso(read_at),
+    }, exclude_uid=exclude_uid)
+
+
+@router.websocket("/ws/store/{store_id}")
+async def store_ws(
+    store_id: str,
+    websocket: WebSocket,
+    token: str = Query(...),
+    buyer_id: Optional[str] = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Real-time socket for a store-general thread. Same payloads as the
+    listing socket; store threads carry no Zeno/broker rows."""
+    try:
+        payload = decode_access_token(token)
+        if payload is None:
+            await websocket.close(code=4001, reason="Invalid or expired token")
+            return
+        uid = payload["sub"]
+    except Exception as e:
+        logger.warning("[media-ws] store auth exception store=%s: %s", store_id, e)
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+    from api.models.store import Store
+    store = (await db.execute(
+        select(Store).where(Store.id == store_id, Store.deleted_at.is_(None))
+    )).scalar_one_or_none()
+    if not store:
+        await websocket.close(code=4004, reason="Store not found")
+        return
+    is_seller = (uid == store.owner_id)
+    effective_buyer_id = buyer_id if is_seller else uid
+    if not effective_buyer_id:
+        from api.routers.negotiate import _store_default_buyer
+        effective_buyer_id = await _store_default_buyer(db, store_id)
+    if not effective_buyer_id:
+        await websocket.close(code=4003, reason="buyer_id required for seller")
+        return
+    key = _store_thread_key(store_id, effective_buyer_id)
+    await websocket.accept()
+    _thread_connections.setdefault(key, {})[websocket] = uid
+    try:
+        from api.routers.negotiate import _touch_watermark
+        delivered_at = await _touch_watermark(
+            db, None, effective_buyer_id, "seller" if is_seller else "buyer",
+            delivered=True, read=False, store_id=store_id,
+        )
+        await broadcast_store_receipt(
+            store_id, effective_buyer_id, "seller" if is_seller else "buyer",
+            exclude_uid=uid, delivered_at=delivered_at, read_at=None,
+        )
+    except Exception as exc:
+        logger.warning("[media-ws] store delivery watermark failed: %s", exc)
+    # visibility-ok: direct store socket; via_ai/broker rows dropped below
+    hist_result = await db.execute(
+        select(NegotiationMessage)
+        .where(NegotiationMessage.store_id == store_id,
+               NegotiationMessage.buyer_id == effective_buyer_id)
+        .order_by(NegotiationMessage.created_at.desc()).limit(50)
+    )
+    for m in reversed(list(hist_result.scalars().all())):
+        if m.role == "broker" or bool(getattr(m, "via_ai", False)):
+            continue
+        try:
+            await websocket.send_json(_msg_to_dict(m, uid, is_seller))
+        except Exception:
+            break
+    loop = asyncio.get_running_loop()
+    last_activity = loop.time()
+
+    async def _heartbeat() -> None:
+        while True:
+            await asyncio.sleep(CHAT_WS_PING_SECONDS)
+            if loop.time() - last_activity > CHAT_WS_STALE_SECONDS:
+                try:
+                    await websocket.close(code=4000, reason="Heartbeat timeout")
+                except Exception:
+                    pass
+                return
+            try:
+                await websocket.send_json({"type": "ping"})
+            except Exception:
+                return
+
+    heartbeat_task = asyncio.create_task(_heartbeat())
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            last_activity = loop.time()
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(msg, dict) and msg.get("type") == "ping":
+                await websocket.send_json({"type": "pong"})
+                continue
+            if isinstance(msg, dict) and msg.get("type") in ("typing", "stop_typing"):
+                try:
+                    await _broadcast_typing(key, uid, "seller" if is_seller else "buyer",
+                                            typing=(msg.get("type") == "typing"))
+                except Exception:
+                    pass
+                continue
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        logger.info("[media-ws] %s left store thread=%s (%s)", uid, key, type(exc).__name__)
+    finally:
+        heartbeat_task.cancel()
+        _thread_connections.get(key, {}).pop(websocket, None)
+        if not _thread_connections.get(key):
+            _thread_connections.pop(key, None)
 
 
 async def broadcast_receipt(

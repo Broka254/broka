@@ -111,9 +111,13 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
   void _applyThreads(List<Map<String, dynamic>> data) {
     final Map<String, List<Map<String, dynamic>>> grouped = {};
     for (final t in data) {
-      final lid = t['listing_id'] as String?;
-      if (lid == null) continue;
-      grouped.putIfAbsent(lid, () => []).add(t);
+      // Store-general threads have no listing: group by store instead of
+      // dropping them (the old "never in the inbox" bug, client half).
+      final key = t['thread_type'] == 'store'
+          ? 'store:${t['store_id']}'
+          : t['listing_id'] as String?;
+      if (key == null) continue;
+      grouped.putIfAbsent(key, () => []).add(t);
     }
     _threads = data;
     _grouped = grouped;
@@ -206,6 +210,17 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
   /// (ChatScreenMemory.choose). It always opened Zeno's room, so someone
   /// who had moved to the direct chat had to switch back every time.
   Future<void> _openThread(Map<String, dynamic> t) async {
+    if (t['thread_type'] == 'store') {
+      Navigator.pushNamed(context, '/store-chat', arguments: {
+        'storeId': t['store_id'],
+        'storeName': t['store_name'] ?? t['listing_name'],
+        'storeLogo': t['store_logo'] ?? t['listing_image'],
+        'role': t['my_role'],
+        'buyer_id': t['buyer_id'],
+        'counterpartName': t['counterpart_name'],
+      }).then((_) => _loadInbox());
+      return;
+    }
     final listing = Listing(
       id:           t['listing_id']       as String,
       name:         t['listing_name']     as String,
@@ -366,7 +381,8 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
                 listingName: first['listing_name'] as String,
                 listingImage: first['listing_image'] as String?,
                 category:    first['listing_category'] as String,
-                price:       (first['listing_price'] as num).toDouble(),
+                price:       (first['listing_price'] as num?)?.toDouble() ?? 0,
+                isStore:     first['thread_type'] == 'store',
                 unreadCount: unread,
                 threadCount: threads.length,
                 isExpanded:  isExpanded,
@@ -493,6 +509,7 @@ class _ListingGroup extends StatelessWidget {
   final String? listingImage;
   final String  category;
   final double  price;
+  final bool    isStore;
   final int     unreadCount;
   final int     threadCount;
   final bool    isExpanded;
@@ -502,7 +519,7 @@ class _ListingGroup extends StatelessWidget {
 
   const _ListingGroup({
     required this.listingId, required this.listingName,
-    this.listingImage,
+    this.listingImage, this.isStore = false,
     required this.category,  required this.price,
     required this.unreadCount, required this.threadCount,
     required this.isExpanded,  required this.onToggle,
@@ -584,9 +601,14 @@ class _ListingGroup extends StatelessWidget {
                 // Wraps rather than overflowing on a small phone at a large
                 // text size.
                 Wrap(spacing: 8, children: [
-                  Text(_fmt(price), style: const TextStyle(
-                      color: BrokaColors.neonGreen,
-                      fontSize: 11.5, fontWeight: FontWeight.w700)),
+                  if (isStore)
+                    const Text('Store', style: TextStyle(
+                        color: BrokaColors.gold,
+                        fontSize: 11.5, fontWeight: FontWeight.w700))
+                  else
+                    Text(_fmt(price), style: const TextStyle(
+                        color: BrokaColors.neonGreen,
+                        fontSize: 11.5, fontWeight: FontWeight.w700)),
                   Text('$threadCount conversation${threadCount == 1 ? '' : 's'}',
                       style: const TextStyle(
                           color: BrokaColors.textMid, fontSize: 11.5)),
@@ -657,10 +679,14 @@ class _ThreadRow extends StatelessWidget {
     final avatarB64  = thread['counterpart_avatar'] as String?;
     final isOnline   = thread['is_online']     as bool? ?? false;
 
-    // Show name of the OTHER party
-    final otherName = myRole == 'seller'
-        ? (buyerName ?? 'Buyer')
-        : (sellerName ?? 'Seller');
+    // Show name of the OTHER party (a store thread names the shop itself
+    // for the buyer, the buyer for the owner).
+    final otherName = thread['thread_type'] == 'store'
+        ? ((thread['counterpart_name'] as String?) ??
+            (myRole == 'seller' ? (buyerName ?? 'Buyer') : (sellerName ?? 'Seller')))
+        : myRole == 'seller'
+            ? (buyerName ?? 'Buyer')
+            : (sellerName ?? 'Seller');
 
     final initials = otherName.isNotEmpty ? otherName[0].toUpperCase() : '?';
 

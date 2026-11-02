@@ -1135,6 +1135,152 @@ class ApiService {
     return data.map((e) => Message.fromJson(e as Map<String, dynamic>)).toList();
   }
 
+  // ── Store-general conversations ────────────────────────────────────────
+  static Future<List<Message>> getStoreHistory(
+    String storeId, {
+    String? buyerId,
+  }) async {
+    final uri = Uri.parse('$baseUrl/negotiate/store/$storeId/history').replace(
+      queryParameters: buyerId != null ? {'buyer_id': buyerId} : null,
+    );
+    final response = await _sendAuthed(() => http.get(uri, headers: _headers)
+        .timeout(const Duration(seconds: 30)));
+    if (response.statusCode != 200) {
+      throw Exception('History request failed (${response.statusCode})');
+    }
+    final List data = jsonDecode(response.body);
+    return data.map((e) => Message.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  static Future<Map<String, dynamic>?> sendStoreDirectMessage({
+    required String storeId,
+    required String senderRole,
+    required String senderId,
+    required String content,
+    String? buyerId,
+    String? clientMsgId,
+    String? replyToMessageId,
+  }) async {
+    final body = jsonEncode({
+      'sender_role': senderRole,
+      'sender_id': senderId,
+      'content': content,
+      if (buyerId != null) 'buyer_id': buyerId,
+      if (clientMsgId != null) 'client_msg_id': clientMsgId,
+      if (replyToMessageId != null) 'reply_to_message_id': replyToMessageId,
+    });
+    final response = await _sendAuthed(() => http.post(
+      Uri.parse('$baseUrl/negotiate/store/$storeId/direct-message'),
+      headers: _headers,
+      body: body,
+    ).timeout(const Duration(seconds: 20)));
+    if (response.statusCode != 200) {
+      throw Exception(_extractError(response.body));
+    }
+    try {
+      final data = jsonDecode(response.body);
+      final message = data is Map ? data['message'] : null;
+      return message is Map ? Map<String, dynamic>.from(message) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<bool> markStoreDelivered(String storeId, {String? buyerId}) async {
+    try {
+      final response = await _sendAuthed(() => http.post(
+        Uri.parse('$baseUrl/negotiate/store/$storeId/mark-delivered'),
+        headers: _headers,
+        body: jsonEncode({if (buyerId != null) 'buyer_id': buyerId}),
+      ).timeout(const Duration(seconds: 10)));
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> markStoreRead(String storeId, {String? buyerId}) async {
+    try {
+      await _sendAuthed(() => http.post(
+        Uri.parse('$baseUrl/negotiate/store/$storeId/mark-read'),
+        headers: _headers,
+        body: jsonEncode({if (buyerId != null) 'buyer_id': buyerId}),
+      ).timeout(const Duration(seconds: 10)));
+    } catch (_) {}
+  }
+
+  static Future<Map<String, DateTime?>?> getStoreReadStatus(
+    String storeId, {
+    String? buyerId,
+  }) async {
+    try {
+      final uri = Uri.parse('$baseUrl/negotiate/store/$storeId/read-status').replace(
+        queryParameters: buyerId != null ? {'buyer_id': buyerId} : null,
+      );
+      final response = await _sendAuthed(() => http.get(uri, headers: _headers)
+          .timeout(const Duration(seconds: 10)));
+      if (response.statusCode == 200) {
+        final m = jsonDecode(response.body) as Map<String, dynamic>;
+        DateTime? at(String key) {
+          final v = m[key];
+          return v is String ? DateTime.tryParse(v)?.toLocal() : null;
+        }
+        return {
+          'buyer_last_read': at('buyer_last_read'),
+          'seller_last_read': at('seller_last_read'),
+          'buyer_last_delivered': at('buyer_last_delivered'),
+          'seller_last_delivered': at('seller_last_delivered'),
+        };
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static Future<Map<String, dynamic>> uploadStoreMedia({
+    required String storeId,
+    required String senderRole,
+    required String senderId,
+    required String contentType,
+    required Uint8List fileBytes,
+    required String fileName,
+    required String mimeType,
+    String? buyerId,
+    int? durationSecs,
+    String? clientMsgId,
+    String? replyToMessageId,
+    String? caption,
+    void Function(int sent, int total)? onProgress,
+  }) async {
+    final uri = Uri.parse('$baseUrl/media/upload');
+    Future<http.Response> send() async {
+      final request = http.MultipartRequest('POST', uri)
+        ..headers['Authorization'] = 'Bearer ${_token ?? ""}'
+        ..fields['store_id'] = storeId
+        ..fields['sender_role'] = senderRole
+        ..fields['sender_id'] = senderId
+        ..fields['content_type'] = contentType
+        ..files.add(http.MultipartFile(
+            'file',
+            _countingStream(fileBytes, onProgress),
+            fileBytes.length,
+            filename: fileName,
+            contentType: MediaType.parse(mimeType)));
+      if (buyerId != null) request.fields['buyer_id'] = buyerId;
+      if (durationSecs != null) request.fields['duration_secs'] = durationSecs.toString();
+      if (clientMsgId != null) request.fields['client_msg_id'] = clientMsgId;
+      if (replyToMessageId != null) request.fields['reply_to_message_id'] = replyToMessageId;
+      if (caption != null && caption.trim().isNotEmpty) {
+        request.fields['caption'] = caption.trim();
+      }
+      final streamed = await request.send().timeout(const Duration(seconds: 60));
+      return http.Response.fromStream(streamed);
+    }
+
+    final res = await _sendAuthed(send);
+    if (res.statusCode != 200) throw Exception(_extractError(res.body));
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   /// Tells the backend "I've read this thread up to right now" - drives
   /// both the inbox unread badge and the counterpart's "seen" ticks on
   /// their own sent messages. Fire-and-forget: a failed mark-read shouldn't

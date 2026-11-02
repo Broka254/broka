@@ -12,7 +12,7 @@ import { cart } from '@/lib/cart'
 import { ESCROW_PROVIDERS, ESCROW_SERVICES, PAYING_SAFELY } from '@/lib/safety'
 
 import { AddToCart } from './AddToCart'
-import { AppButton } from './AppButton'
+import { AppButton, withStoreChat } from './AppButton'
 import { CartButton } from './CartButton'
 import { CartDrawer } from './CartDrawer'
 import { CatalogueControls } from './CatalogueControls'
@@ -731,6 +731,14 @@ describe('Opening the app', () => {
     fireEvent.click(screen.getByLabelText('Dismiss'))
     expect(screen.queryByText('Open')).toBeNull()
     expect(sessionStorage.getItem('broka_open_in_app_dismissed')).toBe('1')
+  })
+  it('a store-chat link asks the app for the store conversation', () => {
+    expect(withStoreChat('http://localhost/store/clanix')).toBe(
+      'http://localhost/store/clanix?message=1',
+    )
+    expect(withStoreChat('http://localhost/store/clanix?via=qr')).toBe(
+      'http://localhost/store/clanix?via=qr&message=1',
+    )
   })
   it('other visitors see no banner, and the app button is the download', () => {
     setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Safari/604.1')
