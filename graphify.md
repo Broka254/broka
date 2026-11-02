@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-302 endpoints served by `backend/main.py`. **Auth** is read from each
+308 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 58, optional 6, public 61, token 4, user 173.
+Counts: admin 58, optional 6, public 61, token 5, user 178.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -244,33 +244,39 @@ Counts: admin 58, optional 6, public 61, token 4, user 173.
 | GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:85) |
 | POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:52) |
 | GET | `/media/og/{asset_id}.jpg` | public | `link_preview_image` (backend/api/domains/media/router.py:144) |
-| POST | `/media/upload` | user | `upload_media` (backend/api/routers/media.py:348) |
-| WS | `/media/ws/{listing_id}` | token | `negotiate_ws` (backend/api/routers/media.py:120) |
+| POST | `/media/upload` | user | `upload_media` (backend/api/routers/media.py:352) |
+| WS | `/media/ws/store/{store_id}` | token | `store_ws` (backend/api/routers/media.py:605) |
+| WS | `/media/ws/{listing_id}` | token | `negotiate_ws` (backend/api/routers/media.py:124) |
 | POST | `/mpesa/callback` | public | `mpesa_callback` (backend/api/routers/mpesa.py:421) |
 | POST | `/mpesa/callback/{secret}` | public | `mpesa_callback_secured` (backend/api/routers/mpesa.py:452) |
 | POST | `/mpesa/query` | user | `query_payment_status` (backend/api/routers/mpesa.py:348) |
 | GET | `/mpesa/status/{deal_id}` | user | `get_deal_payment_status` (backend/api/routers/mpesa.py:792) |
 | POST | `/mpesa/stk-push` | user | `initiate_stk_push` (backend/api/routers/mpesa.py:154) |
-| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:5014) |
+| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:5495) |
 | POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1858) |
 | POST | `/negotiate/chat` | user | `broker_chat` (backend/api/domains/ai_broker/router.py:44) **shadowed: never reached** |
-| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:4911) |
-| POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3698) |
+| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:5392) |
+| POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3703) |
 | POST | `/negotiate/dispute-analysis` | user | `dispute_analysis` (backend/api/domains/ai_broker/router.py:85) |
-| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:4556) |
+| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:4878) |
 | POST | `/negotiate/message` | user | `send_message` (backend/api/routers/negotiate.py:1934) |
-| PATCH | `/negotiate/message/{message_id}` | user | `edit_message` (backend/api/routers/negotiate.py:3858) |
-| DELETE | `/negotiate/message/{message_id}` | user | `unsend_message` (backend/api/routers/negotiate.py:3906) |
+| PATCH | `/negotiate/message/{message_id}` | user | `edit_message` (backend/api/routers/negotiate.py:3880) |
+| DELETE | `/negotiate/message/{message_id}` | user | `unsend_message` (backend/api/routers/negotiate.py:3932) |
 | POST | `/negotiate/price-recommend` | user | `price_recommend` (backend/api/domains/ai_broker/router.py:69) |
 | POST | `/negotiate/scam-check` | user | `scam_check` (backend/api/domains/ai_broker/router.py:60) |
 | POST | `/negotiate/shopping-advisor` | user | `shopping_advisor` (backend/api/domains/ai_broker/router.py:104) |
-| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:4978) |
+| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:5459) |
+| POST | `/negotiate/store/{store_id}/direct-message` | user | `store_direct_message` (backend/api/routers/negotiate.py:4657) |
+| GET | `/negotiate/store/{store_id}/history` | user | `get_store_history` (backend/api/routers/negotiate.py:4743) |
+| POST | `/negotiate/store/{store_id}/mark-delivered` | user | `mark_store_delivered` (backend/api/routers/negotiate.py:4815) |
+| POST | `/negotiate/store/{store_id}/mark-read` | user | `mark_store_read` (backend/api/routers/negotiate.py:4832) |
+| GET | `/negotiate/store/{store_id}/read-status` | user | `get_store_read_status` (backend/api/routers/negotiate.py:4849) |
 | POST | `/negotiate/zeno-action/draft-sms` | user | `zeno_draft_sms` (backend/api/routers/negotiate.py:3438) |
-| GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:3947) |
-| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:4393) |
-| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:4437) |
-| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:4484) |
-| POST | `/negotiate/{listing_id}/zeno-read` | user | `mark_zeno_read` (backend/api/routers/negotiate.py:4461) |
+| GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:3977) |
+| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:4440) |
+| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:4484) |
+| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:4531) |
+| POST | `/negotiate/{listing_id}/zeno-read` | user | `mark_zeno_read` (backend/api/routers/negotiate.py:4508) |
 | GET | `/payments/zetupay/payments/{reference}` | admin | `zetupay_payment_status` (backend/api/domains/payments/router.py:108) |
 | POST | `/payments/zetupay/test-charge` | admin | `zetupay_test_charge` (backend/api/domains/payments/router.py:77) |
 | POST | `/payments/zetupay/webhook` | public | `zetupay_webhook` (backend/api/domains/payments/router.py:35) |
@@ -673,49 +679,49 @@ Counts: admin 58, optional 6, public 61, token 4, user 173.
 | Table | Model | Defined at |
 |---|---|---|
 | `admin_alerts` | `AdminAlert` | backend/api/models/admin_alert.py:32 |
-| `auction_meta` | `AuctionMeta` | backend/api/database.py:685 |
-| `audit_logs` | `AuditLog` | backend/api/database.py:1324 |
-| `bids` | `Bid` | backend/api/database.py:674 |
-| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:832 |
+| `auction_meta` | `AuctionMeta` | backend/api/database.py:701 |
+| `audit_logs` | `AuditLog` | backend/api/database.py:1340 |
+| `bids` | `Bid` | backend/api/database.py:690 |
+| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:848 |
 | `categories` | `Category` | backend/api/database.py:332 |
 | `category_filters` | `CategoryFilter` | backend/api/database.py:340 |
-| `deals` | `Deal` | backend/api/database.py:884 |
+| `deals` | `Deal` | backend/api/database.py:900 |
 | `dispute_cases` | `DisputeCase` | backend/api/models/dispute.py:282 |
 | `dispute_events` | `DisputeEvent` | backend/api/models/dispute.py:358 |
 | `dispute_evidence` | `DisputeEvidence` | backend/api/models/dispute.py:389 |
 | `dispute_timers` | `DisputeTimer` | backend/api/models/dispute.py:417 |
-| `disputes` | `Dispute` | backend/api/database.py:1223 |
+| `disputes` | `Dispute` | backend/api/database.py:1239 |
 | `email_otps` | `EmailOtp` | backend/api/database.py:309 |
 | `expiry_notifications` | `ExpiryNotification` | backend/api/models/expiry_notification.py:34 |
 | `external_escrows` | `ExternalEscrow` | backend/api/models/external_escrow.py:75 |
 | `feature_usage` | `FeatureUsage` | backend/api/models/subscription.py:86 |
-| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1272 |
-| `fraud_events` | `FraudEvent` | backend/api/database.py:1343 |
+| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1288 |
+| `fraud_events` | `FraudEvent` | backend/api/database.py:1359 |
 | `interests` | `Interest` | backend/api/database.py:485 |
 | `launch_offer_claims` | `LaunchOfferClaim` | backend/api/models/launch_offer.py:38 |
 | `ledger_entries` | `LedgerEntry` | backend/api/models/escrow_ledger.py:20 |
 | `legal_acceptances` | `LegalAcceptance` | backend/api/models/legal.py:24 |
-| `listing_likes` | `ListingLike` | backend/api/database.py:802 |
-| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:1118 |
+| `listing_likes` | `ListingLike` | backend/api/database.py:818 |
+| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:1134 |
 | `listing_payments` | `ListingPayment` | backend/api/models/listing_payment.py:33 |
-| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:1094 |
-| `listing_views` | `ListingView` | backend/api/database.py:772 |
+| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:1110 |
+| `listing_views` | `ListingView` | backend/api/database.py:788 |
 | `listings` | `Listing` | backend/api/database.py:349 |
 | `marketing_campaign_events` | `MarketingCampaignEvent` | backend/api/models/marketing.py:138 |
 | `marketing_campaigns` | `MarketingCampaign` | backend/api/models/marketing.py:51 |
 | `marketing_creatives` | `MarketingCreative` | backend/api/models/marketing.py:100 |
 | `media_assets` | `MediaAsset` | backend/api/models/media.py:74 |
 | `media_blobs` | `MediaBlob` | backend/api/models/media.py:108 |
-| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:1153 |
+| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:1169 |
 | `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:513 |
 | `payment_callbacks` | `PaymentCallback` | backend/api/models/payment_callback.py:30 |
 | `phone_otps` | `PhoneOtp` | backend/api/database.py:290 |
 | `platform_costs` | `PlatformCost` | backend/api/models/platform_cost.py:28 |
 | `push_devices` | `PushDevice` | backend/api/models/push_device.py:28 |
-| `refresh_tokens` | `RefreshToken` | backend/api/database.py:1193 |
-| `reviews` | `Review` | backend/api/database.py:1238 |
-| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:1044 |
-| `seller_metrics` | `SellerMetrics` | backend/api/database.py:1023 |
+| `refresh_tokens` | `RefreshToken` | backend/api/database.py:1209 |
+| `reviews` | `Review` | backend/api/database.py:1254 |
+| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:1060 |
+| `seller_metrics` | `SellerMetrics` | backend/api/database.py:1039 |
 | `service_communication_device_deliveries` | `ServiceCommunicationDeviceDelivery` | backend/api/models/service_communication.py:175 |
 | `service_communication_recipients` | `ServiceCommunicationRecipient` | backend/api/models/service_communication.py:123 |
 | `service_communication_versions` | `ServiceCommunicationVersion` | backend/api/models/service_communication.py:93 |
@@ -731,14 +737,14 @@ Counts: admin 58, optional 6, public 61, token 4, user 173.
 | `stores` | `Store` | backend/api/models/store.py:75 |
 | `subscription_payments` | `SubscriptionPayment` | backend/api/models/subscription.py:53 |
 | `subscriptions` | `Subscription` | backend/api/models/subscription.py:35 |
-| `thread_read_state` | `ThreadReadState` | backend/api/database.py:585 |
+| `thread_read_state` | `ThreadReadState` | backend/api/database.py:592 |
 | `user_feedback` | `UserFeedback` | backend/api/models/feedback.py:35 |
-| `user_specializations` | `UserSpecialization` | backend/api/database.py:817 |
+| `user_specializations` | `UserSpecialization` | backend/api/database.py:833 |
 | `users` | `User` | backend/api/database.py:195 |
-| `verification_payments` | `VerificationPayment` | backend/api/database.py:1292 |
-| `wishlists` | `Wishlist` | backend/api/database.py:790 |
-| `zeno_conversations` | `ZenoConversation` | backend/api/database.py:620 |
-| `zeno_turns` | `ZenoTurn` | backend/api/database.py:647 |
+| `verification_payments` | `VerificationPayment` | backend/api/database.py:1308 |
+| `wishlists` | `Wishlist` | backend/api/database.py:806 |
+| `zeno_conversations` | `ZenoConversation` | backend/api/database.py:636 |
+| `zeno_turns` | `ZenoTurn` | backend/api/database.py:663 |
 | `zetupay_payments` | `ZetuPayPayment` | backend/api/models/zetupay.py:52 |
 | `zetupay_transactions` | `ZetuPayTransaction` | backend/api/models/zetupay.py:81 |
 
@@ -818,7 +824,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-138 files in `backend/tests/`.
+139 files in `backend/tests/`.
 
 - `test_admin_additions.py` — Admin additions: SMS cost hook, timeseries, detail reads, users search.
 - `test_admin_alerts.py` — Admin alerts: event-driven creation, dedup, transitions, SSE smoke.
@@ -936,6 +942,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_sms.py` — BROKA - SMS Provider Tests (v6.3) Run: pytest backend/tests/test_sms.py -v
 - `test_sold_out_reports.py` — Sold out with payments outside BROKA: agreed deals no longer take a listing off sale (listings/stock.py), buyers report an item gone and it…
 - `test_store_billing.py` — Online store plans (PRICING.md §5; api/domains/stores/billing.py).
+- `test_store_conversations.py` — Store-general conversations land in the Inbox (regression).
 - `test_store_rating.py` — Store rating, directory order, and the store insights endpoint.
 - `test_store_schema_migration.py` — The store-type migration on a database that predates it.
 - `test_store_setup.py` — Online Stores phase 2: setting a store up, and what its owner sees.
@@ -999,6 +1006,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 | `/settings` | `SettingsScreen` |
 | `/splash` | `SplashScreen` |
 | `/start-selling` | `StartSellingScreen` |
+| `/store-chat` | `StoreChatScreen` |
 | `/store-explainer` | `StoreExplainerScreen` |
 | `/store-manage` | `MyStoreScreen` |
 | `/store-setup` | `StoreSetupScreen` |
@@ -1165,6 +1173,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `presentation/store_billing_screen.dart` — BROKA - the store's plan: what it costs, paying for it, and what paying turns on (backend/api/domains/stores/billing.py; PRICING.md §5).
 - `presentation/store_cart_screen.dart` — A store's cart: what the buyer picked, how many, the total, and checkout.
 - `presentation/store_category_screen.dart` — BROKA — stores in one category: the directory's category cards land here, the way Home's category cards land on a Category Zone.
+- `presentation/store_chat_screen.dart` — BROKA - Store Chat Screen Direct buyer <-> store-owner conversation, not tied to any one product.
 - `presentation/store_edit_screen.dart` — Editing one part of an open store, with the same page the setup wizard used for it.
 - `presentation/store_entry.dart` — Where "My Store" / "Open an online store" buttons go.
 - `presentation/store_home_screen.dart` — A store's home in the app - the "mini Jumia" a buyer lands on from a shared link, a product's store badge, or the store directory.
@@ -1529,7 +1538,7 @@ Modules:
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `BUSINESS_MODEL_REVIEW.md` — BROKA's business model without the commission
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Zeno's AssemblyAI voice is Jane (US) (2026-10-25)
+- `CHANGES.md` — Store conversations live in the Inbox (2026-11-02)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
