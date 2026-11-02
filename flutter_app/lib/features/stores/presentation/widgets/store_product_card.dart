@@ -47,14 +47,15 @@ class StoreProductCard extends StatelessWidget {
   final ListingsRepository? listings;
 
   /// Height the card needs below its photo at a text scale of 1: padding,
-  /// two lines of name, the price, the stock line and the 36dp button
-  /// (ProductGridView's itemTextBlock).
-  static const double textBlock = 150;
+  /// one line of name, the price, the stock line and the 34dp button
+  /// (ProductGridView's itemTextBlock). Same overall tile as Home's
+  /// ProductCard, so the store's shelf reads as the same shop.
+  static const double textBlock = 132;
 
   /// The photo's height as a share of the card's width (ProductGridView's
-  /// itemImageShare): square, so the photo is the biggest thing on the
-  /// card and does the selling. Taller than Home's 0.85 on purpose.
-  static const double imageShare = 1.0;
+  /// itemImageShare): the same 0.85 as Home's cards, so a store's shelf
+  /// and the marketplace feed show the same tile.
+  static const double imageShare = 0.85;
 
   static const _accent = Color(0xFFB69CFF);
 
@@ -191,26 +192,26 @@ class StoreProductCard extends StatelessWidget {
                 ]),
               ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(10, 9, 10, 10),
+                padding: const EdgeInsets.fromLTRB(10, 8, 10, 9),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   SizedBox(
-                    height: 36,
-                    child: Text(listing.name, maxLines: 2, overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: BrokaColors.textHigh, fontSize: 14,
+                    height: 18,
+                    child: Text(listing.name, maxLines: 1, overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: BrokaColors.textHigh, fontSize: 13.5,
                             fontWeight: FontWeight.w700, height: 1.25)),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 3),
                   FittedBox(
                     fit: BoxFit.scaleDown,
                     alignment: Alignment.centerLeft,
                     child: Text(
                         PriceUnits.priceLabel(listing.priceFormatted, listing.priceUnit),
-                        style: const TextStyle(color: _accent, fontSize: 17,
+                        style: const TextStyle(color: _accent, fontSize: 16,
                             fontWeight: FontWeight.w900)),
                   ),
-                  const SizedBox(height: 3),
+                  const SizedBox(height: 2),
                   _StockLine(stock: _stock),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 7),
                   _isAuction ? _viewButton() : _cartControl(context),
                 ]),
               ),
@@ -222,7 +223,7 @@ class StoreProductCard extends StatelessWidget {
   }
 
   Widget _viewButton() => SizedBox(
-        height: 36,
+        height: 34,
         child: OutlinedButton(
           onPressed: onTap,
           style: OutlinedButton.styleFrom(
@@ -242,7 +243,7 @@ class StoreProductCard extends StatelessWidget {
           final inCart = cart.quantityOf(listing.id);
           if (inCart > 0) {
             return SizedBox(
-              height: 36,
+              height: 34,
               child: Center(
                 child: QuantityStepper(
                   keyPrefix: 'card-${listing.id}',
@@ -255,7 +256,7 @@ class StoreProductCard extends StatelessWidget {
             );
           }
           return SizedBox(
-            height: 36,
+            height: 34,
             width: double.infinity,
             child: DecoratedBox(
               // One flat brand-violet button: the gradient version glowed

@@ -190,10 +190,10 @@ void main() {
       expect(find.byType(StoreProductCard), findsOneWidget);
       // The single card is not squeezed into a two-column cell...
       expect(find.byType(SliverGrid), findsNothing);
-      // ...it spans the catalogue (390 wide phone, 8dp sides).
+      // ...it spans the catalogue (390 wide phone, 12dp sides).
       final cardWidth = tester.getSize(find.byType(StoreProductCard)).width;
       expect(cardWidth, greaterThan(390 * 0.8));
-      expect(cardWidth, closeTo(390 - 16, 2));
+      expect(cardWidth, closeTo(390 - 24, 2));
       // A lone category is not navigation: no rail.
       expect(find.text('Shop by Category'), findsNothing);
       // And the catalogue sky stays calm behind the product.
