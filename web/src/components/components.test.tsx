@@ -144,6 +144,7 @@ describe('StoreLanding', () => {
     expect(screen.getByRole('link', { name: 'Browse Clanix products' }).querySelector('img')?.getAttribute('src')).toBe(
       'https://media.broka.co.ke/img/c1/large.webp',
     )
+    expect(screen.getByRole('link', { name: 'Message this store' })).toBeTruthy()
     expect(screen.getByRole('link', { name: /Networking/ }).getAttribute('href')).toBe('/store/clanix/shop?subcategory_id=networking')
     expect(screen.getByRole('heading', { name: 'More to discover' })).toBeTruthy()
     expect(screen.queryByText('New things are on the way.')).toBeNull()

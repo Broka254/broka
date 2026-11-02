@@ -8,6 +8,7 @@ import type { StoreCategory } from '@/lib/types'
 import type { StoreView } from '@/lib/storefront'
 
 import { ProductCard } from './ProductCard'
+import { AppButton } from './AppButton'
 import styles from './store-landing.module.css'
 
 export function StoreLanding({
@@ -145,14 +146,19 @@ export function StoreLanding({
           </section>
         )}
 
-        {view.description && (
+        {(view.description || store.owner) && (
           <section className={styles.about} aria-labelledby="about-store-title">
             <div>
               <p className={styles.sectionEyebrow}>A NOTE FROM THE SHOP</p>
               <h2 id="about-store-title">About {store.name}</h2>
-              <p>{view.description}</p>
+              {view.description && <p>{view.description}</p>}
             </div>
-            <Link href={storeDetailsPath(store.slug)} className={styles.textLink}>Read the store story <span aria-hidden="true">↗</span></Link>
+            <div className={styles.aboutActions}>
+              <Link href={storeDetailsPath(store.slug)} className={styles.textLink}>Read the store story <span aria-hidden="true">↗</span></Link>
+              {store.is_active && store.owner && (
+                <AppButton storeChat label="Message this store" className={styles.aboutChat} />
+              )}
+            </div>
           </section>
         )}
       </main>
