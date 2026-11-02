@@ -126,9 +126,9 @@ export function StoreLanding({
               </div>
               <Link href={shopPath} className={styles.textLink}>Shop all <span aria-hidden="true">↗</span></Link>
             </div>
-            <div className={styles.products} data-count={Math.min(moreProducts.length, 6)}>
-              {moreProducts.slice(0, 6).map((product) => (
-                <ProductCard key={product.id} product={product} storeId={storeId} />
+              <div className={styles.products} data-count={Math.min(moreProducts.length, 6)}>
+                {moreProducts.slice(0, 6).map((product) => (
+                <ProductCard key={product.id} product={product} storeId={storeId} compact />
               ))}
             </div>
           </section>

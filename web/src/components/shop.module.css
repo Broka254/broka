@@ -3044,6 +3044,10 @@
   aspect-ratio: 1 / 1;
   background: #0d1424;
 }
+.storefront .productCompact .productImage {
+  aspect-ratio: auto;
+  height: clamp(184px, 52vw, 230px);
+}
 .storefront .productBody {
   padding: 9px 11px 3px;
 }

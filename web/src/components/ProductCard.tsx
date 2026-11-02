@@ -9,9 +9,17 @@ import type { ProductCardData } from '@/lib/catalogue'
 import { AddToCart } from './AddToCart'
 import styles from './shop.module.css'
 
-export function ProductCard({ product, storeId }: { product: ProductCardData; storeId: string }) {
+export function ProductCard({
+  product,
+  storeId,
+  compact = false,
+}: {
+  product: ProductCardData
+  storeId: string
+  compact?: boolean
+}) {
   return (
-    <article className={styles.product}>
+    <article className={`${styles.product}${compact ? ` ${styles.productCompact}` : ''}`}>
       <Link href={product.href} className={styles.productLink}>
         <div className={styles.productImage}>
           {product.image ? (
