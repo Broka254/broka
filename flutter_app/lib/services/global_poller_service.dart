@@ -52,7 +52,7 @@ typedef PushTokenRegistrar = Future<bool?> Function(
 class GlobalPollerService {
   GlobalPollerService._() {
     NotificationService.instance.isThreadOnScreen =
-        (listingId, buyerId) => _isOnScreen({'listing_id': listingId, 'buyer_id': buyerId});
+        _isThreadOnScreenById;
   }
   static final GlobalPollerService instance = GlobalPollerService._();
 
@@ -133,6 +133,19 @@ class GlobalPollerService {
   static String storeThreadKeyFor(String storeId, String? buyerId) =>
       'store:$storeId::${buyerId ?? ''}';
 
+  /// The id notifications and local seen-state use for a thread. The same
+  /// `store:<id>` form is used by the server's push tag and by
+  /// NegotiationScreen, so one conversation never gets two notification
+  /// identities depending on which path noticed the message.
+  static String? notificationThreadId(Map<String, dynamic> thread) {
+    if (thread['thread_type'] == 'store') {
+      final storeId = thread['store_id'] as String?;
+      return storeId == null || storeId.isEmpty ? null : 'store:$storeId';
+    }
+    final listingId = thread['listing_id'] as String?;
+    return listingId == null || listingId.isEmpty ? null : listingId;
+  }
+
   // listing_id -> room_id of an incoming-call notification we've posted and
   // not yet taken down. Lets a later poll cancel the exact notification it
   // raised once that call stops ringing.
@@ -186,6 +199,8 @@ class GlobalPollerService {
 
   void markStoreScreenActive(String storeId, {String? buyerId}) {
     _activelyViewedThreads.add(storeThreadKeyFor(storeId, buyerId));
+    unawaited(NotificationService.instance
+        .cancelThread('store:$storeId', buyerId));
   }
 
   void markStoreScreenInactive(String storeId, {String? buyerId}) {
@@ -424,6 +439,22 @@ class GlobalPollerService {
         .contains(threadKeyFor(lid, thread['buyer_id'] as String?));
   }
 
+  /// NotificationService names a thread by its canonical id. A store's is
+  /// `store:<id>`, while [_isOnScreen] works from the inbox's structured
+  /// row; translating here keeps a push from buzzing the phone while that
+  /// same store conversation is open.
+  bool _isThreadOnScreenById(String threadId, String? buyerId) {
+    const storePrefix = 'store:';
+    if (threadId.startsWith(storePrefix)) {
+      return _isOnScreen({
+        'thread_type': 'store',
+        'store_id': threadId.substring(storePrefix.length),
+        'buyer_id': buyerId,
+      });
+    }
+    return _isOnScreen({'listing_id': threadId, 'buyer_id': buyerId});
+  }
+
   Future<void> _checkAll() async {
     if (_checking) return; // avoid overlapping runs if one is slow
     if (ApiService.currentUserId == null) return;
@@ -467,7 +498,7 @@ class GlobalPollerService {
       String? primePreview;
       if (!announce) {
         for (final t in threads) {
-          if (t['listing_id'] is! String || _isOnScreen(t)) continue;
+          if (notificationThreadId(t) == null || _isOnScreen(t)) continue;
           final last = t['last_message'] as String? ?? '';
           final role = t['last_role'] as String? ?? '';
           if (last.isEmpty || role == (t['my_role'] as String? ?? 'buyer')) {
@@ -485,32 +516,8 @@ class GlobalPollerService {
         }
       }
       for (final thread in threads) {
-        if (thread['thread_type'] == 'store') {
-          // Store threads: record delivery so the sender's tick moves,
-          // without the listing-only call/message announcements below.
-          final sid = thread['store_id'] as String?;
-          if (sid == null || _isOnScreen(thread)) continue;
-          final sunread = (thread['unread_count'] as int?) ??
-              (thread['unread'] as int?) ?? 0;
-          if (sunread > 0) {
-            final sbuyer = thread['buyer_id'] as String?;
-            final skey = storeThreadKeyFor(sid, sbuyer);
-            final ssig =
-                '${thread['last_message_id'] ?? ''}|${thread['last_message_at'] ?? ''}';
-            if (_deliveredMarks[skey] != ssig) {
-              _deliveredMarks[skey] = ssig;
-              unawaited(ApiService.markStoreDelivered(sid, buyerId: sbuyer)
-                  .then((ok) {
-                if (!ok && _deliveredMarks[skey] == ssig) {
-                  _deliveredMarks.remove(skey);
-                }
-              }));
-            }
-          }
-          continue;
-        }
-        final listingId = thread['listing_id'] as String?;
-        if (listingId == null) continue;
+        final threadId = notificationThreadId(thread);
+        if (threadId == null) continue;
         if (_isOnScreen(thread)) {
           // Record the signature before skipping. A bare `continue` here
           // would leave the last message looking unseen, so closing the
@@ -544,15 +551,20 @@ class GlobalPollerService {
           // move forward anyway. A failed post un-marks, so the next
           // sweep retries it instead of losing the receipt.
           final buyerId = thread['buyer_id'] as String?;
-          final key = threadKeyFor(listingId, buyerId);
+          final isStore = thread['thread_type'] == 'store';
+          final storeId = isStore ? thread['store_id'] as String? : null;
+          final listingId = isStore ? null : thread['listing_id'] as String?;
+          final key = isStore
+              ? storeThreadKeyFor(storeId!, buyerId)
+              : threadKeyFor(listingId!, buyerId);
           final signature =
               '${thread['last_message_id'] ?? ''}|${thread['last_message_at'] ?? ''}';
           if (_deliveredMarks[key] != signature) {
             _deliveredMarks[key] = signature;
-            unawaited(ApiService.markThreadDelivered(
-              listingId,
-              buyerId: buyerId,
-            ).then((ok) {
+            unawaited((isStore
+                    ? ApiService.markStoreDelivered(storeId!, buyerId: buyerId)
+                    : ApiService.markThreadDelivered(listingId!, buyerId: buyerId))
+                .then((ok) {
               if (!ok && _deliveredMarks[key] == signature) {
                 _deliveredMarks.remove(key);
               }
@@ -627,17 +639,17 @@ class GlobalPollerService {
   String get _accountKey => ApiService.currentUserId ?? 'anon';
 
   String _seenKeyFor(Map<String, dynamic> thread) {
-    final listingId = thread['listing_id'];
+    final threadId = notificationThreadId(thread) ?? '';
     final buyerId   = thread['buyer_id'] ?? '';
-    return 'global_poll_seen_${_accountKey}_${listingId}_$buyerId';
+    return 'global_poll_seen_${_accountKey}_${threadId}_$buyerId';
   }
 
   /// The pre-account-scoped key. Read as a fallback so an upgrade does not
   /// announce a thread's last message again; never written.
   String _legacySeenKeyFor(Map<String, dynamic> thread) {
-    final listingId = thread['listing_id'];
+    final threadId = notificationThreadId(thread) ?? '';
     final buyerId   = thread['buyer_id'] ?? '';
-    return 'global_poll_seen_${listingId}_$buyerId';
+    return 'global_poll_seen_${threadId}_$buyerId';
   }
 
   static String _textSignature(Map<String, dynamic> thread) =>
@@ -663,10 +675,11 @@ class GlobalPollerService {
     Map<String, dynamic> thread, SharedPreferences prefs,
   ) async {
     final id = thread['last_message_id'] as String?;
-    final listingId = thread['listing_id'] as String;
+    final threadId = notificationThreadId(thread);
+    if (threadId == null) return false;
     final buyerId = thread['buyer_id'] as String?;
     if (id != null && id.isNotEmpty) {
-      final ids = NotificationService.announcedIds(prefs, listingId, buyerId);
+      final ids = NotificationService.announcedIds(prefs, threadId, buyerId);
       if (ids.isNotEmpty) return ids.contains(id);
     }
     final signature = _textSignature(thread);
@@ -675,7 +688,7 @@ class GlobalPollerService {
       return false;
     }
     if (id != null && id.isNotEmpty) {
-      await NotificationService.markAnnounced(prefs, listingId, buyerId, id);
+      await NotificationService.markAnnounced(prefs, threadId, buyerId, id);
     }
     return true;
   }
@@ -686,8 +699,11 @@ class GlobalPollerService {
     await prefs.setString(_seenKeyFor(thread), _textSignature(thread));
     final id = thread['last_message_id'] as String?;
     if (id != null && id.isNotEmpty) {
-      await NotificationService.markAnnounced(prefs,
-          thread['listing_id'] as String, thread['buyer_id'] as String?, id);
+      final threadId = notificationThreadId(thread);
+      if (threadId != null) {
+        await NotificationService.markAnnounced(prefs,
+            threadId, thread['buyer_id'] as String?, id);
+      }
       final kind = thread['last_msg_type'] == 'call' ? 'call' : 'message';
       await prefs.setString(_lastOfKindKey(thread, kind), id);
     }
@@ -698,7 +714,7 @@ class GlobalPollerService {
   /// against first. The id list alone forgot a missed call still unread
   /// once eight newer ids had pushed it out, and announced it again.
   String _lastOfKindKey(Map<String, dynamic> thread, String kind) =>
-      'global_poll_last_${kind}_${_accountKey}_${thread['listing_id']}_${thread['buyer_id'] ?? ''}';
+      'global_poll_last_${kind}_${_accountKey}_${notificationThreadId(thread) ?? ''}_${thread['buyer_id'] ?? ''}';
 
   /// Mark a thread as seen without notifying.
   ///
@@ -827,8 +843,8 @@ class GlobalPollerService {
     Map<String, dynamic> thread, SharedPreferences prefs, {
     required bool announce,
   }) async {
-    final listingId = thread['listing_id'] as String?;
-    if (listingId == null) return;
+    final threadId = notificationThreadId(thread);
+    if (threadId == null) return;
     final unread = (thread['unread_count'] as int?) ??
                    (thread['unread'] as int?) ?? 0;
     // Both entries this can announce are direct-chat rows (the other
@@ -849,10 +865,10 @@ class GlobalPollerService {
         await prefs.reload(); // a push may have announced it meanwhile
       } catch (_) {}
       final pushed =
-          NotificationService.wasAnnounced(prefs, listingId, buyerId, id);
+          NotificationService.wasAnnounced(prefs, threadId, buyerId, id);
       await prefs.setString(slot, id);
       if (pushed) return false;
-      await NotificationService.markAnnounced(prefs, listingId, buyerId, id);
+      await NotificationService.markAnnounced(prefs, threadId, buyerId, id);
       return announce;
     }
 
@@ -880,12 +896,15 @@ class GlobalPollerService {
   Future<void> _announceMissedCall(
     Map<String, dynamic> thread, String fromName, {required bool isVideo}) =>
       NotificationService.instance.showMissedCall(
-        listingId:   thread['listing_id'] as String,
+        listingId:   notificationThreadId(thread)!,
+        storeId:     thread['thread_type'] == 'store'
+            ? thread['store_id'] as String?
+            : null,
         buyerId:     thread['buyer_id'] as String?,
         myRole:      thread['my_role'] as String? ?? 'buyer',
         callerName:  fromName,
         isVideo:     isVideo,
-        listingName: thread['listing_name'] as String?,
+        listingName: (thread['store_name'] ?? thread['listing_name']) as String?,
         callerPhoto: thread['counterpart_photo'] as String?,
       );
 
@@ -895,15 +914,19 @@ class GlobalPollerService {
       NotificationService.instance.showNewMessage(
         fromName: fromName,
         preview: preview,
-        listingId: thread['listing_id'] as String,
+        listingId: notificationThreadId(thread)!,
         buyerId: thread['buyer_id'] as String?,
         // Their face; Zeno's messages carry none.
         photo: zeno ? null : thread['counterpart_photo'] as String?,
         payload: {
           'type':      'new_message',
-          'listingId': thread['listing_id'],
+          if (thread['thread_type'] != 'store') 'listingId': thread['listing_id'],
+          if (thread['thread_type'] == 'store') 'storeId': thread['store_id'],
+          if (thread['thread_type'] == 'store')
+            'listingName': thread['store_name'] ?? thread['listing_name'],
           'buyerId':   thread['buyer_id'],
           'myRole':    thread['my_role'] as String? ?? 'buyer',
+          if (!zeno) 'senderName': fromName,
           // Zeno wrote it, so it is in Zeno's room: a tap there, not on the
           // direct chat, where it isn't shown.
           if (zeno) 'screen': 'zeno',
@@ -926,9 +949,12 @@ class GlobalPollerService {
 
   Future<void> _checkThreadForIncomingCall(Map<String, dynamic> thread) async {
     final listingId = thread['listing_id'] as String?;
-    if (listingId == null) return;
+    final storeId = thread['store_id'] as String?;
+    final threadId = notificationThreadId(thread);
+    if (threadId == null) return;
     try {
-      final status = await ApiService.checkIncomingCallStatus(listingId);
+      final status = await ApiService.checkIncomingCallStatus(
+          listingId ?? '', storeId: storeId);
       // Couldn't ask: change nothing. Taking the ring down on a failed
       // request marked a live call done for good (review, 2026-10-08).
       if (!status.known) return;
@@ -938,7 +964,7 @@ class GlobalPollerService {
         // this listing earlier, take it down - otherwise a cancelled,
         // answered-elsewhere or timed-out call leaves a permanent
         // "Incoming call" sitting in the tray that does nothing when tapped.
-        final stale = _shownCallNotifications.remove(listingId);
+        final stale = _shownCallNotifications.remove(threadId);
         if (stale != null) {
           await NotificationService.instance.callEnded(stale);
         }
@@ -965,22 +991,24 @@ class GlobalPollerService {
       final started = await NotificationService.instance.showIncomingCall(
         roomId: roomId,
         callerName: callerName,
-        listingName: thread['listing_name'] as String? ?? 'your listing',
+        listingName:
+            (thread['store_name'] ?? thread['listing_name']) as String? ?? 'your listing',
         isVideo: isVideo,
         callerPhoto: callInfo['caller_photo'] as String?,
         payload: _callPayload(callInfo,
-            roomId: roomId, listingId: listingId, buyerId: buyerId,
-            listingName: thread['listing_name'] as String?),
+            roomId: roomId, listingId: listingId, storeId: storeId,
+            buyerId: buyerId,
+            listingName: (thread['store_name'] ?? thread['listing_name']) as String?),
       );
       if (!started) return;
-      _shownCallNotifications[listingId] = roomId;
+      _shownCallNotifications[threadId] = roomId;
       // A network round trip must not hold up the sweep; the room stays
       // marked in flight so the next tick does not post it twice.
       unawaited(_acknowledge(roomId, callInfo['call_token'] as String?));
     } catch (e) {
       // A malformed answer or a failed ring is retried next sweep; the type
       // is enough to tell one from the other in a device log.
-      debugPrint('[Push] incoming-call sweep failed for $listingId: '
+      debugPrint('[Push] incoming-call sweep failed for $threadId: '
           '${e.runtimeType}');
     }
   }
@@ -999,6 +1027,10 @@ class GlobalPollerService {
     final call = res.call;
     final roomId = call?['room_id'] as String?;
     final listingId = call?['listing_id'] as String?;
+    final storeId = call?['store_id'] as String?;
+    final threadId = storeId != null && storeId.isNotEmpty
+        ? 'store:$storeId'
+        : listingId;
     // Whatever was ringing and no longer is - cancelled, answered on
     // another phone, timed out - comes down.
     for (final entry in _shownCallNotifications.entries.toList()) {
@@ -1015,7 +1047,7 @@ class GlobalPollerService {
     if (activeRoom != null && !active.answered && activeRoom != roomId) {
       await NotificationService.instance.callEnded(activeRoom);
     }
-    if (call == null || roomId == null || listingId == null) return true;
+    if (call == null || roomId == null || threadId == null) return true;
     // On a call, or done with this one: no ring, and no "Ringing" for the
     // caller (see ActiveCall.shouldRing).
     if (!ActiveCall.instance.shouldRing(roomId)) return true;
@@ -1026,8 +1058,8 @@ class GlobalPollerService {
     String? listingName = call['listing_name'] as String?;
     if (listingName == null || listingName.isEmpty) {
       for (final t in threads) {
-        if (t['listing_id'] == listingId) {
-          listingName = t['listing_name'] as String?;
+        if (notificationThreadId(t) == threadId) {
+          listingName = (t['store_name'] ?? t['listing_name']) as String?;
           break;
         }
       }
@@ -1039,11 +1071,11 @@ class GlobalPollerService {
       isVideo: call['call_type'] == 'video',
       callerPhoto: call['caller_photo'] as String?,
       payload: _callPayload(call,
-          roomId: roomId, listingId: listingId, buyerId: buyerId,
+          roomId: roomId, listingId: listingId, storeId: storeId, buyerId: buyerId,
           listingName: listingName),
     );
     if (!started) return true;
-    _shownCallNotifications[listingId] = roomId;
+    _shownCallNotifications[threadId] = roomId;
     unawaited(_acknowledge(roomId, call['call_token'] as String?));
     return true;
   }
@@ -1055,14 +1087,16 @@ class GlobalPollerService {
   static Map<String, dynamic> _callPayload(
     Map<String, dynamic> call, {
     required String roomId,
-    required String listingId,
+    String? listingId,
+    String? storeId,
     required String buyerId,
     String? listingName,
   }) =>
       {
         'type':        'incoming_call',
         'roomId':      roomId,
-        'listingId':   listingId,
+        if (listingId != null && listingId.isNotEmpty) 'listingId': listingId,
+        if (storeId != null && storeId.isNotEmpty) 'storeId': storeId,
         'buyerId':     buyerId,
         if (call['call_type'] != null) 'callType': call['call_type'],
         if (call['call_token'] != null) 'callToken': call['call_token'],

@@ -124,6 +124,10 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   bool      _accepted  = false;   // callee tapped Accept
   bool      _endingCall = false;  // guards Decline/Hangup against a rapid double-tap
   String    _listingId  = '';
+  // Store-general calls have no listing. Their card belongs to the same
+  // (store, buyer) thread as the messages around it, so the id must travel
+  // through setup, call logging and the background ringing notification.
+  String    _storeId    = '';
   String    _buyerId    = '';
   String    _callerRole = 'buyer';
   bool      _everConnected = false;
@@ -185,6 +189,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     _listingName = args['listingName'] as String? ?? '';
     _isCaller    = args['isCaller']    as bool?   ?? true;
     _listingId   = args['listingId']   as String? ?? '';
+    _storeId     = args['storeId']     as String? ?? '';
     _buyerId     = args['buyerId']     as String? ?? '';
     _callerRole  = args['callerRole']  as String? ?? 'buyer';
     _callType    = args['callType']    as String? ?? 'audio';
@@ -218,9 +223,13 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       // with a phantom ringing call; the no-answer watchdog is the
       // backstop if even this fails.
       final room = info?['room_id'] as String?;
-      if (room != null && room.isNotEmpty && _listingId.isNotEmpty && _buyerId.isNotEmpty) {
+      final hasThread = _listingId.isNotEmpty || _storeId.isNotEmpty;
+      if (room != null && room.isNotEmpty && hasThread && _buyerId.isNotEmpty) {
         unawaited(ApiService.logCallResult(
-          roomId: room, listingId: _listingId, buyerId: _buyerId,
+          roomId: room,
+          listingId: _listingId.isEmpty ? null : _listingId,
+          storeId: _storeId.isEmpty ? null : _storeId,
+          buyerId: _buyerId,
           outcome: 'cancelled', callerRole: _callerRole, callType: _callType,
         ));
       }
@@ -544,7 +553,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   void _logCallResultOnce() {
     if (!_svcReady) return; // instant-open screen closed before setup: nothing placed yet
     if (_resultLogged) return;
-    if (_listingId.isEmpty || _buyerId.isEmpty) return;
+    if ((_listingId.isEmpty && _storeId.isEmpty) || _buyerId.isEmpty) return;
     _resultLogged = true;
     // A call I accepted was answered, whether or not it then connected:
     // it was logged as "missed", and the callee who had pressed Accept was
@@ -557,7 +566,8 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     // Fire-and-forget: don't block call teardown/navigation on this.
     ApiService.logCallResult(
       roomId:    _svc.roomId,
-      listingId: _listingId,
+      listingId: _listingId.isEmpty ? null : _listingId,
+      storeId:   _storeId.isEmpty ? null : _storeId,
       buyerId:   _buyerId,
       outcome:   outcome,
       callerRole: _callerRole,
@@ -615,7 +625,8 @@ class _VoipCallScreenState extends State<VoipCallScreen>
         payload: {
           'roomId': roomId,
           'callToken': _callToken,
-          'listingId': _listingId,
+          if (_listingId.isNotEmpty) 'listingId': _listingId,
+          if (_storeId.isNotEmpty) 'storeId': _storeId,
           'buyerId': _buyerId,
           'callerName': _displayName,
           'callerId': _peerId,

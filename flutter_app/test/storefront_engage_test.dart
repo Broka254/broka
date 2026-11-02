@@ -189,7 +189,7 @@ Future<void> _pumpStore(WidgetTester tester, _Backend backend,
     // it would have gone instead of opening a real thread.
     onGenerateRoute: (settings) => MaterialPageRoute(
       settings: settings,
-      builder: (_) => settings.name == '/store-chat'
+      builder: (_) => settings.name == '/direct-chat'
           ? const Scaffold(body: Text('store chat'))
           : StoreHomeScreen(
               storeId: 's1',
@@ -238,7 +238,7 @@ void main() {
       // No picker and no borrowed listing: the tap opens the
       // store-general thread, which the Inbox keys by the store itself.
       final chat =
-          pushed.where((r) => r.name == '/store-chat').singleOrNull;
+          pushed.where((r) => r.name == '/direct-chat').singleOrNull;
       expect(chat, isNotNull, reason: 'no store chat was opened');
       expect(chat!.arguments,
           {'storeId': 's1', 'storeName': 'Clanix Electronics', 'role': 'buyer'});

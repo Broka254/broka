@@ -157,6 +157,16 @@ class ZenoActionRunner {
       case ZenoActionType.openChat:
         final c = action.target;
         if (c == null) return false;
+        if (c.storeId != null && c.storeId!.isNotEmpty) {
+          await pushNamed('/direct-chat', arguments: {
+            'storeId': c.storeId,
+            'storeName': c.listingName,
+            'role': c.role,
+            'buyer_id': c.buyerId,
+            if (c.role == 'buyer') 'seller_id': c.peerId,
+          });
+          return true;
+        }
         // The inbox's arguments, by id: the negotiation room loads the
         // listing itself (NegotiateScreen._restoreFromListingId).
         await pushNamed('/negotiate',
@@ -182,7 +192,8 @@ class ZenoActionRunner {
     // POST /calls/initiate first made the tap look dead for seconds.
     // The running request travels with the route as `callSetup`.
     final setup = ApiService.initiateCall(
-      listingId: c.listingId,
+      listingId: c.listingId.isEmpty ? null : c.listingId,
+      storeId: c.storeId,
       listingName: c.listingName,
       callType: video ? 'video' : 'audio',
       // The seller has to say which buyer; a buyer's call goes to the
@@ -199,7 +210,8 @@ class ZenoActionRunner {
       'peerName': c.peerName,
       'peerId': c.peerId,
       'listingName': c.listingName,
-      'listingId': c.listingId,
+      if (c.listingId.isNotEmpty) 'listingId': c.listingId,
+      if (c.storeId != null && c.storeId!.isNotEmpty) 'storeId': c.storeId,
       'buyerId': c.buyerId,
       'callerRole': c.role,
       'callType': video ? 'video' : 'audio',

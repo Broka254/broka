@@ -211,12 +211,13 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
   /// who had moved to the direct chat had to switch back every time.
   Future<void> _openThread(Map<String, dynamic> t) async {
     if (t['thread_type'] == 'store') {
-      Navigator.pushNamed(context, '/store-chat', arguments: {
+      Navigator.pushNamed(context, '/direct-chat', arguments: {
         'storeId': t['store_id'],
         'storeName': t['store_name'] ?? t['listing_name'],
         'storeLogo': t['store_logo'] ?? t['listing_image'],
         'role': t['my_role'],
         'buyer_id': t['buyer_id'],
+        'seller_id': t['seller_id'],
         'counterpartName': t['counterpart_name'],
       }).then((_) => _loadInbox());
       return;

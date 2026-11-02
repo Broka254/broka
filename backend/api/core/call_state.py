@@ -217,6 +217,11 @@ class CallSession:
     # _record_outcome) - the callee who answered from a closed app, and
     # whose phone then couldn't join in time, was told "Missed call".
     answered: bool = False
+    # A store-general call has no listing. Its thread is keyed by the store
+    # and buyer instead, exactly like the messages it produces; an empty
+    # listing_id is deliberately distinct from a NULL legacy id so older
+    # sessions keep deserialising unchanged.
+    store_id: Optional[str] = None
 
     def to_json(self) -> str:
         d = asdict(self)
@@ -433,7 +438,7 @@ class _RedisCallStore:
         session = await self.get(room_id)
         await client.delete(self._key(room_id))
         if session is not None:
-            await self.clear_pending(session.listing_id, session.callee_id)
+            await self.clear_pending(_session_thread_key(session), session.callee_id)
 
     async def sweep_expired(self) -> int:
         # Redis's own key TTL already reclaims these - nothing to do here.
@@ -565,7 +570,10 @@ class _InMemoryCallStore:
         async with self._lock:
             session = self._store.pop(room_id, None)
             if session is not None:
-                self._pending.pop(self._pending_key(session.listing_id, session.callee_id), None)
+                self._pending.pop(
+                    self._pending_key(_session_thread_key(session), session.callee_id),
+                    None,
+                )
 
     async def sweep_expired(self) -> int:
         """No Redis TTL here - something has to actively reclaim expired
@@ -578,7 +586,10 @@ class _InMemoryCallStore:
             for room_id, session in list(self._store.items()):
                 if session.is_expired:
                     self._store.pop(room_id, None)
-                    self._pending.pop(self._pending_key(session.listing_id, session.callee_id), None)
+                    self._pending.pop(
+                        self._pending_key(_session_thread_key(session), session.callee_id),
+                        None,
+                    )
                     removed += 1
             # _logged entries have no TTL of their own here (unlike Redis's
             # native EX) - reclaim anything past the grace window so this
@@ -621,10 +632,12 @@ async def create_session(
     room_id: str, caller_id: str, callee_id: str, listing_id: str,
     call_type: str, caller_name: str,
     ttl_seconds: int = DEFAULT_SESSION_TTL_SECONDS,
+    store_id: Optional[str] = None,
 ) -> CallSession:
     session = CallSession(
         room_id=room_id, caller_id=caller_id, callee_id=callee_id,
         listing_id=listing_id, call_type=call_type, caller_name=caller_name,
+        store_id=store_id,
         state=CallState.initiating,
         created_at=time.time(), expires_at=time.time() + ttl_seconds,
     )
@@ -632,7 +645,8 @@ async def create_session(
     # Secondary index so GET /calls/pending/{listing_id} - polled repeatedly
     # while a call rings - is a single direct lookup keyed by (listing_id,
     # callee_id) instead of a scan over every active call session.
-    await _store.set_pending(listing_id, callee_id, room_id, ttl_seconds=ttl_seconds)
+    await _store.set_pending(
+        _session_thread_key(session), callee_id, room_id, ttl_seconds=ttl_seconds)
     # And one keyed by the callee alone, for GET /calls/incoming: the app
     # used to ask /pending once per chat thread on every 7-second sweep, so
     # someone with 40 conversations made 40 requests to learn they had no
@@ -648,6 +662,18 @@ async def create_session(
 # The listing slots of the per-user indexes above. Not real listing ids.
 _ANY_LISTING = "*"
 _OUTGOING = ">"
+
+
+def _session_thread_key(session: CallSession) -> str:
+    """The pending-index key for a call's conversation.
+
+    Store-general calls have no listing, so their thread is named the same
+    way the app and message push name it: ``store:<id>``. Keeping the
+    store prefix matters because a listing id and a store id are separate
+    namespaces and must never share a pending-call slot.
+    """
+    store_id = getattr(session, "store_id", None)
+    return f"store:{store_id}" if store_id else session.listing_id
 
 
 async def _pointed_session(slot: str, user_id: str) -> Optional[CallSession]:

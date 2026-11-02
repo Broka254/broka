@@ -147,9 +147,11 @@ class CallKitService {
         // Answer connects immediately instead of starting a round trip.
         _activeRoomId = args['roomId'] as String?;
         final listingId = args['listingId'] as String?;
-        if (listingId != null) {
+        final storeId = args['storeId'] as String?;
+        if ((listingId != null && listingId.isNotEmpty) ||
+            (storeId != null && storeId.isNotEmpty)) {
           try {
-            await ApiService.checkIncomingCall(listingId);
+            await ApiService.checkIncomingCall(listingId ?? '', storeId: storeId);
           } catch (_) {}
         }
         return null;

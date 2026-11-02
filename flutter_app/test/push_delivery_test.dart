@@ -218,6 +218,21 @@ void main() {
           'unread': 1,
         };
 
+    Map<String, dynamic> storePush({String id = 'sm-1'}) => {
+          'type': 'new_message',
+          'storeId': 'store-1',
+          'buyerId': 'buyer-1',
+          'myRole': 'buyer',
+          'messageId': id,
+          'screen': 'chat',
+          'senderName': 'Clanix Electronics',
+          'listingName': 'Clanix Electronics',
+          'count': '1',
+          'preview': 'Yes, until 6pm.',
+          'title': 'Clanix Electronics',
+          'body': 'Yes, until 6pm.',
+        };
+
     test('with the app in front, the push is shown as the conversation', () async {
       await NotificationService.instance.handleForegroundFcmMessage(messagePush());
       final n = shown.single;
@@ -237,6 +252,29 @@ void main() {
         GlobalPollerService.instance.markScreenInactive('listing-1', buyerId: 'buyer-1');
       }
       expect(shown, isEmpty);
+    });
+
+    test('a store push uses the canonical thread id and stays silent while open',
+        () async {
+      await NotificationService.instance.handleForegroundFcmMessage(storePush());
+      expect(shown, hasLength(1));
+      expect(tagOf(shown.single), 'thread_store:store-1_buyer-1');
+      expect(
+          tagOf(shown.single),
+          NotificationService.threadTag('store:store-1', 'buyer-1'));
+
+      shown.clear();
+      GlobalPollerService.instance
+          .markStoreScreenActive('store-1', buyerId: 'buyer-1');
+      try {
+        await NotificationService.instance
+            .handleForegroundFcmMessage(storePush(id: 'sm-2'));
+      } finally {
+        GlobalPollerService.instance
+            .markStoreScreenInactive('store-1', buyerId: 'buyer-1');
+      }
+      expect(shown, isEmpty,
+          reason: 'the canonical store:<id> maps to the open store thread');
     });
 
     test('opening a conversation takes its notification down', () async {

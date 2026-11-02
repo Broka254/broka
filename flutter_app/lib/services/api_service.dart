@@ -1116,8 +1116,31 @@ class ApiService {
   static Future<List<Message>> getNegotiationHistory(
     String listingId, {
     String? buyerId,
+  }) => getThreadHistory(listingId: listingId, buyerId: buyerId);
+
+  /// One request may target one conversation. A silently preferred id would
+  /// let a stale screen identity put a message, upload or call in the wrong
+  /// thread while every layer still looked internally consistent.
+  static void _requireExactlyOneThread(String? listingId, String? storeId) {
+    if ((listingId == null || listingId.isEmpty) ==
+        (storeId == null || storeId.isEmpty)) {
+      throw ArgumentError('exactly one of listingId or storeId is required');
+    }
+  }
+
+  /// History for either kind of direct thread. Store conversations use the
+  /// store endpoint because their identity is (store_id, buyer_id); a store
+  /// has no single listing that can stand in for it.
+  static Future<List<Message>> getThreadHistory({
+    String? listingId,
+    String? storeId,
+    String? buyerId,
   }) async {
-    final uri = Uri.parse('$baseUrl/negotiate/$listingId/history').replace(
+    _requireExactlyOneThread(listingId, storeId);
+    final path = storeId != null && storeId.isNotEmpty
+        ? '/negotiate/store/$storeId/history'
+        : '/negotiate/$listingId/history';
+    final uri = Uri.parse('$baseUrl$path').replace(
       queryParameters: buyerId != null ? {'buyer_id': buyerId} : null,
     );
     final response = await _sendAuthed(() => http.get(uri, headers: _headers)
@@ -1139,17 +1162,24 @@ class ApiService {
   static Future<List<Message>> getStoreHistory(
     String storeId, {
     String? buyerId,
+  }) => getThreadHistory(storeId: storeId, buyerId: buyerId);
+
+  /// Who is on the other side of a store thread. The store payload leaves
+  /// the owner id out on purpose (it is public and indexed); this
+  /// authenticated lookup gives the chat the id it needs for the owner's
+  /// profile and presence when the route arrived without one.
+  static Future<Map<String, dynamic>> getStoreThreadInfo(
+    String storeId, {
+    String? buyerId,
   }) async {
-    final uri = Uri.parse('$baseUrl/negotiate/store/$storeId/history').replace(
-      queryParameters: buyerId != null ? {'buyer_id': buyerId} : null,
-    );
+    final uri = Uri.parse('$baseUrl/negotiate/store/$storeId/thread-info')
+        .replace(queryParameters: buyerId != null ? {'buyer_id': buyerId} : null);
     final response = await _sendAuthed(() => http.get(uri, headers: _headers)
-        .timeout(const Duration(seconds: 30)));
+        .timeout(const Duration(seconds: 15)));
     if (response.statusCode != 200) {
-      throw Exception('History request failed (${response.statusCode})');
+      throw Exception('Store thread request failed (${response.statusCode})');
     }
-    final List data = jsonDecode(response.body);
-    return data.map((e) => Message.fromJson(e as Map<String, dynamic>)).toList();
+    return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
   static Future<Map<String, dynamic>?> sendStoreDirectMessage({
@@ -1160,81 +1190,28 @@ class ApiService {
     String? buyerId,
     String? clientMsgId,
     String? replyToMessageId,
-  }) async {
-    final body = jsonEncode({
-      'sender_role': senderRole,
-      'sender_id': senderId,
-      'content': content,
-      if (buyerId != null) 'buyer_id': buyerId,
-      if (clientMsgId != null) 'client_msg_id': clientMsgId,
-      if (replyToMessageId != null) 'reply_to_message_id': replyToMessageId,
-    });
-    final response = await _sendAuthed(() => http.post(
-      Uri.parse('$baseUrl/negotiate/store/$storeId/direct-message'),
-      headers: _headers,
-      body: body,
-    ).timeout(const Duration(seconds: 20)));
-    if (response.statusCode != 200) {
-      throw Exception(_extractError(response.body));
-    }
-    try {
-      final data = jsonDecode(response.body);
-      final message = data is Map ? data['message'] : null;
-      return message is Map ? Map<String, dynamic>.from(message) : null;
-    } catch (_) {
-      return null;
-    }
-  }
+  }) => sendDirectMessage(
+    storeId: storeId,
+    senderRole: senderRole,
+    senderId: senderId,
+    content: content,
+    buyerId: buyerId,
+    clientMsgId: clientMsgId,
+    replyToMessageId: replyToMessageId,
+  );
 
   static Future<bool> markStoreDelivered(String storeId, {String? buyerId}) async {
-    try {
-      final response = await _sendAuthed(() => http.post(
-        Uri.parse('$baseUrl/negotiate/store/$storeId/mark-delivered'),
-        headers: _headers,
-        body: jsonEncode({if (buyerId != null) 'buyer_id': buyerId}),
-      ).timeout(const Duration(seconds: 10)));
-      return response.statusCode == 200;
-    } catch (_) {
-      return false;
-    }
+    return markThreadDelivered(null, storeId: storeId, buyerId: buyerId);
   }
 
   static Future<void> markStoreRead(String storeId, {String? buyerId}) async {
-    try {
-      await _sendAuthed(() => http.post(
-        Uri.parse('$baseUrl/negotiate/store/$storeId/mark-read'),
-        headers: _headers,
-        body: jsonEncode({if (buyerId != null) 'buyer_id': buyerId}),
-      ).timeout(const Duration(seconds: 10)));
-    } catch (_) {}
+    return markThreadRead(null, storeId: storeId, buyerId: buyerId);
   }
 
   static Future<Map<String, DateTime?>?> getStoreReadStatus(
     String storeId, {
     String? buyerId,
-  }) async {
-    try {
-      final uri = Uri.parse('$baseUrl/negotiate/store/$storeId/read-status').replace(
-        queryParameters: buyerId != null ? {'buyer_id': buyerId} : null,
-      );
-      final response = await _sendAuthed(() => http.get(uri, headers: _headers)
-          .timeout(const Duration(seconds: 10)));
-      if (response.statusCode == 200) {
-        final m = jsonDecode(response.body) as Map<String, dynamic>;
-        DateTime? at(String key) {
-          final v = m[key];
-          return v is String ? DateTime.tryParse(v)?.toLocal() : null;
-        }
-        return {
-          'buyer_last_read': at('buyer_last_read'),
-          'seller_last_read': at('seller_last_read'),
-          'buyer_last_delivered': at('buyer_last_delivered'),
-          'seller_last_delivered': at('seller_last_delivered'),
-        };
-      }
-    } catch (_) {}
-    return null;
-  }
+  }) => getReadStatus(null, storeId: storeId, buyerId: buyerId);
 
   static Future<Map<String, dynamic>> uploadStoreMedia({
     required String storeId,
@@ -1250,36 +1227,21 @@ class ApiService {
     String? replyToMessageId,
     String? caption,
     void Function(int sent, int total)? onProgress,
-  }) async {
-    final uri = Uri.parse('$baseUrl/media/upload');
-    Future<http.Response> send() async {
-      final request = http.MultipartRequest('POST', uri)
-        ..headers['Authorization'] = 'Bearer ${_token ?? ""}'
-        ..fields['store_id'] = storeId
-        ..fields['sender_role'] = senderRole
-        ..fields['sender_id'] = senderId
-        ..fields['content_type'] = contentType
-        ..files.add(http.MultipartFile(
-            'file',
-            _countingStream(fileBytes, onProgress),
-            fileBytes.length,
-            filename: fileName,
-            contentType: MediaType.parse(mimeType)));
-      if (buyerId != null) request.fields['buyer_id'] = buyerId;
-      if (durationSecs != null) request.fields['duration_secs'] = durationSecs.toString();
-      if (clientMsgId != null) request.fields['client_msg_id'] = clientMsgId;
-      if (replyToMessageId != null) request.fields['reply_to_message_id'] = replyToMessageId;
-      if (caption != null && caption.trim().isNotEmpty) {
-        request.fields['caption'] = caption.trim();
-      }
-      final streamed = await request.send().timeout(const Duration(seconds: 60));
-      return http.Response.fromStream(streamed);
-    }
-
-    final res = await _sendAuthed(send);
-    if (res.statusCode != 200) throw Exception(_extractError(res.body));
-    return jsonDecode(res.body) as Map<String, dynamic>;
-  }
+  }) => uploadMedia(
+    storeId: storeId,
+    senderRole: senderRole,
+    senderId: senderId,
+    contentType: contentType,
+    fileBytes: fileBytes,
+    fileName: fileName,
+    mimeType: mimeType,
+    buyerId: buyerId,
+    durationSecs: durationSecs,
+    clientMsgId: clientMsgId,
+    replyToMessageId: replyToMessageId,
+    caption: caption,
+    onProgress: onProgress,
+  );
 
   /// Tells the backend "I've read this thread up to right now" - drives
   /// both the inbox unread badge and the counterpart's "seen" ticks on
@@ -1324,10 +1286,15 @@ class ApiService {
   /// their own schedule (the inbox sweep) need to know a post failed, or
   /// one dropped request would silence the receipt for good; the rest
   /// ignore the result - a later sweep or screen visit posts it again.
-  static Future<bool> markThreadDelivered(String listingId, {String? buyerId}) async {
+  static Future<bool> markThreadDelivered(String? listingId,
+      {String? storeId, String? buyerId}) async {
+    _requireExactlyOneThread(listingId, storeId);
     try {
+      final path = storeId != null && storeId.isNotEmpty
+          ? '/negotiate/store/$storeId/mark-delivered'
+          : '/negotiate/$listingId/mark-delivered';
       final response = await _sendAuthed(() => http.post(
-        Uri.parse('$baseUrl/negotiate/$listingId/mark-delivered'),
+        Uri.parse('$baseUrl$path'),
         headers: _headers,
         body: jsonEncode({if (buyerId != null) 'buyer_id': buyerId}),
       ).timeout(const Duration(seconds: 10)));
@@ -1337,10 +1304,15 @@ class ApiService {
     }
   }
 
-  static Future<void> markThreadRead(String listingId, {String? buyerId}) async {
+  static Future<void> markThreadRead(String? listingId,
+      {String? storeId, String? buyerId}) async {
+    _requireExactlyOneThread(listingId, storeId);
     try {
+      final path = storeId != null && storeId.isNotEmpty
+          ? '/negotiate/store/$storeId/mark-read'
+          : '/negotiate/$listingId/mark-read';
       await _sendAuthed(() => http.post(
-        Uri.parse('$baseUrl/negotiate/$listingId/mark-read'),
+        Uri.parse('$baseUrl$path'),
         headers: _headers,
         body: jsonEncode({if (buyerId != null) 'buyer_id': buyerId}),
       ).timeout(const Duration(seconds: 10)));
@@ -1355,11 +1327,16 @@ class ApiService {
   /// instead, which the chat applied: one failed poll turned every "seen"
   /// tick back to a single grey one.
   static Future<Map<String, DateTime?>?> getReadStatus(
-    String listingId, {
+    String? listingId, {
+    String? storeId,
     String? buyerId,
   }) async {
+    _requireExactlyOneThread(listingId, storeId);
     try {
-      final uri = Uri.parse('$baseUrl/negotiate/$listingId/read-status').replace(
+      final path = storeId != null && storeId.isNotEmpty
+          ? '/negotiate/store/$storeId/read-status'
+          : '/negotiate/$listingId/read-status';
+      final uri = Uri.parse('$baseUrl$path').replace(
         queryParameters: buyerId != null ? {'buyer_id': buyerId} : null,
       );
       final response = await _sendAuthed(() => http.get(uri, headers: _headers)
@@ -1397,11 +1374,16 @@ class ApiService {
   /// was tapped, so a thread read any other way showed every message it
   /// had ever had ("17") as new.
   static Future<({int unread, int zenoUnread})?> getUnreadCounts(
-    String listingId, {
+    String? listingId, {
+    String? storeId,
     String? buyerId,
   }) async {
+    _requireExactlyOneThread(listingId, storeId);
     try {
-      final uri = Uri.parse('$baseUrl/negotiate/$listingId/read-status').replace(
+      final path = storeId != null && storeId.isNotEmpty
+          ? '/negotiate/store/$storeId/read-status'
+          : '/negotiate/$listingId/read-status';
+      final uri = Uri.parse('$baseUrl$path').replace(
         queryParameters: buyerId != null ? {'buyer_id': buyerId} : null,
       );
       final response = await _sendAuthed(() => http.get(uri, headers: _headers)
@@ -1635,22 +1617,23 @@ class ApiService {
   /// id for the message; sending the same one again returns the row the
   /// first attempt stored rather than storing it twice.
   static Future<Map<String, dynamic>?> sendDirectMessage({
-    required String listingId,
+    String? listingId,
+    String? storeId,
     required String senderRole,
     required String senderId,
     required String content,
-    String? buyerIdForThread,
     String? buyerId,
     String? clientMsgId,
     String? replyToMessageId,
   }) async {
+    _requireExactlyOneThread(listingId, storeId);
     final body = jsonEncode({
-      'listing_id':  listingId,
+      if (storeId != null && storeId.isNotEmpty) 'store_id': storeId,
+      if (listingId != null && listingId.isNotEmpty) 'listing_id': listingId,
       'sender_role': senderRole,
       'sender_id':   senderId,
       'content':     content,
-      if (buyerIdForThread != null) 'buyer_id': buyerIdForThread,
-      if (buyerId          != null) 'buyer_id': buyerId,
+      if (buyerId     != null) 'buyer_id': buyerId,
       if (clientMsgId      != null) 'client_msg_id': clientMsgId,
       if (replyToMessageId != null) 'reply_to_message_id': replyToMessageId,
     });
@@ -1723,7 +1706,8 @@ class ApiService {
   }
 
   static Future<Map<String, dynamic>> uploadMedia({
-    required String listingId,
+    String? listingId,
+    String? storeId,
     required String senderRole,
     required String senderId,
     required String contentType,   // "audio" | "image"
@@ -1741,12 +1725,12 @@ class ApiService {
     // acknowledgement - the receipt still comes from the response.
     void Function(int sent, int total)? onProgress,
   }) async {
+    _requireExactlyOneThread(listingId, storeId);
     final uri = Uri.parse('$baseUrl/media/upload');
     // A request can be sent once, so the retry after a renewal builds anew.
     Future<http.Response> send() async {
       final request = http.MultipartRequest('POST', uri)
         ..headers['Authorization'] = 'Bearer ${_token ?? ""}'
-        ..fields['listing_id']   = listingId
         ..fields['sender_role']  = senderRole
         ..fields['sender_id']    = senderId
         ..fields['content_type'] = contentType
@@ -1756,6 +1740,11 @@ class ApiService {
             fileBytes.length,
             filename: fileName,
             contentType: MediaType.parse(mimeType)));
+      if (storeId != null && storeId.isNotEmpty) {
+        request.fields['store_id'] = storeId;
+      } else {
+        request.fields['listing_id'] = listingId!;
+      }
       if (buyerId      != null) request.fields['buyer_id']      = buyerId;
       if (durationSecs != null) request.fields['duration_secs'] = durationSecs.toString();
       if (clientMsgId  != null) request.fields['client_msg_id'] = clientMsgId;
@@ -2047,16 +2036,19 @@ class ApiService {
   /// to the VoIP screen in that case, since there's no valid room_id/token
   /// to connect with.
   static Future<Map<String, dynamic>?> initiateCall({
-    required String listingId,
+    String? listingId,
+    String? storeId,
     required String listingName,
     String callType = 'audio', // 'audio' | 'video'
     String? calleeId, // required when the SELLER is calling - see calls.py's initiate_call()
   }) async {
+    _requireExactlyOneThread(listingId, storeId);
     Future<http.Response> send() => http.post(
       Uri.parse('$baseUrl/calls/initiate'),
       headers: _headers,
       body: jsonEncode({
-        'listing_id':   listingId,
+        if (listingId != null && listingId.isNotEmpty) 'listing_id': listingId,
+        if (storeId != null && storeId.isNotEmpty) 'store_id': storeId,
         'caller_name':  currentUserName ?? 'Buyer',
         'listing_name': listingName,
         'call_type':    callType,
@@ -2102,16 +2094,19 @@ class ApiService {
   /// what it derives from roomId.
   static Future<void> logCallResult({
     required String roomId,
-    required String listingId,
+    String? listingId,
+    String? storeId,
     required String buyerId,
     required String outcome,
     required String callerRole,
     int? durationSecs,
     String callType = 'audio', // 'audio' | 'video'
   }) async {
+    _requireExactlyOneThread(listingId, storeId);
     final body = jsonEncode({
       'room_id':      roomId,
-      'listing_id':   listingId,
+      if (listingId != null && listingId.isNotEmpty) 'listing_id': listingId,
+      if (storeId != null && storeId.isNotEmpty) 'store_id': storeId,
       'buyer_id':     buyerId,
       'outcome':      outcome,
       'caller_role':  callerRole,
@@ -2393,8 +2388,9 @@ class ApiService {
     }
   }
   // ── Incoming call check (polls for active call rooms) ─────────────────────
-  static Future<Map<String, dynamic>?> checkIncomingCall(String listingId) async =>
-      (await checkIncomingCallStatus(listingId)).call;
+  static Future<Map<String, dynamic>?> checkIncomingCall(String listingId,
+          {String? storeId}) async =>
+      (await checkIncomingCallStatus(listingId, storeId: storeId)).call;
 
   /// The call ringing me on [listingId], if any - and whether the server
   /// answered at all. `known` is false on a timeout, a network error or a
@@ -2402,10 +2398,13 @@ class ApiService {
   /// that way, a live call whose check timed out on a weak signal was
   /// taken down and marked done, and never rang (review, 2026-10-08).
   static Future<({bool known, Map<String, dynamic>? call})>
-      checkIncomingCallStatus(String listingId) async {
+      checkIncomingCallStatus(String listingId, {String? storeId}) async {
+    final pendingPath = storeId != null && storeId.isNotEmpty
+        ? '/calls/pending/store/$storeId'
+        : '/calls/pending/$listingId';
     try {
       var response = await http.get(
-        Uri.parse('$baseUrl/calls/pending/$listingId'),
+        Uri.parse('$baseUrl$pendingPath'),
         headers: _headers,
       ).timeout(const Duration(seconds: 3));
       // FIX (2026-08-13, reported as "callee never sees an incoming call"):
@@ -2421,7 +2420,7 @@ class ApiService {
       // common case.
       if (response.statusCode == 401 && await _tryRelogin()) {
         response = await http.get(
-          Uri.parse('$baseUrl/calls/pending/$listingId'),
+          Uri.parse('$baseUrl$pendingPath'),
           headers: _headers,
         ).timeout(const Duration(seconds: 3));
       }

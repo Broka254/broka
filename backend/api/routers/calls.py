@@ -543,7 +543,10 @@ class CallAlertedRequest(BaseModel):
     call_token: str = Field(..., min_length=1, max_length=2048)
 
 class InitiateCallRequest(BaseModel):
-    listing_id:   str
+    # Exactly one thread: a product's negotiation thread or a store-general
+    # conversation. Both use the same call session, push and call-card path.
+    listing_id:   Optional[str] = None
+    store_id:     Optional[str] = None
     caller_name:  str
     listing_name: Optional[str] = ""
     call_type:    str = "audio"   # "audio" | "video"
@@ -572,6 +575,7 @@ class LogCallRequest(BaseModel):
     # client doesn't get a 422 for a missing field; never trusted for
     # anything on their own.
     listing_id: Optional[str] = None
+    store_id:   Optional[str] = None
     buyer_id:   Optional[str] = None
     caller_role: Optional[str] = None
 
@@ -779,16 +783,33 @@ async def initiate_call(
     """
     await call_initiate_limiter.check_and_record(current["id"])
 
-    # Resolve the listing
-    result  = await db.execute(select(Listing).where(Listing.id == payload.listing_id))
-    listing = result.scalar_one_or_none()
-    if not listing:
-        raise HTTPException(status_code=404, detail="Listing not found")
+    if bool(payload.listing_id) == bool(payload.store_id):
+        raise HTTPException(status_code=400, detail="listing_id or store_id required")
+
+    listing = None
+    store = None
+    if payload.store_id:
+        from api.models.store import Store
+        store = (await db.execute(
+            select(Store).where(
+                Store.id == payload.store_id, Store.deleted_at.is_(None))
+        )).scalar_one_or_none()
+        if not store:
+            raise HTTPException(status_code=404, detail="Store not found")
+        seller_id = store.owner_id
+        thread_name = store.name
+    else:
+        result = await db.execute(select(Listing).where(Listing.id == payload.listing_id))
+        listing = result.scalar_one_or_none()
+        if not listing:
+            raise HTTPException(status_code=404, detail="Listing not found")
+        seller_id = listing.seller_id
+        thread_name = listing.name
 
     # Determine caller/callee explicitly - do NOT assume the seller is
     # always the callee (Phase 4). Whichever side owns the listing is
     # calling OUT; the other side is whoever they're negotiating with.
-    if current["id"] == listing.seller_id:
+    if current["id"] == seller_id:
         # Seller calling a specific buyer from one of this listing's
         # negotiation threads - can't be inferred from listing_id alone.
         if not payload.callee_id:
@@ -801,15 +822,20 @@ async def initiate_call(
         # A valid user id alone isn't enough authorization to ring them -
         # without this, any seller could call any registered user by
         # supplying an arbitrary callee_id, regardless of whether that
-        # person has ever engaged with this listing (Phase 12: arbitrary
+        # person has ever engaged with this thread (Phase 12: arbitrary
         # listing/buyer association). Require an actual prior message on
-        # this listing/buyer thread, the same relationship check already
-        # used to scope chat history elsewhere (see negotiate.py/media.py).
+        # this listing-or-store / buyer thread, the same relationship check
+        # already used to scope chat history elsewhere.
         # visibility-ok: selects ids only, existence check that a thread exists
+        thread_scope = (
+            NegotiationMessage.store_id == payload.store_id
+            if payload.store_id else
+            NegotiationMessage.listing_id == payload.listing_id
+        )
         thread_check = await db.execute(
             select(NegotiationMessage.id)
             .where(
-                NegotiationMessage.listing_id == payload.listing_id,
+                thread_scope,
                 NegotiationMessage.buyer_id == payload.callee_id,
             )
             .limit(1)
@@ -817,12 +843,13 @@ async def initiate_call(
         if thread_check.scalar_one_or_none() is None:
             raise HTTPException(
                 status_code=403,
-                detail="No existing conversation with this buyer on this listing",
+                detail="No existing conversation with this buyer",
             )
         buyer_id_for_thread = callee.id
     else:
-        # Buyer calling the listing's seller - the unambiguous, common case.
-        result = await db.execute(select(User).where(User.id == listing.seller_id))
+        # Buyer calling the listing's seller or the store's owner - the
+        # unambiguous, common case.
+        result = await db.execute(select(User).where(User.id == seller_id))
         callee = result.scalar_one_or_none()
         if not callee:
             raise HTTPException(status_code=404, detail="Seller not found")
@@ -839,8 +866,8 @@ async def initiate_call(
         replaced = await _admit_call(db, me=current["id"], callee=callee)
         await call_state.create_session(
             room_id=room_id, caller_id=current["id"], callee_id=callee.id,
-            listing_id=payload.listing_id, call_type=payload.call_type,
-            caller_name=payload.caller_name,
+            listing_id=payload.listing_id or "", call_type=payload.call_type,
+            caller_name=payload.caller_name, store_id=payload.store_id,
         )
         await call_state.update_state(room_id, CallState.ringing)
     # The no-answer watchdog looks at it again once nobody could still be
@@ -882,8 +909,9 @@ async def initiate_call(
         # image: FCM carries 4KB. "" when they have no photo as an asset
         # (data values are strings - None would arrive as "None").
         "callerPhoto": await _photo_of(db, current["id"]) or "",
-        "listingName": payload.listing_name or listing.name,
-        "listingId":   payload.listing_id,
+        "listingName": payload.listing_name or thread_name,
+        "listingId":   payload.listing_id or "",
+        "storeId":     payload.store_id or "",
         "buyerId":     buyer_id_for_thread,  # explicit, not assumed - see fix note above
         "callType":    payload.call_type,
         # A redial: the call it replaces, whose ring the phone takes down
@@ -917,7 +945,7 @@ async def initiate_call(
     pushed = await push_devices.push_user(
         callee.id, db=db,
         title=f"{'📹' if is_video else '📞'} Incoming {'video ' if is_video else ''}call from {payload.caller_name}",
-        body=f"About: {payload.listing_name or listing.name}",
+        body=f"About: {payload.listing_name or thread_name}",
         data=call_data,
         data_only=True,
         # An incoming call is the definitive "only useful right now"
@@ -1207,27 +1235,46 @@ async def _finish_replaced(db: AsyncSession, old, *, me: str, new_callee_id: str
     if old.callee_id == new_callee_id or not owned:
         await _push_ring_over(old, every_phone=True)
         return
-    listing = (await db.execute(
-        select(Listing).where(Listing.id == old.listing_id)
-    )).scalar_one_or_none()
-    if listing is None:
+    listing = None
+    store = None
+    if getattr(old, "store_id", None):
+        from api.models.store import Store
+        store = (await db.execute(
+            select(Store).where(Store.id == old.store_id)
+        )).scalar_one_or_none()
+    else:
+        listing = (await db.execute(
+            select(Listing).where(Listing.id == old.listing_id)
+        )).scalar_one_or_none()
+    if listing is None and store is None:
         await _push_ring_over(old, every_phone=True)
         return
-    await _record_outcome(db, old, listing, "cancelled", logged_by=me)
+    await _record_outcome(db, old, listing, "cancelled", logged_by=me, store=store)
 
 
 async def _incoming_view(db: AsyncSession, session, user_id: str) -> dict:
     """A ringing call as its callee's app needs it - GET /calls/incoming's
     shape, and what CALL_CROSSED carries so the app can answer it."""
-    listing = (await db.execute(
-        select(Listing.seller_id, Listing.name).where(Listing.id == session.listing_id)
-    )).one_or_none()
-    seller_id = listing.seller_id if listing else None
+    store_id = getattr(session, "store_id", None)
+    if store_id:
+        from api.models.store import Store
+        store = (await db.execute(
+            select(Store.owner_id, Store.name).where(Store.id == store_id)
+        )).one_or_none()
+        seller_id = store.owner_id if store else None
+        thread_name = store.name if store else ""
+    else:
+        listing = (await db.execute(
+            select(Listing.seller_id, Listing.name).where(Listing.id == session.listing_id)
+        )).one_or_none()
+        seller_id = listing.seller_id if listing else None
+        thread_name = listing.name if listing else ""
     return {
         "has_call":    True,
         "room_id":     session.room_id,
-        "listing_id":  session.listing_id,
-        "listing_name": listing.name if listing else "",
+        "listing_id":  session.listing_id or None,
+        "store_id":    store_id,
+        "listing_name": thread_name,
         # The thread the call belongs to. A buyer can call a seller they
         # have never messaged, so the app may have no thread to read it from.
         "buyer_id":    session.callee_id if session.caller_id == seller_id else session.caller_id,
@@ -1250,13 +1297,22 @@ async def _settle_unanswered(session, *, by: str) -> None:
         if not await call_state.mark_result_logged(session.room_id):
             return
         async with AsyncSessionLocal() as db:
-            listing = (await db.execute(
-                select(Listing).where(Listing.id == session.listing_id)
-            )).scalar_one_or_none()
-            if listing is None:
+            listing = None
+            store = None
+            if getattr(session, "store_id", None):
+                from api.models.store import Store
+                store = (await db.execute(
+                    select(Store).where(Store.id == session.store_id)
+                )).scalar_one_or_none()
+            else:
+                listing = (await db.execute(
+                    select(Listing).where(Listing.id == session.listing_id)
+                )).scalar_one_or_none()
+            if listing is None and store is None:
                 await call_state.update_state(session.room_id, CallState.missed)
                 return
-            await _record_outcome(db, session, listing, "cancelled", logged_by=by)
+            await _record_outcome(
+                db, session, listing, "cancelled", logged_by=by, store=store)
     except Exception as exc:
         logger.warning("[calls] could not settle unanswered room=%s: %s", session.room_id, exc)
 
@@ -1331,14 +1387,26 @@ async def log_call_result(
     if not await call_state.mark_result_logged(payload.room_id):
         raise HTTPException(status_code=409, detail="This call's result has already been recorded")
 
-    result  = await db.execute(select(Listing).where(Listing.id == session.listing_id))
-    listing = result.scalar_one_or_none()
-    if not listing:
-        raise HTTPException(status_code=404, detail="Listing not found")
+    listing = None
+    store = None
+    if getattr(session, "store_id", None):
+        from api.models.store import Store
+        store = (await db.execute(
+            select(Store).where(Store.id == session.store_id)
+        )).scalar_one_or_none()
+        if not store:
+            raise HTTPException(status_code=404, detail="Store not found")
+    else:
+        listing = (await db.execute(
+            select(Listing).where(Listing.id == session.listing_id)
+        )).scalar_one_or_none()
+        if not listing:
+            raise HTTPException(status_code=404, detail="Listing not found")
 
     await _record_outcome(
         db, session, listing, payload.outcome,
         logged_by=current["id"], duration_secs=payload.duration_secs,
+        store=store,
     )
     return {"status": "logged", "outcome": payload.outcome}
 
@@ -1359,6 +1427,7 @@ _OUTCOME_TO_STATE = {
 async def _record_outcome(
     db: AsyncSession, session, listing, outcome: str,
     *, logged_by: Optional[str], duration_secs: Optional[int] = None,
+    store=None,
 ) -> None:
     """Everything that follows a call's outcome, once mark_result_logged()
     has made this the one record of it: the session's terminal state, the
@@ -1369,13 +1438,14 @@ async def _record_outcome(
     `logged_by` is the participant who reported it, or None when the
     no-answer watchdog decided it (ring_watchdog_tick).
     """
-    # Derived, not trusted - whichever of caller/callee ISN'T the listing's
+    # Derived, not trusted - whichever of caller/callee ISN'T the thread's
     # seller is the buyer for chat-thread-scoping purposes, regardless of
     # which direction this particular call went (Section 13 symmetry).
-    buyer_id    = session.callee_id if session.caller_id == listing.seller_id else session.caller_id
-    caller_role = "seller" if session.caller_id == listing.seller_id else "buyer"
+    seller_id   = store.owner_id if store is not None else listing.seller_id
+    buyer_id    = session.callee_id if session.caller_id == seller_id else session.caller_id
+    caller_role = "seller" if session.caller_id == seller_id else "buyer"
     reporter    = logged_by or session.caller_id
-    reporter_is_seller = reporter == listing.seller_id
+    reporter_is_seller = reporter == seller_id
 
     # Answered is never "missed". A callee who pressed Accept on a closed
     # app's notification, and whose phone then couldn't join in time, had
@@ -1414,12 +1484,14 @@ async def _record_outcome(
     # same CALL_TIMEOUT event rather than a separate one.
     _event = {"declined": "CALL_DECLINED", "missed": "CALL_TIMEOUT",
               "cancelled": "CALL_CANCELLED", "completed": "CALL_ENDED"}
-    logger.info("[calls] %s room=%s listing=%s buyer=%s outcome=%s by=%s",
-                _event.get(outcome, "CALL_RESULT"), session.room_id, session.listing_id,
-                buyer_id, outcome, logged_by or "server")
+    logger.info("[calls] %s room=%s thread=%s buyer=%s outcome=%s by=%s",
+                _event.get(outcome, "CALL_RESULT"), session.room_id,
+                session.store_id or session.listing_id, buyer_id, outcome,
+                logged_by or "server")
 
     call_msg = NegotiationMessage(
-        listing_id=session.listing_id,
+        listing_id=session.listing_id if store is None else None,
+        store_id=session.store_id,
         sender_id=reporter,
         role=caller_role,
         recipient_role=None,
@@ -1436,11 +1508,18 @@ async def _record_outcome(
 
     # Broadcast so the other party sees it instantly if they're online.
     try:
-        from api.routers.media import broadcast_text_message
-        await broadcast_text_message(
-            session.listing_id, buyer_id,
-            call_msg, logged_by or "server", reporter_is_seller,
-        )
+        if session.store_id:
+            from api.routers.media import broadcast_store_text_message
+            await broadcast_store_text_message(
+                session.store_id, buyer_id,
+                call_msg, logged_by or "server", reporter_is_seller,
+            )
+        else:
+            from api.routers.media import broadcast_text_message
+            await broadcast_text_message(
+                session.listing_id, buyer_id,
+                call_msg, logged_by or "server", reporter_is_seller,
+            )
     except Exception:
         pass
 
@@ -1448,7 +1527,8 @@ async def _record_outcome(
         # Both are a call the callee never picked up - "cancelled" only says
         # the caller gave up first. Never a reason to fail the request.
         try:
-            await _push_missed_call(db, session, listing, buyer_id, call_msg.id)
+            await _push_missed_call(
+                db, session, listing, buyer_id, call_msg.id, store=store)
         except Exception as exc:
             logger.warning("[calls] missed-call push failed room=%s: %s", session.room_id, exc)
     elif outcome == "declined":
@@ -1484,7 +1564,8 @@ MISSED_CALL_PUSH_TTL_SECONDS = 24 * 3600
 
 
 async def _push_missed_call(
-    db: AsyncSession, session, listing, buyer_id: str, card_id: Optional[str] = None,
+    db: AsyncSession, session, listing, buyer_id: str,
+    card_id: Optional[str] = None, store=None,
 ) -> None:
     """Tell the callee, by push, that they missed a call.
 
@@ -1498,22 +1579,30 @@ async def _push_missed_call(
     notification when it is still up.
     """
     is_video = session.call_type == "video"
-    callee_role = "seller" if session.callee_id == listing.seller_id else "buyer"
+    seller_id = store.owner_id if store is not None else listing.seller_id
+    thread_name = store.name if store is not None else listing.name
+    notification_thread = (
+        f"store:{store.id}" if store is not None else session.listing_id)
+    callee_role = "seller" if session.callee_id == seller_id else "buyer"
     who = (session.caller_name or "").strip() or "Someone"
     await push_devices.push_user(
         session.callee_id, db=db,
         title=f"Missed {'video ' if is_video else ''}call from {who}",
-        body=f"About: {listing.name}",
+        body=f"About: {thread_name}",
         data={
             "type":      "missed_call",
             "roomId":    session.room_id,
-            "listingId": session.listing_id,
+            # FCM data values are strings. Sending None here is rendered by
+            # at least one client path as the literal "None", which then
+            # becomes a thread id that matches nothing.
+            "listingId": session.listing_id or "",
+            "storeId":   store.id if store is not None else "",
             "buyerId":   buyer_id,
             "myRole":    callee_role,
             "callType":  session.call_type,
             "callerName": who,
             "callerPhoto": await _photo_of(db, session.caller_id) or "",
-            "listingName": listing.name,
+            "listingName": thread_name,
             # The call card in the chat: the app records it as announced,
             # so its inbox sweep does not announce the same missed call.
             **({"messageId": card_id} if card_id else {}),
@@ -1521,7 +1610,7 @@ async def _push_missed_call(
         ttl_seconds=MISSED_CALL_PUSH_TTL_SECONDS,
         # One notification per thread's missed calls, shared with the app's
         # own (NotificationService.missedCallTag), on its Messages channel.
-        android_tag=f"missed_{session.listing_id}_{buyer_id}",
+        android_tag=f"missed_{notification_thread}_{buyer_id}",
         android_channel_id="broka_messages",
     )
 
@@ -1558,16 +1647,22 @@ async def get_call_history(
     `before` pages backwards: pass the previous page's `next_before`.
     """
     uid = current["id"]
+    from api.models.store import Store
     q = (
-        select(NegotiationMessage, Listing)
-        .join(Listing, Listing.id == NegotiationMessage.listing_id)
+        select(NegotiationMessage, Listing, Store)
+        .outerjoin(Listing, Listing.id == NegotiationMessage.listing_id)
+        .outerjoin(Store, Store.id == NegotiationMessage.store_id)
         .where(
             NegotiationMessage.msg_type == "call",
             # A call card is written to both sides (log-result); never a
             # copy addressed to one of them.
             NegotiationMessage.recipient_role.is_(None),
             NegotiationMessage.buyer_id.isnot(None),
-            or_(NegotiationMessage.buyer_id == uid, Listing.seller_id == uid),
+            or_(
+                NegotiationMessage.buyer_id == uid,
+                Listing.seller_id == uid,
+                Store.owner_id == uid,
+            ),
         )
     )
     if before:
@@ -1585,16 +1680,35 @@ async def get_call_history(
 
     calls = []
     people_ids: set = set()
-    for msg, listing in rows:
-        my_role = "seller" if listing.seller_id == uid else "buyer"
-        peer_id = msg.buyer_id if my_role == "seller" else listing.seller_id
-        people_ids.add(peer_id)
+    for msg, listing, store in rows:
+        # A call card belongs to exactly one thread kind. Legacy listing
+        # cards join a Listing; store-general cards join a Store and have a
+        # NULL listing_id, which is why this is an outer join rather than
+        # the listing-only inner join that silently hid store calls.
+        if store is not None and msg.listing_id is None:
+            seller_id = store.owner_id
+            thread_name = store.name
+            thread_listing_id = None
+            thread_store_id = store.id
+        elif listing is not None:
+            seller_id = listing.seller_id
+            thread_name = listing.name
+            thread_listing_id = listing.id
+            thread_store_id = None
+        else:
+            continue
+        my_role = "seller" if seller_id == uid else "buyer"
+        peer_id = msg.buyer_id if my_role == "seller" else seller_id
+        if peer_id:
+            people_ids.add(peer_id)
         outcome = (msg.content or "").strip().lower()
         outgoing = msg.role == my_role
         calls.append({
             "id":            msg.id,
-            "listing_id":    listing.id,
-            "listing_name":  listing.name,
+            "listing_id":    thread_listing_id,
+            "listing_name":  thread_name,
+            "store_id":      thread_store_id,
+            "store_name":    store.name if thread_store_id else None,
             "buyer_id":      msg.buyer_id,
             "my_role":       my_role,
             "peer_id":       peer_id,
@@ -2076,12 +2190,21 @@ async def ring_watchdog_tick(now: Optional[float] = None) -> int:
             if not await call_state.mark_result_logged(room_id):
                 continue
             async with AsyncSessionLocal() as db:
-                listing = (await db.execute(
-                    select(Listing).where(Listing.id == session.listing_id)
-                )).scalar_one_or_none()
-                if listing is None:
+                listing = None
+                store = None
+                if getattr(session, "store_id", None):
+                    from api.models.store import Store
+                    store = (await db.execute(
+                        select(Store).where(Store.id == session.store_id)
+                    )).scalar_one_or_none()
+                else:
+                    listing = (await db.execute(
+                        select(Listing).where(Listing.id == session.listing_id)
+                    )).scalar_one_or_none()
+                if listing is None and store is None:
                     continue
-                await _record_outcome(db, session, listing, "missed", logged_by=None)
+                await _record_outcome(
+                    db, session, listing, "missed", logged_by=None, store=store)
             settled += 1
         except Exception as exc:
             logger.warning("[calls] ring watchdog failed room=%s: %s", room_id, exc)
@@ -2120,6 +2243,41 @@ async def stop_ring_watchdog() -> None:
             pass
 
 
+async def _pending_call_view(session, user_id: str) -> dict:
+    """The common response for a pending call in either thread kind."""
+    return {
+        "has_call":    True,
+        "room_id":     session.room_id,
+        "listing_id":  session.listing_id or None,
+        "store_id":    getattr(session, "store_id", None),
+        "caller_name": session.caller_name,
+        "caller_id":   session.caller_id,
+        "caller_photo": await _photo_of(None, session.caller_id),
+        "call_type":   session.call_type,
+        "call_token":  create_call_token(user_id, session.room_id),
+    }
+
+
+@router.get("/pending/store/{store_id}")
+async def get_store_pending_call(
+    store_id: str,
+    current: dict = Depends(get_current_user),
+):
+    """Store threads need their own polling fallback.
+
+    The pending index is keyed by thread, and a store has no listing id to
+    pass to /pending/{listing_id}. Using the canonical ``store:<id>`` key
+    here is the same key create_session writes, so a store call rings on a
+    phone that only knows it is in that store's conversation.
+    """
+    session = await call_state.get_pending_call(f"store:{store_id}", current["id"])
+    if session is None or session.caller_id == current["id"]:
+        return {"has_call": False}
+    if getattr(session, "store_id", None) != store_id:
+        return {"has_call": False}
+    return await _pending_call_view(session, current["id"])
+
+
 @router.get("/pending/{listing_id}")
 async def get_pending_call(
     listing_id: str,
@@ -2143,12 +2301,4 @@ async def get_pending_call(
     if session.caller_id == current["id"]:
         return {"has_call": False}
 
-    return {
-        "has_call":    True,
-        "room_id":     session.room_id,
-        "caller_name": session.caller_name,
-        "caller_id":   session.caller_id,  # explicit, replaces parsing buyer_id out of room_id client-side
-        "caller_photo": await _photo_of(None, session.caller_id),
-        "call_type":   session.call_type,
-        "call_token":  create_call_token(current["id"], session.room_id),
-    }
+    return await _pending_call_view(session, current["id"])

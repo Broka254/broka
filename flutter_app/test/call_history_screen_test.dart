@@ -52,6 +52,24 @@ Map<String, dynamic> _history() {
   };
 }
 
+Map<String, dynamic> _storeHistory() => {
+      'calls': [
+        {
+          'id': 'sc1', 'listing_id': null, 'store_id': 's1',
+          'store_name': 'Clanix Electronics',
+          'listing_name': 'Clanix Electronics',
+          'buyer_id': 'buyer-7', 'my_role': 'buyer', 'peer_id': 'owner-1',
+          'direction': 'outgoing', 'outcome': 'missed', 'missed': false,
+          'call_type': 'audio', 'duration_secs': null,
+          'created_at': _iso(DateTime.now()),
+        },
+      ],
+      'people': {
+        'owner-1': {'name': 'Clanix Owner', 'photo': null, 'is_online': true},
+      },
+      'next_before': null,
+    };
+
 void main() {
   setUpAll(() async {
     installFakeApi();
@@ -111,6 +129,18 @@ void main() {
       expect(record({...base('incoming', 'completed'), 'my_role': 'seller'}).peerDisplayName, 'Buyer');
     });
 
+    test('a store call is identified by its store, without a listing', () {
+      final c = record({
+        ...base('outgoing', 'completed'),
+        'listing_id': null,
+        'store_id': 's1',
+        'store_name': 'Clanix Electronics',
+      });
+      expect(c.listingId, isNull);
+      expect(c.storeId, 's1');
+      expect(c.listingName, 'Clanix Electronics');
+    });
+
     test('a call missing what identifies it is dropped, not shown broken', () {
       final page = CallHistoryPage.fromJson({
         'calls': [
@@ -120,6 +150,16 @@ void main() {
         'people': {},
       });
       expect(page.calls, hasLength(1));
+    });
+
+    test('a call with both a listing and a store is dropped', () {
+      final page = CallHistoryPage.fromJson({
+        'calls': [
+          {...base('incoming', 'completed'), 'store_id': 's1'},
+        ],
+        'people': {},
+      });
+      expect(page.calls, isEmpty);
     });
   });
 
@@ -162,6 +202,51 @@ void main() {
     expect(pushed.last.name, '/direct-chat');
     expect(pushed.last.arguments,
         {'listingId': 'listing-2', 'role': 'buyer', 'buyer_id': 'seller-me'});
+  });
+
+  testWidgets('a store call opens the shared store conversation', (tester) async {
+    ApiService.currentUserId = 'buyer-7';
+    setFakeRoute((uri) => uri.path == '/calls/history' ? _storeHistory() : null);
+    pushed.clear();
+    await tester.pumpWidget(app());
+    await _settle(tester);
+
+    expect(find.text('Seller · Clanix Electronics'), findsOneWidget);
+    await tester.tap(find.text('Seller · Clanix Electronics'));
+    await _settle(tester);
+    expect(pushed.last.name, '/direct-chat');
+    expect(pushed.last.arguments, {
+      'storeId': 's1',
+      'storeName': 'Clanix Electronics',
+      'seller_id': 'owner-1',
+      'role': 'buyer',
+      'buyer_id': 'buyer-7',
+    });
+  });
+
+  testWidgets('calling back a store call sends store_id and no listing', (tester) async {
+    ApiService.currentUserId = 'buyer-7';
+    setFakeRoute((uri) {
+      if (uri.path == '/calls/history') return _storeHistory();
+      if (uri.path == '/calls/initiate') {
+        return {'status': 'sent', 'room_id': 'room-9', 'call_token': 't'};
+      }
+      return null;
+    });
+    pushed.clear();
+    await tester.pumpWidget(app());
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('call-back-sc1')));
+    await _settle(tester);
+
+    final sent = fakeRequests.singleWhere((r) => r.uri.path == '/calls/initiate').json as Map;
+    expect(sent['store_id'], 's1');
+    expect(sent.containsKey('listing_id'), isFalse);
+    expect(sent.containsKey('callee_id'), isFalse,
+        reason: 'the buyer does not choose the store owner');
+    final call = pushed.singleWhere((r) => r.name == '/voip-call').arguments as Map;
+    expect(call['storeId'], 's1');
+    expect(call.containsKey('listingId'), isFalse);
   });
 
   testWidgets('calling back rings the same person, the same kind of call', (tester) async {

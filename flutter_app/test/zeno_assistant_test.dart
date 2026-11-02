@@ -101,6 +101,20 @@ void main() {
     'peer_name': 'Jane Wanjiru', 'role': 'buyer', 'buyer_id': 'me',
   };
 
+  test('a Zeno contact has exactly one thread identity', () {
+    const common = {
+      'peer_id': 'owner-1', 'peer_name': 'Clanix', 'role': 'buyer', 'buyer_id': 'me',
+    };
+    expect(ZenoContact.fromJson({
+      ...common, 'store_id': 's1', 'store_name': 'Clanix Electronics',
+    })?.listingName, 'Clanix Electronics');
+    expect(ZenoContact.fromJson({...common, 'listing_id': '', 'store_id': 's1'}),
+        isNotNull);
+    expect(ZenoContact.fromJson({...common, 'listing_id': 'l1', 'store_id': 's1'}),
+        isNull);
+    expect(ZenoContact.fromJson(common), isNull);
+  });
+
   List<FakeRequest> sent(String path) => [
         for (final r in fakeRequests)
           if (r.uri.path == path) r,

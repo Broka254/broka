@@ -242,7 +242,7 @@ class DeepLinkService {
     }
     final store = await _repo.getStoreBySlug(target.slug);
     store.fold(
-      onSuccess: (s) => nav.pushNamed('/store-chat', arguments: {
+      onSuccess: (s) => nav.pushNamed('/direct-chat', arguments: {
         'storeId': s.id,
         'storeName': s.name,
         'role': 'buyer',

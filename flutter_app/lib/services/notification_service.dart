@@ -415,16 +415,18 @@ class NotificationService {
   /// caller's socket).
   Future<void> declineFromPayload(Map<String, dynamic> data) async {
     final roomId = data['roomId'] as String?;
-    final listingId = data['listingId'] as String?;
+    final listingId = _nonEmpty(data['listingId']);
+    final storeId = _nonEmpty(data['storeId']);
     if (roomId == null || roomId.isEmpty) return;
     await callEnded(roomId);
-    if (listingId == null) return;
+    if (listingId == null && storeId == null) return;
     final buyerId = data['buyerId'] as String? ?? '';
     final iAmBuyer = ApiService.currentUserId != null &&
         ApiService.currentUserId == buyerId;
     await ApiService.logCallResult(
       roomId:     roomId,
       listingId:  listingId,
+      storeId:    storeId,
       buyerId:    buyerId,
       outcome:    'declined',
       // The caller's role, and I'm the callee.
@@ -516,8 +518,10 @@ class NotificationService {
     // ring. A network blip must not swallow a real incoming call, which
     // would be a far worse failure than an occasional late ring.
     final listingId = data['listingId'] as String?;
-    if (listingId != null) {
-      final live = await ApiService.checkIncomingCallStatus(listingId);
+    final storeId = _nonEmpty(data['storeId']);
+    if (listingId != null || storeId != null) {
+      final live = await ApiService.checkIncomingCallStatus(
+          listingId ?? '', storeId: storeId);
       // Only the server's answer ends the call here - "couldn't tell" rings.
       // The listing's ringing call is another room when the caller has
       // dialled again since: this push is for the replaced call.
@@ -703,12 +707,12 @@ class NotificationService {
     if (!_ready || defaultTargetPlatform != TargetPlatform.android) return;
     final type = data['type'];
     final photo = _nonEmpty(type == 'missed_call' ? data['callerPhoto'] : data['senderPhoto']);
-    final listingId = data['listingId'] as String?;
-    if (photo == null || listingId == null || listingId.isEmpty) return;
+    final threadId = _threadIdFromPayload(data);
+    if (photo == null || threadId == null) return;
     final buyerId = data['buyerId'] as String?;
     final tag = type == 'missed_call'
-        ? missedCallTag(listingId, buyerId)
-        : threadTag(listingId, buyerId);
+        ? missedCallTag(threadId, buyerId)
+        : threadTag(threadId, buyerId);
     final face = await NotificationAvatar.load(photo, timeout: const Duration(seconds: 8));
     if (face == null) return;
     // What Android drew from this push (main.dart passes the push's own
@@ -728,7 +732,8 @@ class NotificationService {
     }
     if (type == 'missed_call') {
       await showMissedCall(
-        listingId: listingId,
+        listingId: threadId,
+        storeId: _nonEmpty(data['storeId']),
         buyerId: buyerId,
         myRole: data['myRole'] as String? ?? 'buyer',
         callerName: data['callerName'] as String? ?? 'Someone',
@@ -743,7 +748,7 @@ class NotificationService {
     await showNewMessage(
       fromName: m.title,
       preview: m.body,
-      listingId: listingId,
+      listingId: threadId,
       buyerId: buyerId,
       payload: m.payload,
       face: face,
@@ -755,6 +760,15 @@ class NotificationService {
     if (value is! String) return null;
     final s = value.trim();
     return s.isEmpty || s == 'None' ? null : s;
+  }
+
+  /// The canonical notification id for a push. Store conversations are
+  /// named `store:<id>` everywhere, matching the server's thread_tag and the
+  /// chat screen, so the push and the app's own notification are one.
+  static String? _threadIdFromPayload(Map<String, dynamic> data) {
+    final storeId = _nonEmpty(data['storeId']);
+    if (storeId != null) return 'store:$storeId';
+    return _nonEmpty(data['listingId']);
   }
 
   /// A message push as the app draws it: the push's own title and body
@@ -772,9 +786,12 @@ class NotificationService {
           (count > 1 ? '$count new messages · $preview' : preview),
       payload: {
         'type': 'new_message',
-        'listingId': data['listingId'],
+        if (_nonEmpty(data['storeId']) == null) 'listingId': data['listingId'],
+        if (_nonEmpty(data['storeId']) != null) 'storeId': data['storeId'],
+        if (_nonEmpty(data['storeId']) != null) 'listingName': data['listingName'],
         'buyerId': data['buyerId'],
         'myRole': data['myRole'],
+        if (data['senderName'] != null) 'senderName': data['senderName'],
         if (data['screen'] == 'zeno') 'screen': 'zeno',
       },
     );
@@ -820,15 +837,15 @@ class NotificationService {
   /// A message or missed call a push announced - the phone drew it - is
   /// not announced again by the app's sweep.
   static Future<void> recordMessageAnnounced(Map<String, dynamic> data) async {
-    final listingId = data['listingId'] as String?;
+    final threadId = _threadIdFromPayload(data);
     final messageId = data['messageId'] as String?;
-    if (listingId == null || messageId == null || messageId.isEmpty) return;
+    if (threadId == null || messageId == null || messageId.isEmpty) return;
     try {
       final prefs = await SharedPreferences.getInstance();
       // The other isolate may have written since this copy was loaded.
       await prefs.reload();
       await markAnnounced(
-          prefs, listingId, data['buyerId'] as String?, messageId);
+          prefs, threadId, data['buyerId'] as String?, messageId);
     } catch (_) {}
   }
 
@@ -853,9 +870,9 @@ class NotificationService {
   }) async {
     if (data['type'] != 'new_message') return;
     if (data['screen'] == 'zeno') return;
-    final isStore = data['screen'] == 'store-chat';
     final listingId = data['listingId'] as String?;
     final storeId = data['storeId'] as String?;
+    final isStore = storeId != null && storeId.isNotEmpty;
     if (isStore ? (storeId == null || storeId.isEmpty) : (listingId == null || listingId.isEmpty)) return;
     try {
       if (restoreSession) {
@@ -899,19 +916,19 @@ class NotificationService {
   /// The server's message push with the app in front, where Android does
   /// not draw it: shown here, unless that conversation is on screen.
   Future<void> showMessageFromPush(Map<String, dynamic> data) async {
-    final listingId = data['listingId'] as String?;
-    if (listingId == null || listingId.isEmpty) return;
+    final threadId = _threadIdFromPayload(data);
+    if (threadId == null) return;
     final buyerId = data['buyerId'] as String?;
     final messageId = data['messageId'] as String?;
     final prefs = await SharedPreferences.getInstance();
-    final onScreen = isThreadOnScreen?.call(listingId, buyerId) ?? false;
+    final onScreen = isThreadOnScreen?.call(threadId, buyerId) ?? false;
     if (!onScreen &&
         messageId != null &&
-        wasAnnounced(prefs, listingId, buyerId, messageId)) {
+        wasAnnounced(prefs, threadId, buyerId, messageId)) {
       return; // the sweep got there first
     }
     if (messageId != null) {
-      await markAnnounced(prefs, listingId, buyerId, messageId);
+      await markAnnounced(prefs, threadId, buyerId, messageId);
     }
     if (onScreen) return;
 
@@ -919,7 +936,7 @@ class NotificationService {
     await showNewMessage(
       fromName: m.title,
       preview: m.body,
-      listingId: listingId,
+      listingId: threadId,
       buyerId: buyerId,
       payload: m.payload,
       photo: _nonEmpty(data['senderPhoto']),
@@ -1144,6 +1161,7 @@ class NotificationService {
         'type': 'incoming_call',
         'roomId': call['room_id'],
         'listingId': call['listing_id'],
+        'storeId': call['store_id'],
         'buyerId': call['buyer_id'],
         'listingName': call['listing_name'],
         'answer': true,
@@ -1210,12 +1228,14 @@ class NotificationService {
     }
     if (type == 'new_message' || type == 'missed_call') {
       final role = data['myRole'] as String? ?? 'buyer';
-      if (data['screen'] == 'store-chat') {
-        nav.pushNamed('/store-chat', arguments: {
-          'storeId': data['storeId'] as String?,
+      final storeId = _nonEmpty(data['storeId']);
+      if (storeId != null || data['screen'] == 'store-chat') {
+        nav.pushNamed('/direct-chat', arguments: {
+          'storeId': storeId,
           'storeName': data['listingName'] as String?,
           'role': role,
           'buyer_id': data['buyerId'] as String?,
+          'counterpartName': data['senderName'] as String?,
         });
         return;
       }
@@ -1242,6 +1262,8 @@ class NotificationService {
     final buyerId = data['buyerId'] as String? ?? '';
     final iAmBuyer = ApiService.currentUserId != null &&
         ApiService.currentUserId == buyerId;
+    final listingId = _nonEmpty(data['listingId']);
+    final storeId = _nonEmpty(data['storeId']);
     return {
       'roomId':      roomId,
       'userId':      ApiService.currentUserId ?? '',
@@ -1251,7 +1273,8 @@ class NotificationService {
       'peerId':      data['callerId'] as String?,
       'peerPhoto':   _nonEmpty(data['callerPhoto']),
       'listingName': data['listingName'] as String? ?? 'your listing',
-      'listingId':   data['listingId'] as String?,
+      if (listingId != null) 'listingId': listingId,
+      if (storeId != null) 'storeId': storeId,
       'buyerId':     buyerId,
       'callerRole':  iAmBuyer ? 'seller' : 'buyer',
       'callType':    data['callType'] as String? ?? 'audio',
@@ -1283,7 +1306,10 @@ class NotificationService {
     if (nav == null || payload == null || ApiService.currentUserId == null) return false;
     final token = payload['callToken'] as String?;
     final listingId = payload['listingId'] as String?;
-    if (token == null || token.isEmpty || listingId == null || listingId.isEmpty) return false;
+    final storeId = _nonEmpty(payload['storeId']);
+    if (token == null || token.isEmpty || (listingId == null && storeId == null)) {
+      return false;
+    }
     if (ActiveCall.instance.onCall) return false;
     final top = topRouteName(nav);
     if (top == '/splash' || top == '/auth' || top == '/voip-call') return false;
@@ -1301,11 +1327,12 @@ class NotificationService {
   /// app) instead of opening over it.
   Future<void> _openIncomingCall(
       NavigatorState nav, Map<String, dynamic> data, {bool replace = false}) async {
-    final listingId = data['listingId'] as String?;
+    final listingId = _nonEmpty(data['listingId']);
+    final storeId = _nonEmpty(data['storeId']);
     final buyerId = data['buyerId'] as String? ?? '';
     final iAmBuyer = ApiService.currentUserId != null &&
         ApiService.currentUserId == buyerId;
-    if (listingId == null) return;
+    if (listingId == null && storeId == null) return;
     final tappedRoom = data['roomId'] as String?;
     final active = ActiveCall.instance;
     if (tappedRoom != null && active.roomId == tappedRoom) {
@@ -1352,7 +1379,9 @@ class NotificationService {
     // was first shown. If it's no longer pending (already answered on
     // another device, missed, or cancelled by the time this is tapped),
     // land on the conversation instead of a dead call screen.
-    final callInfo = await ApiService.checkIncomingCall(listingId);
+    final callInfo = await ApiService
+        .checkIncomingCallStatus(listingId ?? '', storeId: storeId)
+        .then((result) => result.call);
     // While that was asked, Accept on the notification may have opened
     // this call already (a locked phone's full-screen launch is opened
     // this way, ringing, and Accept is right there) - or another call
@@ -1370,7 +1399,9 @@ class NotificationService {
     if (postedRoomId != null) await cancelIncomingCall(postedRoomId);
     if (callInfo == null || roomId == null) {
       nav.pushNamed('/direct-chat', arguments: {
-        'listingId': listingId,
+        if (listingId != null) 'listingId': listingId,
+        if (storeId != null) 'storeId': storeId,
+        if (storeId != null) 'storeName': data['listingName'] as String?,
         'role':      iAmBuyer ? 'buyer' : 'seller',
         'buyer_id':  buyerId,
       });
@@ -1387,6 +1418,7 @@ class NotificationService {
           _nonEmpty(data['callerPhoto']),
       'listingName': data['listingName'] as String? ?? 'your listing',
       'listingId':   listingId,
+      'storeId':     storeId,
       'buyerId':     buyerId,
       'callerRole':  iAmBuyer ? 'seller' : 'buyer',
       'callType':    callInfo['call_type'] as String? ?? 'audio',
@@ -1548,6 +1580,7 @@ class NotificationService {
   /// card has a Call back button.
   Future<void> showMissedCall({
     required String listingId,
+    String? storeId,
     required String? buyerId,
     required String myRole,
     required String callerName,
@@ -1590,7 +1623,8 @@ class NotificationService {
         details,
         payload: jsonEncode({
           'type': 'missed_call',
-          'listingId': listingId,
+          if (storeId == null || storeId.isEmpty) 'listingId': listingId,
+          if (storeId != null && storeId.isNotEmpty) 'storeId': storeId,
           'buyerId': buyerId,
           'myRole': myRole,
         }),
@@ -1602,12 +1636,13 @@ class NotificationService {
 
   /// The server's missed-call push, when the app has to draw it itself.
   Future<void> showMissedCallFromPush(Map<String, dynamic> data) async {
-    final listingId = data['listingId'] as String?;
-    if (listingId == null || listingId.isEmpty) return;
+    final threadId = _threadIdFromPayload(data);
+    if (threadId == null) return;
     // Its call card, so the inbox sweep does not announce it again.
     await recordMessageAnnounced(data);
     await showMissedCall(
-      listingId: listingId,
+      listingId: threadId,
+      storeId: _nonEmpty(data['storeId']),
       buyerId: data['buyerId'] as String?,
       myRole: data['myRole'] as String? ?? 'buyer',
       callerName: data['callerName'] as String? ?? 'Someone',

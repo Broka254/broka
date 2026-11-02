@@ -97,7 +97,10 @@ class _CallHistoryScreenState extends State<CallHistoryScreen> {
   /// The chat the call happened in - where its card is.
   void _openChat(CallRecord c) {
     Navigator.pushNamed(context, '/direct-chat', arguments: {
-      'listingId': c.listingId,
+      if (c.listingId != null) 'listingId': c.listingId,
+      if (c.storeId != null) 'storeId': c.storeId,
+      if (c.storeId != null) 'storeName': c.listingName,
+      if (c.storeId != null && c.myRole == 'buyer') 'seller_id': c.peer.id,
       'role':      c.myRole,
       'buyer_id':  c.buyerId,
     });
@@ -109,7 +112,8 @@ class _CallHistoryScreenState extends State<CallHistoryScreen> {
     await ZenoActionRunner.callOn(
       Navigator.of(context),
       ZenoContact(
-        listingId:   c.listingId,
+        listingId:   c.listingId ?? '',
+        storeId:     c.storeId,
         listingName: c.listingName,
         peerId:      c.peer.id,
         peerName:    c.peerDisplayName,

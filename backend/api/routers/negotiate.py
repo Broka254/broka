@@ -324,6 +324,25 @@ class MessageIn(BaseModel):
     reply_to_message_id: Optional[str] = Field(default=None, max_length=64)
 
 
+class DirectMessageIn(BaseModel):
+    """A message in either kind of direct conversation.
+
+    Listing negotiations and store-general threads share one engine, but a
+    message must name exactly one of them. This is deliberately separate
+    from MessageIn: that model belongs to POST /negotiate/message, where a
+    listing is always required and making it optional would let a malformed
+    store request reach the AI-broker handler.
+    """
+    listing_id:   Optional[str] = None
+    store_id:     Optional[str] = None
+    sender_role:  str
+    sender_id:    str
+    content:      str = Field(max_length=CHAT_CONTENT_MAX_CHARS)
+    buyer_id:     Optional[str] = None
+    client_msg_id: Optional[str] = Field(default=None, max_length=64)
+    reply_to_message_id: Optional[str] = Field(default=None, max_length=64)
+
+
 async def _econfirm_holds_funds(db: AsyncSession, deal: "Deal", action: str) -> bool:
     """True (and a reconciliation alert raised) when E-Confirm holds this
     deal's money, so a chat intent must not settle it.
@@ -3701,7 +3720,7 @@ def _direct_message_out(m: NegotiationMessage) -> dict:
 
 @router.post("/direct-message")
 async def direct_message(
-    data: MessageIn,
+    data: DirectMessageIn,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
@@ -3718,18 +3737,38 @@ async def direct_message(
     """
     authenticated_uid = current_user["id"]
 
-    result = await db.execute(select(Listing).where(Listing.id == data.listing_id))
-    listing = result.scalar_one_or_none()
-    if not listing:
-        raise HTTPException(status_code=404, detail="Listing not found")
+    if bool(data.listing_id) == bool(data.store_id):
+        raise HTTPException(status_code=400, detail="listing_id or store_id required")
 
-    actual_role = "seller" if authenticated_uid == listing.seller_id else "buyer"
+    listing = None
+    store = None
+    if data.store_id:
+        from api.models.store import Store
+        store = (await db.execute(
+            select(Store).where(
+                Store.id == data.store_id, Store.deleted_at.is_(None))
+        )).scalar_one_or_none()
+        if store is None:
+            raise HTTPException(status_code=404, detail="Store not found")
+        actual_role = "seller" if authenticated_uid == store.owner_id else "buyer"
+        thread_label = "store"
+    else:
+        result = await db.execute(select(Listing).where(Listing.id == data.listing_id))
+        listing = result.scalar_one_or_none()
+        if not listing:
+            raise HTTPException(status_code=404, detail="Listing not found")
+        actual_role = "seller" if authenticated_uid == listing.seller_id else "buyer"
+        thread_label = "listing"
     if data.sender_role != actual_role:
         raise HTTPException(status_code=403,
-            detail=f"Role mismatch: you are the {actual_role} of this listing.")
+            detail=f"Role mismatch: you are the {actual_role} of this {thread_label}.")
     if data.sender_id != authenticated_uid:
         raise HTTPException(status_code=403,
             detail="sender_id does not match authenticated user.")
+
+    content = (data.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
 
     from api.routers.media import sent_with_client_id
     client_msg_id = (data.client_msg_id or "").strip() or None
@@ -3744,7 +3783,7 @@ async def direct_message(
     # an unanswered question gets the seller a text had no timer behind it
     # here at all. Same transaction as the message: a send that fails must
     # not leave a seller due for a text about a question that never landed.
-    if actual_role == "buyer":
+    if actual_role == "buyer" and listing is not None:
         from api.core.interest_arming import arm_availability_nudge
         await arm_availability_nudge(
             db, data.listing_id, authenticated_uid, seller_id=listing.seller_id,
@@ -3756,6 +3795,16 @@ async def direct_message(
         authenticated_uid if actual_role == "buyer" else data.buyer_id
     )
     if not effective_buyer_id:
+        if data.store_id:
+            # A store can have many buyer conversations. "The most recent
+            # buyer" is a reasonable default for reading, but never for a
+            # write: a reply with no buyer_id could land in another
+            # shopper's thread. The caller's screen always knows which
+            # buyer it is answering.
+            raise HTTPException(
+                status_code=400,
+                detail="buyer_id is required for a store reply",
+            )
         # A seller whose app sent no buyer_id. This used to store the
         # message with buyer_id NULL - and a NULL row is shown in EVERY
         # buyer's thread on the listing (the legacy rule in /history), so a
@@ -3764,16 +3813,25 @@ async def direct_message(
         effective_buyer_id = await seller_default_buyer(db, data.listing_id)
         if not effective_buyer_id:
             raise HTTPException(status_code=400, detail="buyer_id required")
+    if data.store_id and actual_role == "seller" and not await _store_buyer_started_thread(
+        db, data.store_id, effective_buyer_id,
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="No existing conversation with this buyer",
+        )
     _ref, _preview = await _validate_reply_reference(
         db, (data.reply_to_message_id or "").strip() or None,
-        listing_id=data.listing_id, buyer_id=effective_buyer_id,
+        listing_id=data.listing_id, store_id=data.store_id,
+        buyer_id=effective_buyer_id,
     )
     direct_msg = NegotiationMessage(
         listing_id=data.listing_id,
+        store_id=data.store_id,
         sender_id=data.sender_id,
         role=data.sender_role,
         recipient_role=recipient,
-        content=data.content,
+        content=content,
         buyer_id=effective_buyer_id,
         via_ai=False,
         msg_type="text",
@@ -3790,7 +3848,8 @@ async def direct_message(
         await db.flush()
         await _audit_off_platform_solicitation(
             db, sender_id=authenticated_uid, message_id=direct_msg.id,
-            listing_id=data.listing_id, role=actual_role, content=data.content,
+            listing_id=data.listing_id or f"store:{data.store_id}",
+            role=actual_role, content=content,
         )
         await db.commit()
     except IntegrityError:
@@ -3803,13 +3862,21 @@ async def direct_message(
                 return {"ok": True, "message": _direct_message_out(earlier)}
         raise
     await db.refresh(direct_msg)
-    # Broadcast via WebSocket
+    # Broadcast through the same socket project as any other chat. Store
+    # threads use the store-keyed room; listing threads are unchanged.
     try:
-        from api.routers.media import broadcast_text_message
-        await broadcast_text_message(
-            data.listing_id, effective_buyer_id,
-            direct_msg, authenticated_uid, actual_role == "seller"
-        )
+        if data.store_id:
+            from api.routers.media import broadcast_store_text_message
+            await broadcast_store_text_message(
+                data.store_id, effective_buyer_id,
+                direct_msg, authenticated_uid, actual_role == "seller"
+            )
+        else:
+            from api.routers.media import broadcast_text_message
+            await broadcast_text_message(
+                data.listing_id, effective_buyer_id,
+                direct_msg, authenticated_uid, actual_role == "seller"
+            )
     except Exception:
         pass
     return {"ok": True, "message": _direct_message_out(direct_msg)}
@@ -4639,6 +4706,31 @@ async def _store_default_buyer(db: AsyncSession, store_id: str) -> Optional[str]
     return result.scalar_one_or_none()
 
 
+async def _store_buyer_started_thread(
+    db: AsyncSession, store_id: str, buyer_id: str,
+) -> bool:
+    """Whether this shopper has actually opened the store conversation.
+
+    A buyer id is not a capability. Without this check the owner could name
+    any account as ``buyer_id`` and create a thread to them, even though
+    that person never visited the store. Calls already require a prior row;
+    text and media must use the same relationship rule so an owner can only
+    answer someone who spoke to the shop first.
+    """
+    # visibility-ok: existence check by thread ids and roles, no content.
+    result = await db.execute(
+        select(NegotiationMessage.id)
+        .where(
+            NegotiationMessage.store_id == store_id,
+            NegotiationMessage.buyer_id == buyer_id,
+            NegotiationMessage.sender_id == buyer_id,
+            NegotiationMessage.role == "buyer",
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
 def _store_role(store, uid: str) -> str:
     return "seller" if uid == store.owner_id else "buyer"
 
@@ -4660,83 +4752,21 @@ async def store_direct_message(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Persist a direct buyer↔store-owner message (no AI, no listing)."""
-    authenticated_uid = current_user["id"]
-    store = await _store_for_chat(db, store_id)
-    actual_role = _store_role(store, authenticated_uid)
-    if data.sender_role != actual_role:
-        raise HTTPException(status_code=403,
-            detail=f"Role mismatch: you are the {actual_role} of this store.")
-    if data.sender_id != authenticated_uid:
-        raise HTTPException(status_code=403,
-            detail="sender_id does not match authenticated user.")
-    content = (data.content or "").strip()
-    if not content:
-        raise HTTPException(status_code=400, detail="Message cannot be empty.")
-    if actual_role == "seller" and authenticated_uid == store.owner_id and not data.buyer_id:
-        # An owner opening their own store chat with nobody to talk to.
-        pass
-    effective_buyer_id: Optional[str] = (
-        authenticated_uid if actual_role == "buyer" else data.buyer_id
+    """Compatibility route for older app builds; one thread engine."""
+    return await direct_message(
+        DirectMessageIn(
+            listing_id=None,
+            store_id=store_id,
+            sender_role=data.sender_role,
+            sender_id=data.sender_id,
+            content=data.content,
+            buyer_id=data.buyer_id,
+            client_msg_id=data.client_msg_id,
+            reply_to_message_id=data.reply_to_message_id,
+        ),
+        db=db,
+        current_user=current_user,
     )
-    if actual_role == "buyer" and authenticated_uid == store.owner_id:
-        raise HTTPException(status_code=400, detail="You cannot message your own store.")
-    if not effective_buyer_id:
-        effective_buyer_id = await _store_default_buyer(db, store_id)
-        if not effective_buyer_id:
-            raise HTTPException(status_code=400, detail="buyer_id required")
-
-    from api.routers.media import sent_with_client_id
-    client_msg_id = (data.client_msg_id or "").strip() or None
-    if client_msg_id:
-        earlier = await sent_with_client_id(db, authenticated_uid, client_msg_id)
-        if earlier is not None:
-            return {"ok": True, "message": _direct_message_out(earlier)}
-
-    _ref, _preview = await _validate_reply_reference(
-        db, (data.reply_to_message_id or "").strip() or None,
-        store_id=store_id, buyer_id=effective_buyer_id,
-    )
-    recipient = "seller" if actual_role == "buyer" else "buyer"
-    direct_msg = NegotiationMessage(
-        listing_id=None,
-        store_id=store_id,
-        sender_id=data.sender_id,
-        role=data.sender_role,
-        recipient_role=recipient,
-        content=content,
-        buyer_id=effective_buyer_id,
-        via_ai=False,
-        msg_type="text",
-        client_msg_id=client_msg_id,
-        reply_to_message_id=((data.reply_to_message_id or "").strip() or None),
-        reply_snapshot=_reply_snapshot_json(_preview),
-    )
-    db.add(direct_msg)
-    try:
-        await db.flush()
-        await _audit_off_platform_solicitation(
-            db, sender_id=authenticated_uid, message_id=direct_msg.id,
-            listing_id=f"store:{store_id}", role=actual_role, content=content,
-        )
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
-        if client_msg_id:
-            earlier = await sent_with_client_id(db, authenticated_uid, client_msg_id)
-            if earlier is not None:
-                return {"ok": True, "message": _direct_message_out(earlier)}
-        raise
-    await db.refresh(direct_msg)
-    try:
-        from api.routers.media import broadcast_store_text_message
-        await broadcast_store_text_message(
-            store_id, effective_buyer_id,
-            direct_msg, authenticated_uid, actual_role == "seller"
-        )
-    except Exception:
-        pass
-    return {"ok": True, "message": _direct_message_out(direct_msg)}
 
 
 @router.get("/store/{store_id}/history", response_model=List[MessageOut])
@@ -4786,10 +4816,14 @@ async def get_store_history(
     try:
         import json as _json
         by_id = {}
-        # visibility-ok: reply-preview lookup inside this store thread; rows are
-        # re-checked for store, via_ai and role before any preview is built
+        # visibility-ok: reply-preview lookup inside this store thread; the
+        # buyer scope is repeated here because loading every buyer's rows
+        # would let a crafted reply id borrow another shopper's preview.
         result2 = await db.execute(
-            select(NegotiationMessage).where(NegotiationMessage.store_id == store_id)
+            select(NegotiationMessage).where(
+                NegotiationMessage.store_id == store_id,
+                NegotiationMessage.buyer_id == effective_buyer_id,
+            )
         )
         for r in result2.scalars().all():
             by_id[r.id] = r
@@ -4804,11 +4838,41 @@ async def get_store_history(
             if o.reply_to_message_id and o.reply_preview is None:
                 ref = by_id.get(o.reply_to_message_id)
                 if ref is not None and getattr(ref, "store_id", None) == store_id \
+                        and getattr(ref, "buyer_id", None) == effective_buyer_id \
                         and not bool(getattr(ref, "via_ai", False)) and ref.role in ("buyer", "seller"):
                     o.reply_preview = _reply_preview_for(ref)
     except Exception:
         pass
     return out
+
+
+@router.get("/store/{store_id}/thread-info")
+async def get_store_thread_info(
+    store_id: str,
+    buyer_id: Optional[str] = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """The other person's id for a store thread.
+
+    The public store payload deliberately carries no owner id: store pages
+    are indexed and shared, and nothing on one needs it. The chat still
+    needs it to load the owner's presence and photo, especially when it was
+    opened from a store link or a notification whose payload predates the
+    store thread. Resolve it here, for a signed-in participant, instead of
+    widening the public store response.
+    """
+    store, role, effective_buyer_id = await _resolve_store_thread(
+        db, store_id, buyer_id, current_user)
+    if role == "seller" and not effective_buyer_id:
+        raise HTTPException(status_code=400, detail="buyer_id required")
+    return {
+        "store_id": store.id,
+        "store_name": store.name,
+        "role": role,
+        "buyer_id": effective_buyer_id or None,
+        "counterpart_id": store.owner_id if role == "buyer" else effective_buyer_id,
+    }
 
 
 @router.post("/store/{store_id}/mark-delivered")

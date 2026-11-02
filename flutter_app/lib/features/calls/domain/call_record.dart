@@ -27,6 +27,7 @@ class CallRecord {
   const CallRecord({
     required this.id,
     required this.listingId,
+    this.storeId,
     required this.listingName,
     required this.buyerId,
     required this.myRole,
@@ -40,7 +41,9 @@ class CallRecord {
   });
 
   final String id;
-  final String listingId;
+  /// Exactly one of [listingId] and [storeId] identifies the conversation.
+  final String? listingId;
+  final String? storeId;
   final String listingName;
 
   /// The thread's buyer - what a seller needs to open or call the thread.
@@ -76,14 +79,23 @@ class CallRecord {
 
   static CallRecord? fromJson(Map<String, dynamic> j, Map<String, CallPeer> people) {
     final id = j['id'] as String?;
-    final listingId = j['listing_id'] as String?;
+    String? nonEmpty(Object? value) =>
+        value is String && value.isNotEmpty ? value : null;
+    final listingId = nonEmpty(j['listing_id']);
+    final storeId = nonEmpty(j['store_id']);
     final peerId = j['peer_id'] as String?;
     final buyerId = j['buyer_id'] as String?;
-    if (id == null || listingId == null || peerId == null || buyerId == null) return null;
+    if (id == null || (listingId == null) == (storeId == null) ||
+        peerId == null || buyerId == null) {
+      return null;
+    }
     return CallRecord(
       id: id,
       listingId: listingId,
-      listingName: j['listing_name'] as String? ?? '',
+      storeId: storeId,
+      listingName: (j['listing_name'] as String?)?.isNotEmpty == true
+          ? j['listing_name'] as String
+          : (j['store_name'] as String? ?? ''),
       buyerId: buyerId,
       myRole: j['my_role'] == 'seller' ? 'seller' : 'buyer',
       peer: people[peerId] ?? CallPeer(id: peerId, name: ''),

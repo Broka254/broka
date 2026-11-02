@@ -374,7 +374,7 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
   Future<void> _messageStore(Store store) async {
     if (!await requireAuth(context, reason: 'to message this store')) return;
     if (!mounted) return;
-    Navigator.pushNamed(context, '/store-chat', arguments: {
+    Navigator.pushNamed(context, '/direct-chat', arguments: {
       'storeId': store.id,
       'storeName': store.name,
       'role': 'buyer',

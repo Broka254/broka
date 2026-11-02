@@ -19,6 +19,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:image/image.dart' as img;
 import '../widgets/aspect_image.dart';
+import '../widgets/broka_image.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../features/escrow/presentation/escrow_actions.dart';
@@ -189,6 +190,7 @@ class _PendingUpload {
     required this.bytes, required this.contentType, required this.fileName,
     required this.mimeType, this.durationSecs,
     this.replyToMessageId, this.replyPreview, this.caption,
+    this.listingId, this.storeId, this.buyerId,
     this.progress = 0,
   });
   final Uint8List bytes;
@@ -199,6 +201,11 @@ class _PendingUpload {
   final String? replyToMessageId;
   final Map<String, dynamic>? replyPreview;
   final String? caption;
+  /// The conversation this upload belongs to. A retry must go back there,
+  /// never to whichever chat happens to be open when the app restarts.
+  final String? listingId;
+  final String? storeId;
+  final String? buyerId;
   /// 0..1 bytes handed to the socket. Mutable on purpose: progress ticks
   /// must not rebuild the message list's immutable snapshots.
   double progress;
@@ -234,12 +241,16 @@ class _ChatMediaOutbox {
   }
 
   static Future<void> writeMeta(String clientId,
-      {String? replyToMessageId, String? caption}) async {
+      {String? replyToMessageId, String? caption,
+      String? listingId, String? storeId, String? buyerId}) async {
     try {
       final dir = await _dir();
       await File('${dir.path}/${_safeId(clientId)}.json').writeAsString(jsonEncode({
         'reply_to_message_id': replyToMessageId,
         'caption': caption,
+        'listing_id': listingId,
+        'store_id': storeId,
+        'buyer_id': buyerId,
       }));
     } catch (_) {}
   }
@@ -282,11 +293,27 @@ class _ChatMediaOutbox {
     }
   }
 
-  static Future<List<({String clientId, String path, String? replyToMessageId, String? caption})>> list() async {
+  static Future<List<({
+    String clientId,
+    String path,
+    String? replyToMessageId,
+    String? caption,
+    String? listingId,
+    String? storeId,
+    String? buyerId,
+  })>> list() async {
     try {
       final dir = await _dir();
       if (!await dir.exists()) return [];
-      final out = <({String clientId, String path, String? replyToMessageId, String? caption})>[];
+      final out = <({
+        String clientId,
+        String path,
+        String? replyToMessageId,
+        String? caption,
+        String? listingId,
+        String? storeId,
+        String? buyerId,
+      })>[];
       await for (final e in dir.list()) {
         if (e is! File) continue;
         final base = e.path.split('/').last;
@@ -297,15 +324,25 @@ class _ChatMediaOutbox {
         final id = base.substring(0, dot);
         String? replyTo;
         String? caption;
+        String? listingId;
+        String? storeId;
+        String? buyerId;
         try {
           final meta = File('${dir.path}/$id.json');
           if (await meta.exists()) {
             final m = jsonDecode(await meta.readAsString()) as Map;
             replyTo = m['reply_to_message_id'] as String?;
             caption = m['caption'] as String?;
+            listingId = m['listing_id'] as String?;
+            storeId = m['store_id'] as String?;
+            buyerId = m['buyer_id'] as String?;
           }
         } catch (_) {}
-        out.add((clientId: id, path: e.path, replyToMessageId: replyTo, caption: caption));
+        out.add((
+          clientId: id, path: e.path, replyToMessageId: replyTo,
+          caption: caption, listingId: listingId, storeId: storeId,
+          buyerId: buyerId,
+        ));
       }
       return out;
     } catch (_) {
@@ -329,10 +366,27 @@ class NegotiationScreen extends StatefulWidget {
 class _NegotiationScreenState extends State<NegotiationScreen>
     with WidgetsBindingObserver {
   Listing?          _listing;
+  // A store-general conversation has no listing. It shares every part of
+  // this screen with listing chats, but its server thread is keyed by
+  // (store_id, buyer_id) so archived products cannot take it away.
+  String?           _storeId;
+  String            _storeName = '';
+  String?           _storeLogo;
+  String?           _storeOwnerId;
+  String?           _passedCounterpartName;
+  String?           _threadArgError;
+  bool              _routeArgsRead = false;
   List<ChatMessage> _messages = [];
   bool              _loading  = true;
   String            _role     = 'buyer';
   String?           _buyerId; // the buyer in this thread (may differ from current user when seller views)
+
+  bool get _isStoreThread => _storeId != null && _storeId!.isNotEmpty;
+  bool get _hasThread => _isStoreThread || _listing != null;
+  /// The canonical conversation id. The server's push tags use the same
+  /// `store:<id>` form, so app notifications replace server ones instead of
+  /// stacking a second copy.
+  String? get _threadId => _isStoreThread ? 'store:$_storeId' : _listing?.id;
 
   // WebSocket
   WebSocketChannel? _ws;
@@ -418,7 +472,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   /// first offline frame already shows the honest ticks, not "Sent".
   /// Idempotent per thread scope; safe to call from every load path.
   Future<void> _restoreReceiptWatermarks() async {
-    if (_receiptsRestored || _listing == null) return;
+    if (_receiptsRestored || !_hasThread) return;
     _receiptsRestored = true;
     final saved = await LocalChatStore.loadReceipts(_threadScopeKey());
     if (!mounted) return;
@@ -490,13 +544,42 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_listing == null) {
+    if (!_routeArgsRead) {
+      _routeArgsRead = true;
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is Map) {
+        String? clean(Object? value) {
+          final trimmed = value is String ? value.trim() : '';
+          return trimmed.isEmpty ? null : trimmed;
+        }
+
+        final storeId = clean(args['storeId']) ?? clean(args['store_id']);
         final la = args['listing'];
-        if (la is Listing) {
-          _listing = la;
-        } else if (la is Map) _listing = Listing.fromJson(Map<String, dynamic>.from(la));
+        final passedListing = la is Listing
+            ? la
+            : la is Map
+                ? Listing.fromJson(Map<String, dynamic>.from(la))
+                : null;
+        final listingId = clean(args['listingId']) ??
+            (la is String ? clean(la) : null);
+        // The backend accepts exactly one thread identity. Reject a route
+        // carrying both here too; silently preferring the store used to
+        // leave the product id in the screen arguments where a call or a
+        // restored route could send the wrong identity.
+        if (storeId != null && (passedListing != null || listingId != null)) {
+          _threadArgError = 'This chat opens both a store and a product.';
+          return;
+        }
+
+        _storeId = storeId;
+        _listing = passedListing;
+        if (_storeId != null && _storeId!.isNotEmpty) {
+          _storeName = (args['storeName'] as String?)?.trim() ?? '';
+          _storeLogo = args['storeLogo'] as String?;
+          _storeOwnerId = (args['seller_id'] as String?) ??
+              (args['counterpartId'] as String?);
+          _passedCounterpartName = args['counterpartName'] as String?;
+        }
         final passedRole = args['role'] as String?;
         _role = passedRole ?? _detectRole();
         // buyer_id passed from inbox screen (identifies the thread for sellers)
@@ -506,10 +589,10 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         final dealArg = args['deal'] as Map<String, dynamic>?;
         if (dealArg != null) _dealInfo = dealArg;
 
-        if (_listing == null && args['listingId'] is String) {
+        if (!_hasThread && listingId != null) {
           // Restored from a relaunch - only the ID was persisted.
           _role = passedRole ?? args['role'] as String? ?? 'buyer';
-          _restoreFromListingId(args['listingId'] as String);
+          _restoreFromListingId(listingId);
           return;
         }
       } else if (args is Listing) {
@@ -517,10 +600,22 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         _role = _detectRole();
         _buyerId = _role == 'buyer' ? ApiService.currentUserId : null;
       }
-      if (_listing != null) {
-        LastScreenTracker.save('/direct-chat',
-            {'listingId': _listing!.id, 'role': _role, 'buyer_id': _buyerId});
-        GlobalPollerService.instance.markScreenActive(_listing!.id, buyerId: _buyerId);
+      if (_hasThread) {
+        if (_isStoreThread) {
+          LastScreenTracker.save('/direct-chat', {
+            'storeId': _storeId,
+            'storeName': _storeName,
+            'role': _role,
+            'buyer_id': _buyerId,
+          });
+          GlobalPollerService.instance
+              .markStoreScreenActive(_storeId!, buyerId: _buyerId);
+        } else {
+          LastScreenTracker.save('/direct-chat',
+              {'listingId': _listing!.id, 'role': _role, 'buyer_id': _buyerId});
+          GlobalPollerService.instance
+              .markScreenActive(_listing!.id, buyerId: _buyerId);
+        }
         _startThread();
       }
     }
@@ -530,7 +625,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   void _startThread() {
     // The Inbox opens this thread here next time, not in Zeno's room
     // (ChatScreenMemory).
-    unawaited(ChatScreenMemory.remember(_listing!.id, _buyerId, ChatScreen.direct));
+    if (!_isStoreThread) {
+      unawaited(ChatScreenMemory.remember(_listing!.id, _buyerId, ChatScreen.direct));
+    }
     // A new thread scope: drop the previous thread's bubble keys so a stale
     // key can never reveal the wrong bubble.
     _bubbleKeys.clear();
@@ -555,7 +652,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     // now ring through NotificationService.showIncomingCall alone, which
     // knows when the phone is already on one (ActiveCall).
     _pollTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-      if (_listing == null || !mounted) return;
+      if (!_hasThread || !mounted) return;
       if (!_wsConnected) {
         _pollNewMessages();
         // Receipts too: without the socket, nothing else brings them.
@@ -575,7 +672,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       _sendStopTyping();
       _clearRemoteTyping();
     }
-    if (!visible || _listing == null) return;
+    if (!visible || !_hasThread) return;
     // Back on screen: what arrived meanwhile has now been seen, and the
     // socket the OS may have closed in the background is reopened.
     if (!_wsConnected) {
@@ -596,6 +693,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   int _zenoUnreadCount = 0;
 
   Future<void> _refreshZenoUnreadCount() async {
+    if (_isStoreThread) return;
     final listing = _listing;
     if (listing == null) return;
     final counts = await ApiService.getUnreadCounts(listing.id, buyerId: _buyerId);
@@ -620,8 +718,36 @@ class _NegotiationScreenState extends State<NegotiationScreen>
           fontWeight: FontWeight.w800, fontSize: 16)));
 
   Future<void> _loadCounterpartyInfo() async {
-    if (_listing == null) return;
-    final counterpartyId = _counterpartyId;
+    if (!_hasThread) return;
+    var counterpartyId = _counterpartyId;
+    if (counterpartyId == null && _isStoreThread) {
+      // Storefront and deep-link routes carry the store, not its owner.
+      // The public store payload cannot supply the id, so ask the signed-in
+      // thread endpoint the backend already uses to resolve its participants.
+      try {
+        final thread = await ApiService.getStoreThreadInfo(
+            _storeId!, buyerId: _role == 'seller' ? _buyerId : null);
+        counterpartyId = thread['counterpart_id'] as String?;
+        if (mounted) {
+          final threadStoreName = (thread['store_name'] as String?)?.trim() ?? '';
+          setState(() {
+            if (counterpartyId != null && counterpartyId.isNotEmpty) {
+              if (_role == 'buyer') {
+                _storeOwnerId = counterpartyId;
+              } else {
+                _buyerId ??= counterpartyId;
+              }
+            }
+            if (_storeName.trim().isEmpty && threadStoreName.isNotEmpty) {
+              _storeName = threadStoreName;
+            }
+          });
+        }
+      } catch (_) {
+        // Older backend or offline: the conversation still works, it just
+        // cannot show fresh owner presence.
+      }
+    }
     if (counterpartyId == null) return;
     // Render the cached profile immediately so the header keeps the known
     // name and photo while offline; the network only ever refreshes it.
@@ -650,26 +776,41 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   bool get _counterpartyOnline => (_counterpartyInfo?['is_online'] as bool?) ?? false;
   /// The other person in the thread - the seller, or for a seller the
   /// buyer they opened.
-  String? get _counterpartyId => _role == 'buyer' ? _listing?.sellerId : _buyerId;
+  String? get _counterpartyId => _isStoreThread
+      ? (_role == 'buyer' ? _storeOwnerId : _buyerId)
+      : (_role == 'buyer' ? _listing?.sellerId : _buyerId);
   /// Their name. A seller saw "Buyer" here, on the call screen and in the
   /// call prompt - never the buyer's name, although the profile this chat
   /// loads for their photo and presence carries it. A buyer sees the name
   /// the listing gives its seller (a business's name, when it has one), as
   /// before.
   String get _counterpartyName {
+    if (_isStoreThread && _role == 'buyer') {
+      if (_storeName.trim().isNotEmpty) return _storeName.trim();
+      final passed = _passedCounterpartName?.trim() ?? '';
+      if (passed.isNotEmpty) return passed;
+      return 'Store';
+    }
     final profile = (_counterpartyInfo?['name'] as String?)?.trim() ?? '';
-    if (_role == 'buyer') {
+    if (!_isStoreThread && _role == 'buyer') {
       final listed = _listing?.sellerName?.trim() ?? '';
       if (listed.isNotEmpty) return listed;
       return profile.isNotEmpty ? profile : 'Seller';
     }
-    return profile.isNotEmpty ? profile : 'Buyer';
+    final passed = _passedCounterpartName?.trim() ?? '';
+    if (profile.isNotEmpty) return profile;
+    return passed.isNotEmpty ? passed : 'Buyer';
   }
   String? get _counterpartyLastSeen => _counterpartyInfo?['last_seen_label'] as String?;
   // Already on the payload _loadCounterpartyInfo fetches - the screen just
   // never read it. Used by the call screen's avatar and the header below,
   // both of which were falling back to a single initial.
   String? get _counterpartyPhoto => _counterpartyInfo?['profile_photo'] as String?;
+
+  /// A shop's own logo stands in for the owner's face in a buyer's store
+  /// conversation; the seller still sees the buyer's profile photo.
+  String? get _headerPhotoSource =>
+      _isStoreThread && _role == 'buyer' ? _storeLogo : _counterpartyPhoto;
 
   Future<void> _restoreFromListingId(String listingId) async {
     try {
@@ -700,16 +841,17 @@ class _NegotiationScreenState extends State<NegotiationScreen>
 
   void _connectWebSocket() {
     _wsReconnectTimer?.cancel();
-    final listing = _listing;
     final token   = ApiService.authToken;
-    if (listing == null || token == null || !mounted) return;
+    if (!_hasThread || token == null || !mounted) return;
 
     // Build WS URL: replace http(s) with ws(s)
     final base = ApiService.baseUrl
         .replaceFirst('https://', 'wss://')
         .replaceFirst('http://',  'ws://');
 
-    var url = '$base/media/ws/${listing.id}?token=$token';
+    var url = _isStoreThread
+        ? '$base/media/ws/store/${_storeId}?token=$token'
+        : '$base/media/ws/${_listing!.id}?token=$token';
     if (_role == 'seller' && _buyerId != null) {
       url += '&buyer_id=$_buyerId';
     }
@@ -1015,8 +1157,8 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   /// A message that arrived while the app is in the background. On screen
   /// it needs no notification - it is right there.
   void _notifyIfAway(ChatMessage cm) {
-    final listing = _listing;
-    if (_appVisible || listing == null || cm.msgType == 'call') return;
+    final threadId = _threadId;
+    if (_appVisible || threadId == null || cm.msgType == 'call') return;
     // The server pushes every message, and Android shows that push with the
     // app in any state - posting this one too would buzz twice.
     if (GlobalPollerService.instance.pushReady) return;
@@ -1031,11 +1173,12 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       preview: preview,
       // One notification per conversation, shared with GlobalPollerService
       // and the server's push (NotificationService.threadTag).
-      listingId: listing.id,
+      listingId: threadId,
       buyerId: _buyerId,
       payload: {
         'type': 'new_message',
-        'listingId': listing.id,
+        if (!_isStoreThread) 'listingId': _listing?.id,
+        if (_isStoreThread) 'storeId': _storeId,
         'buyerId': _buyerId,
         'myRole': _role,
       },
@@ -1192,18 +1335,34 @@ class _NegotiationScreenState extends State<NegotiationScreen>
 
   // ── Offline persistence ────────────────────────────────────────────────────
   // Thread-scoped cache key so buyer/seller/listing combinations never collide.
-  String _threadScopeKey() => 'direct_${_listing?.id}_${_buyerId ?? ''}';
+  String _threadScopeKey() => 'direct_${_threadId ?? ''}_${_buyerId ?? ''}';
+
+  String? get _threadBuyerId => _role == 'buyer'
+      ? (_buyerId ?? ApiService.currentUserId)
+      : _buyerId;
+
+  /// Whether an upload's persisted identity is this exact conversation.
+  /// Empty strings are null here so a missing legacy field cannot match a
+  /// real thread by accident.
+  bool _isCurrentThread({
+    String? listingId,
+    String? storeId,
+    String? buyerId,
+  }) =>
+      (listingId ?? '') == (_listing?.id ?? '') &&
+      (storeId ?? '') == (_storeId ?? '') &&
+      (buyerId ?? '') == (_threadBuyerId ?? '');
 
   /// Show whatever was last cached on-device immediately, before the network
   /// call even starts - this is what makes the thread visible instantly even
   /// with no connection at all, the same way WhatsApp opens a chat straight
   /// into its history rather than a blank/loading screen.
   Future<void> _loadCachedMessages() async {
-    if (_listing == null) return;
+    if (!_hasThread) return;
     // Watermarks first: the cached bubbles render their ticks from these,
     // so the offline frame must not show "Sent" for already-seen messages.
     await _restoreReceiptWatermarks();
-    if (!mounted || _listing == null) return;
+    if (!mounted || !_hasThread) return;
     final cached = await LocalChatStore.load(_threadScopeKey());
     if (cached.isEmpty || !mounted || _messages.isNotEmpty) return;
     try {
@@ -1263,12 +1422,13 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   /// whenever I load/receive messages while this screen is open, plus every
   /// 30s via _presenceRefreshTimer.
   Future<void> _syncReadState() async {
-    final listing = _listing;
-    if (listing == null) return;
+    if (!_hasThread) return;
     if (_appVisible) {
-      unawaited(ApiService.markThreadRead(listing.id, buyerId: _buyerId));
+      unawaited(ApiService.markThreadRead(_listing?.id,
+          storeId: _storeId, buyerId: _buyerId));
     } else {
-      unawaited(ApiService.markThreadDelivered(listing.id, buyerId: _buyerId));
+      unawaited(ApiService.markThreadDelivered(_listing?.id,
+          storeId: _storeId, buyerId: _buyerId));
     }
     await _refreshReceipts();
   }
@@ -1277,9 +1437,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   /// changes nothing: it used to come back as "never read", which turned
   /// every seen tick back to a single grey one until the next poll.
   Future<void> _refreshReceipts() async {
-    final listing = _listing;
-    if (listing == null) return;
-    final status = await ApiService.getReadStatus(listing.id, buyerId: _buyerId);
+    if (!_hasThread) return;
+    final status = await ApiService.getReadStatus(_listing?.id,
+        storeId: _storeId, buyerId: _buyerId);
     if (status == null || !mounted) return;
     final other = _role == 'buyer' ? 'seller' : 'buyer';
     setState(() {
@@ -1293,8 +1453,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
 
   Future<void> _loadHistory() async {
     try {
-      final history = await ApiService.getNegotiationHistory(
-        _listing!.id,
+      final history = await ApiService.getThreadHistory(
+        listingId: _listing?.id,
+        storeId: _storeId,
         buyerId: _role == 'seller' ? _buyerId : null,
       );
       // Direct chat shows ONLY the buyer<->seller conversation. Zeno
@@ -1325,11 +1486,11 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   }
 
   Future<void> _pollNewMessages() async {
-    final listing = _listing;
-    if (listing == null) return;
+    if (!_hasThread) return;
     try {
-      final history = await ApiService.getNegotiationHistory(
-        listing.id,
+      final history = await ApiService.getThreadHistory(
+        listingId: _listing?.id,
+        storeId: _storeId,
         buyerId: _role == 'seller' ? _buyerId : null,
       );
       if (!mounted) return;
@@ -1392,7 +1553,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
 
   Future<void> _send() async {
     final text = _msgCtrl.text.trim();
-    if (text.isEmpty || _listing == null) return;
+    if (text.isEmpty || !_hasThread) return;
     _sendStopTyping();
     final clientId = _newClientId();
     final reply = _replyTo;
@@ -1413,11 +1574,11 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   }
 
   Future<void> _deliverText(String clientId, String text, {String? replyToMessageId}) async {
-    final listing = _listing;
-    if (listing == null) return;
+    if (!_hasThread) return;
     try {
       final saved = await ApiService.sendDirectMessage(
-        listingId:   listing.id,
+        listingId:   _listing?.id,
+        storeId:     _storeId,
         senderRole:  _role,
         senderId:    ApiService.currentUserId ?? 'anon',
         content:     text,
@@ -1451,19 +1612,28 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   }
 
   Future<void> _deliverUpload(String clientId) async {
-    final listing = _listing;
     final upload = _uploads[clientId];
-    if (listing == null || upload == null) return;
+    if (!_hasThread || upload == null) return;
+    if (!_isCurrentThread(
+      listingId: upload.listingId,
+      storeId: upload.storeId,
+      buyerId: upload.buyerId,
+    )) {
+      _markFailed(clientId);
+      _notSent('This message belongs to another conversation.');
+      return;
+    }
     try {
       final saved = await ApiService.uploadMedia(
-        listingId:    listing.id,
+        listingId:    upload.listingId ?? _listing?.id,
+        storeId:      upload.storeId ?? _storeId,
         senderRole:   _role,
         senderId:     ApiService.currentUserId ?? 'anon',
         contentType:  upload.contentType,
         fileBytes:    upload.bytes,
         fileName:     upload.fileName,
         mimeType:     upload.mimeType,
-        buyerId:      _buyerId,
+        buyerId:      upload.buyerId ?? _threadBuyerId,
         durationSecs: upload.durationSecs,
         clientMsgId:  clientId,
         // Voice notes ride the same reply/caption contract as photos.
@@ -1885,6 +2055,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       mimeType: 'audio/mp4', durationSecs: duration,
       replyToMessageId: reply?.id.isEmpty == true ? null : reply?.id,
       replyPreview: reply == null ? null : _replySnapshotOf(reply),
+      listingId: _listing?.id, storeId: _storeId, buyerId: _threadBuyerId,
     );
     setState(() {
       _messages.add(ChatMessage(
@@ -2194,7 +2365,8 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       if (stored == null || !mounted) return;
       await _ChatMediaOutbox.writeMeta(clientId,
           replyToMessageId: reply?.id.isEmpty == true ? null : reply?.id,
-          caption: caption);
+          caption: caption, listingId: _listing?.id, storeId: _storeId,
+          buyerId: _threadBuyerId);
       _uploads[clientId] = _PendingUpload(
         bytes: fitted.bytes,
         contentType: 'image',
@@ -2203,6 +2375,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         replyToMessageId: reply?.id.isEmpty == true ? null : reply?.id,
         replyPreview: reply == null ? null : _replySnapshotOf(reply),
         caption: caption,
+        listingId: _listing?.id, storeId: _storeId, buyerId: _threadBuyerId,
       );
       setState(() {
         _messages.add(ChatMessage(
@@ -2231,22 +2404,31 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   /// Upload from the outbox file (not the in-memory bytes). Cleans the
   /// temporary file once the server has the image or the bubble is dropped.
   Future<void> _deliverOutboxUpload(String clientId, String storedPath) async {
-    final listing = _listing;
-    if (listing == null) return;
+    if (!_hasThread) return;
     try {
       final bytes = await File(storedPath).readAsBytes();
       // A retry reuses the staged format, not the raw pick: the server
       // must see the same file the idempotency key was first sent with.
       final staged = _uploads[clientId];
+      if (staged != null && !_isCurrentThread(
+        listingId: staged.listingId,
+        storeId: staged.storeId,
+        buyerId: staged.buyerId,
+      )) {
+        _markFailed(clientId);
+        _notSent('This photo belongs to another conversation.');
+        return;
+      }
       final saved = await ApiService.uploadMedia(
-        listingId: listing.id,
+        listingId: staged?.listingId ?? _listing?.id,
+        storeId: staged?.storeId ?? _storeId,
         senderRole: _role,
         senderId: ApiService.currentUserId ?? 'anon',
         contentType: 'image',
         fileBytes: bytes,
         fileName: staged?.fileName ?? 'image.jpg',
         mimeType: staged?.mimeType ?? 'image/jpeg',
-        buyerId: _buyerId,
+        buyerId: staged?.buyerId ?? _threadBuyerId,
         clientMsgId: clientId,
         replyToMessageId: staged?.replyToMessageId,
         caption: staged?.caption,
@@ -2277,6 +2459,13 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       final entries = await _ChatMediaOutbox.list();
       for (final entry in entries) {
         if (_uploads.containsKey(entry.clientId)) continue;
+        if (!_isCurrentThread(
+          listingId: entry.listingId,
+          storeId: entry.storeId,
+          buyerId: entry.buyerId,
+        )) {
+          continue;
+        }
         try {
           final bytes = await File(entry.path).readAsBytes();
           _uploads[entry.clientId] = _PendingUpload(
@@ -2284,6 +2473,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
             mimeType: 'image/jpeg',
             replyToMessageId: entry.replyToMessageId,
             caption: entry.caption,
+            listingId: entry.listingId,
+            storeId: entry.storeId,
+            buyerId: entry.buyerId,
           );
         } catch (_) {}
       }
@@ -2339,8 +2531,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   // ── Audio/Video call ───────────────────────────────────────────────────────
 
   Future<void> _initiateCall(String callType) async {
+    if (!_hasThread) return;
     final listing = _listing;
-    if (listing == null) return;
+    final threadName = _isStoreThread ? _storeName : (listing?.name ?? '');
     final isVideo = callType == 'video';
     final confirm = await showDialog<bool>(
       context: context,
@@ -2390,7 +2583,10 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       // backend can't infer which buyer to ring the way it can infer
       // the seller).
       final setup = ApiService.initiateCall(
-        listingId: listing.id, listingName: listing.name, callType: callType,
+        listingId: listing?.id,
+        storeId: _storeId,
+        listingName: threadName,
+        callType: callType,
         calleeId: _role == 'seller' ? _buyerId : null);
       if (!mounted) return;
       Navigator.pushNamed(context, '/voip-call', arguments: {
@@ -2401,10 +2597,12 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         // Lets the call screen fetch the name itself when the profile
         // hadn't loaded by the time the call was placed.
         'peerId': _counterpartyId,
-        'peerPhoto': _counterpartyPhoto,
+        'peerPhoto': _headerPhotoSource,
         'peerOnline': _counterpartyOnline,
-        'listingName': listing.name, 'isCaller': true,
-        'listingId': listing.id, 'buyerId': buyerId, 'callerRole': _role,
+        'listingName': threadName, 'isCaller': true,
+        if (listing != null) 'listingId': listing.id,
+        if (_isStoreThread) 'storeId': _storeId,
+        'buyerId': buyerId, 'callerRole': _role,
         'callType': callType,
       });
     }
@@ -2460,6 +2658,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   }
 
   Future<void> _openZenoAi() async {
+    if (_isStoreThread) return;
     // Zeno's room tells the server it has been seen as it opens.
     setState(() => _zenoUnreadCount = 0);
     // buyer_id names the thread for a seller. Dropping it here (and on the
@@ -2479,7 +2678,10 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     _remoteTypingExpiry?.cancel();
     _highlightTimer?.cancel();
     _bubbleKeys.clear();
-    if (_listing != null) {
+    if (_isStoreThread) {
+      GlobalPollerService.instance
+          .markStoreScreenInactive(_storeId!, buyerId: _buyerId);
+    } else if (_listing != null) {
       GlobalPollerService.instance.markScreenInactive(_listing!.id, buyerId: _buyerId);
     }
     _msgCtrl.dispose();
@@ -2505,60 +2707,93 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: BrokaColors.bg,
-    // Home's constellation, as on every screen reached from it. This thread
-    // used to sit on ChatAmbientBackground - the splash field retuned and
-    // held back - under an opaque header bar and an opaque composer bar,
-    // which made it look like a different app from Home and Zeno.
-    body: ConstellationBackground(
-      animate: widget.animateBackground,
-      child: Column(children: [
-        _buildHeader(),
-        ChatModeSwitch(
-          zenoActive: false,
-          unread: _zenoUnreadCount,
-          onSwitch: _openZenoAi,
-        ),
-        // Every buyer can pay from here: there is no "finalize" step before
-        // it any more (auctions are paid from the auction screen).
-        // Nothing at all while payments are hidden (payments_shown.dart).
-        if (!paymentsShown)
-          const SizedBox.shrink()
-        else if (_role == 'buyer' && _listing != null && _listing!.listingType != 'auction')
-          _buildPaymentPanel()
-        // The seller needs escrow as much: "the money is held" is what lets
-        // them hand an item to a stranger - and a screenshot is not.
-        else if (_role == 'seller' && _listing != null)
-          EscrowCallout(
-            compact: true,
-            title: 'Get paid with escrow',
-            margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            onZeno: () => openZenoEscrowGuide(context, prompt: 'How do I get paid through escrow?'),
+  Widget build(BuildContext context) {
+    if (_threadArgError != null) {
+      return Scaffold(
+        backgroundColor: BrokaColors.bg,
+        body: SafeArea(
+          child: Center(
+            child: Padding(
+              key: const Key('invalid-chat-arguments'),
+              padding: const EdgeInsets.all(24),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.link_off_rounded,
+                    color: BrokaColors.textMid, size: 40),
+                const SizedBox(height: 14),
+                const Text('This chat link is invalid',
+                    style: TextStyle(color: BrokaColors.textHigh,
+                        fontSize: 17, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 8),
+                Text(_threadArgError!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: BrokaColors.textMid, height: 1.45)),
+                const SizedBox(height: 18),
+                TextButton(
+                  onPressed: () => Navigator.maybePop(context),
+                  child: const Text('Go back'),
+                ),
+              ]),
+            ),
           ),
-        Expanded(child: _loading
-            ? const Center(child: CircularProgressIndicator(color: BrokaColors.gold))
-            : _buildMessages()),
-        _buildTypingIndicator(),
-        _buildReplyPreview(),
-        // REMOVED: the language chip row.
-        //
-        // It set a _selectedLang field and ApiService.currentUserLanguage, and
-        // nothing in this screen ever read either one - direct chat sends
-        // the user's literal text to the other party, untouched, so there
-        // was nothing for a language selection to act on. It was six
-        // permanently-visible controls that did nothing, occupying a full
-        // row directly above the input, which is the most valuable strip
-        // of a chat screen. The chips still exist (and still matter) on
-        // Zeno's screen, where replies are actually generated in the
-        // chosen language.
-        //
-        // "Finalize" lived in that same row and IS real, so it moved into
-        // the header as a proper action - see _buildHeader.
-        if (_isRecording) _buildRecordingBar() else _buildInputBar(),
-      ]),
-    ),
-  );
+        ),
+      );
+    }
+    return Scaffold(
+      backgroundColor: BrokaColors.bg,
+      // Home's constellation, as on every screen reached from it. This thread
+      // used to sit on ChatAmbientBackground - the splash field retuned and
+      // held back - under an opaque header bar and an opaque composer bar,
+      // which made it look like a different app from Home and Zeno.
+      body: ConstellationBackground(
+        animate: widget.animateBackground,
+        child: Column(children: [
+          _buildHeader(),
+          if (!_isStoreThread)
+            ChatModeSwitch(
+              zenoActive: false,
+              unread: _zenoUnreadCount,
+              onSwitch: _openZenoAi,
+            ),
+          // Every buyer can pay from here: there is no "finalize" step before
+          // it any more (auctions are paid from the auction screen).
+          // Nothing at all while payments are hidden (payments_shown.dart).
+          if (_isStoreThread || !paymentsShown)
+            const SizedBox.shrink()
+          else if (_role == 'buyer' && _listing != null && _listing!.listingType != 'auction')
+            _buildPaymentPanel()
+          // The seller needs escrow as much: "the money is held" is what lets
+          // them hand an item to a stranger - and a screenshot is not.
+          else if (_role == 'seller' && _listing != null)
+            EscrowCallout(
+              compact: true,
+              title: 'Get paid with escrow',
+              margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              onZeno: () => openZenoEscrowGuide(context, prompt: 'How do I get paid through escrow?'),
+            ),
+          Expanded(child: _loading
+              ? const Center(child: CircularProgressIndicator(color: BrokaColors.gold))
+              : _buildMessages()),
+          _buildTypingIndicator(),
+          _buildReplyPreview(),
+          // REMOVED: the language chip row.
+          //
+          // It set a _selectedLang field and ApiService.currentUserLanguage, and
+          // nothing in this screen ever read either one - direct chat sends
+          // the user's literal text to the other party, untouched, so there
+          // was nothing for a language selection to act on. It was six
+          // permanently-visible controls that did nothing, occupying a full
+          // row directly above the input, which is the most valuable strip
+          // of a chat screen. The chips still exist (and still matter) on
+          // Zeno's screen, where replies are actually generated in the
+          // chosen language.
+          //
+          // "Finalize" lived in that same row and IS real, so it moved into
+          // the header as a proper action - see _buildHeader.
+          if (_isRecording) _buildRecordingBar() else _buildInputBar(),
+        ]),
+      ),
+    );
+  }
 
   // ── Header ─────────────────────────────────────────────────────────────────
 
@@ -2589,8 +2824,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
               gradient: const LinearGradient(colors: kChatGradient),
               border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.45), width: 1.2)),
             clipBehavior: Clip.antiAlias,
-            child: (_counterpartyPhoto != null && _counterpartyPhoto!.isNotEmpty)
-                ? _decodedPhoto(_counterpartyPhoto!)
+            child: (_headerPhotoSource != null && _headerPhotoSource!.isNotEmpty)
+                ? BrokaImage(_headerPhotoSource,
+                    fit: BoxFit.cover, placeholder: _headerInitial())
                 : _headerInitial(),
           ),
           if (_counterpartyOnline)
@@ -2622,8 +2858,10 @@ class _NegotiationScreenState extends State<NegotiationScreen>
                 color: _counterpartyOnline ? BrokaColors.neonGreen : BrokaColors.textLow),
             ),
             Flexible(child: Text(
-              _counterpartyLastSeen ??
-                  (_counterpartyOnline ? 'Active now' : 'Last seen unavailable'),
+              _isStoreThread
+                  ? (_role == 'buyer' ? 'Online store' : 'Direct store conversation')
+                  : (_counterpartyLastSeen ??
+                      (_counterpartyOnline ? 'Active now' : 'Last seen unavailable')),
               style: TextStyle(
                   color: _counterpartyOnline ? BrokaColors.neonGreen : BrokaColors.textMid,
                   fontSize: 11.5, fontWeight: _counterpartyOnline ? FontWeight.w600 : FontWeight.w400),
@@ -2643,27 +2881,30 @@ class _NegotiationScreenState extends State<NegotiationScreen>
           onTap: () => _initiateCall('video'),
         ),
         const SizedBox(width: 5),
-        // Zeno, a tap away, with its unread replies counted.
-        Stack(clipBehavior: Clip.none, children: [
-          BrokaHeaderButton(
-            icon: Icons.auto_awesome_rounded,
-            active: true,
-            tooltip: 'Ask Zeno',
-            onTap: _openZenoAi,
-          ),
-          if (_zenoUnreadCount > 0)
-            Positioned(right: -4, top: -4, child: IgnorePointer(child: Container(
-              key: const Key('zeno-unread-badge'),
-              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-              decoration: BoxDecoration(
-                color: BrokaColors.danger,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: BrokaColors.bg, width: 1.5),
-              ),
-              child: Text('$_zenoUnreadCount',
-                  style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w800)),
-            ))),
-        ]),
+        // Zeno has no room in a store-general thread: the conversation is
+        // with the shop, and there is no listing for Zeno to negotiate on.
+        if (!_isStoreThread) ...[
+          Stack(clipBehavior: Clip.none, children: [
+            BrokaHeaderButton(
+              icon: Icons.auto_awesome_rounded,
+              active: true,
+              tooltip: 'Ask Zeno',
+              onTap: _openZenoAi,
+            ),
+            if (_zenoUnreadCount > 0)
+              Positioned(right: -4, top: -4, child: IgnorePointer(child: Container(
+                key: const Key('zeno-unread-badge'),
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: BrokaColors.danger,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: BrokaColors.bg, width: 1.5),
+                ),
+                child: Text('$_zenoUnreadCount',
+                    style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w800)),
+              ))),
+          ]),
+        ],
       ]),
     ),
   );
@@ -2754,12 +2995,19 @@ class _NegotiationScreenState extends State<NegotiationScreen>
                 border: Border.all(color: BrokaColors.gold.withOpacity(0.22)),
               ),
               alignment: Alignment.center,
-              child: Text(_listing?.emoji ?? '💬',
-                  style: const TextStyle(fontSize: 40)),
+              clipBehavior: Clip.antiAlias,
+              child: _isStoreThread && _storeLogo != null && _storeLogo!.isNotEmpty
+                  ? BrokaImage(_storeLogo, fit: BoxFit.cover)
+                  : Text(_listing?.emoji ?? (_isStoreThread ? '🏪' : '💬'),
+                      style: const TextStyle(fontSize: 40)),
             ),
             const SizedBox(height: 18),
             Text(
-              _role == 'buyer'
+              _isStoreThread
+                  ? (_role == 'buyer'
+                      ? 'You\'re talking to ${_storeName.isEmpty ? 'the store' : _storeName}'
+                      : 'You\'re talking to the buyer')
+                  : _role == 'buyer'
                   ? 'You\'re talking to ${_listing?.sellerName ?? 'the seller'}'
                   : 'You\'re talking to the buyer',
               textAlign: TextAlign.center,
@@ -2768,13 +3016,17 @@ class _NegotiationScreenState extends State<NegotiationScreen>
                   fontSize: 16, fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
-            const Text(
-              'Messages here go straight to them — Zeno is not in this thread '
-              'and cannot read it.',
+            Text(
+              _isStoreThread
+                  ? 'Messages here go straight to the shop owner. This is a '
+                      'direct conversation, not a product negotiation.'
+                  : 'Messages here go straight to them — Zeno is not in this '
+                      'thread and cannot read it.',
               textAlign: TextAlign.center,
               style: TextStyle(
                   color: BrokaColors.textLow, fontSize: 12.5, height: 1.5),
             ),
+            if (!_isStoreThread) ...[
             const SizedBox(height: 20),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
@@ -2798,6 +3050,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
                 ),
               ]),
             ),
+            ],
           ]),
         ),
       );

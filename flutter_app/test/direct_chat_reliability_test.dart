@@ -522,4 +522,85 @@ void main() {
       expect(find.byType(InteractiveViewer), findsOneWidget);
     });
   });
+
+  group('photo outbox thread identity', () {
+    Future<void> seedUnsentPhoto(WidgetTester tester,
+        {required String outboxListingId}) async {
+      final outbox = Directory('${Directory.systemTemp.path}/chat_outbox');
+      final bytes = _png(8, 8);
+      await tester.runAsync(() async {
+        if (await outbox.exists()) await outbox.delete(recursive: true);
+        await outbox.create(recursive: true);
+        await File('${outbox.path}/photo-other.png').writeAsBytes(bytes);
+        await File('${outbox.path}/photo-other.json').writeAsString(jsonEncode({
+          'reply_to_message_id': null,
+          'caption': null,
+          'listing_id': outboxListingId,
+          'store_id': null,
+          'buyer_id': 'buyer-1',
+        }));
+      });
+      await LocalChatStore.save('direct_listing-1_buyer-1', [
+        {
+          'role': 'buyer',
+          'content': '',
+          'msg_type': 'image',
+          'media_url': 'data:image/png;base64,${base64Encode(bytes)}',
+          'client_msg_id': 'photo-other',
+          'created_at': _iso(DateTime.now().subtract(const Duration(minutes: 1))),
+          'failed': true,
+        },
+      ]);
+    }
+
+    Future<void> openOutbox(WidgetTester tester) async {
+      setFakeRoute((uri) {
+        final p = uri.path;
+        if (p == '/negotiate/listing-1/history') {
+          return [
+            {
+              'role': 'seller',
+              'content': 'Karibu',
+              'id': 'm1',
+              'created_at': _iso(
+                  DateTime.now().subtract(const Duration(minutes: 2))),
+            },
+          ];
+        }
+        if (p.endsWith('/read-status')) return <String, dynamic>{};
+        return null;
+      });
+      await tester.pumpWidget(chat());
+      await settle(tester);
+      // The outbox reads real files; let those futures finish before the
+      // fake-async widget pump resumes.
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await settle(tester);
+    }
+
+    testWidgets('restores a retry only in the conversation it belongs to',
+        (tester) async {
+      await seedUnsentPhoto(tester, outboxListingId: 'listing-1');
+      await openOutbox(tester);
+
+      expect(find.byKey(const Key('unsent-bubble')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('unsent-bubble')));
+      await settle(tester);
+      expect(find.text('Try again'), findsOneWidget);
+    });
+
+    testWidgets('never offers another conversation\'s photo for retry',
+        (tester) async {
+      await seedUnsentPhoto(tester, outboxListingId: 'listing-other');
+      await openOutbox(tester);
+
+      expect(find.byKey(const Key('unsent-bubble')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('unsent-bubble')));
+      await settle(tester);
+      expect(find.text('Try again'), findsNothing,
+          reason: 'retrying here would upload the photo into the wrong thread');
+    });
+  });
 }

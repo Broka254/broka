@@ -168,7 +168,7 @@ void main() {
     expect(find.text('Amina Wanjiru'), findsOneWidget);
     await tester.tap(find.text('Amina Wanjiru'));
     await _settle(tester);
-    expect(pushed.last.name, '/store-chat');
+    expect(pushed.last.name, '/direct-chat');
     expect((pushed.last.arguments as Map)['storeId'], 's1');
   });
 

@@ -399,6 +399,23 @@ async def upload_media(
         raise HTTPException(status_code=403,
             detail=f"Role mismatch: you are the {actual_role}")
 
+    # Unlike a listing's seller, a store owner cannot be mapped to one
+    # implicit buyer: every shopper's thread is separate. Falling back to
+    # the latest one here would deliver a reply or photo to whichever buyer
+    # happened to write last, so require the thread the owner is answering.
+    if store_id and actual_role == "seller" and not buyer_id:
+        raise HTTPException(
+            status_code=400,
+            detail="buyer_id is required for a store reply",
+        )
+    if store_id and actual_role == "seller":
+        from api.routers.negotiate import _store_buyer_started_thread
+        if not await _store_buyer_started_thread(db, store_id, buyer_id):
+            raise HTTPException(
+                status_code=403,
+                detail="No existing conversation with this buyer",
+            )
+
     # Validate content type
     if content_type not in ("audio", "image"):
         raise HTTPException(status_code=400, detail="content_type must be 'audio' or 'image'")

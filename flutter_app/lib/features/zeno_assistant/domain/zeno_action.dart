@@ -13,6 +13,7 @@
 class ZenoContact {
   const ZenoContact({
     required this.listingId,
+    this.storeId,
     required this.listingName,
     required this.peerId,
     required this.peerName,
@@ -21,6 +22,8 @@ class ZenoContact {
   });
 
   final String listingId;
+  /// Set for a store-general thread; [listingId] is then empty.
+  final String? storeId;
   final String listingName;
   final String peerId;
   final String peerName;
@@ -37,15 +40,19 @@ class ZenoContact {
   static ZenoContact? fromJson(Object? json) {
     if (json is! Map) return null;
     String? s(String k) => json[k] is String && (json[k] as String).isNotEmpty ? json[k] as String : null;
-    final listingId = s('listing_id');
+    final listingId = s('listing_id') ?? '';
+    final storeId = s('store_id');
     final peerId = s('peer_id');
     final buyerId = s('buyer_id');
     final role = s('role');
-    if (listingId == null || peerId == null || buyerId == null) return null;
+    if ((listingId.isEmpty) == (storeId == null) || peerId == null || buyerId == null) {
+      return null;
+    }
     if (role != 'buyer' && role != 'seller') return null;
     return ZenoContact(
       listingId: listingId,
-      listingName: s('listing_name') ?? '',
+      storeId: storeId,
+      listingName: s('listing_name') ?? s('store_name') ?? '',
       peerId: peerId,
       peerName: s('peer_name') ?? '',
       role: role!,

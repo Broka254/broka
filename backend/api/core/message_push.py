@@ -87,7 +87,9 @@ def thread_tag(listing_id: str, buyer_id: str) -> str:
 
 
 def store_tag(store_id: str, buyer_id: str) -> str:
-    return f"thread_store_{store_id}_{buyer_id}"
+    # Same canonical thread id the app uses for a store ("store:<id>"), so
+    # the server push and the app's own notification replace one another.
+    return thread_tag(f"store:{store_id}", buyer_id)
 
 
 def recipients_of(role: str, recipient_role: Optional[str], via_ai: Optional[bool],
@@ -484,7 +486,7 @@ async def build_store_notification(db, store_id: str, buyer_id: str, role: str) 
         "body": body,
         "data": {
             "type": "new_message", "storeId": store_id, "buyerId": buyer_id,
-            "myRole": role, "messageId": newest.id, "screen": "store-chat",
+            "myRole": role, "messageId": newest.id, "screen": "chat",
             "senderName": sender_name, "listingName": store.name,
             "count": count, "preview": preview,
             **({"senderPhoto": sender_photo} if sender_photo else {}),
