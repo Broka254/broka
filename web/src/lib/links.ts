@@ -21,6 +21,9 @@ export const storePath = (slug: string) => `/store/${encodeURIComponent(slug)}`
 /** The store's "Store details" page (the app opens the same link). */
 export const storeDetailsPath = (slug: string) => `${storePath(slug)}/about`
 
+/** The store's full catalogue page, with search, filters and sorting. */
+export const storeShopPath = (slug: string) => `${storePath(slug)}/shop`
+
 /** The store's cart and checkout; with ?items= the app opens it with those
  *  products in its own cart (deep_link_service.dart). */
 export const storeCartPath = (slug: string) => `${storePath(slug)}/cart`

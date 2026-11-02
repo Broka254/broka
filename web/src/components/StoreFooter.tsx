@@ -5,7 +5,7 @@ import Link from 'next/link'
 
 import { filtersQuery } from '@/lib/catalogue'
 import { placeLine } from '@/lib/format'
-import { storeCartPath, storeDetailsPath } from '@/lib/links'
+import { storeCartPath, storeDetailsPath, storeShopPath } from '@/lib/links'
 import { NO_DEPOSIT, PAY_LINE, PERK_SEE_FIRST } from '@/lib/safety'
 import type { StoreView } from '@/lib/storefront'
 import type { StoreCategory } from '@/lib/types'
@@ -16,6 +16,7 @@ import styles from './shop.module.css'
 
 export function StoreFooter({ view, categories = [] }: { view: StoreView; categories?: StoreCategory[] }) {
   const { store } = view
+  const shopPath = storeShopPath(store.slug)
   const where = placeLine(store.subcounty, store.county)
   return (
     <footer className={styles.footer}>
@@ -33,11 +34,11 @@ export function StoreFooter({ view, categories = [] }: { view: StoreView; catego
           <p className={styles.footerTitle}>Shop</p>
           <ul>
             <li>
-              <Link href={view.path}>All products</Link>
+              <Link href={shopPath}>All products</Link>
             </li>
             {categories.slice(0, 5).map((c) => (
               <li key={c.name}>
-                <Link href={`${view.path}${filtersQuery({ category: c.name })}`}>{c.name}</Link>
+                <Link href={`${shopPath}${filtersQuery({ category: c.name })}`}>{c.name}</Link>
               </li>
             ))}
           </ul>

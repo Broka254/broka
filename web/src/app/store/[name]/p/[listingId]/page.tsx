@@ -25,7 +25,7 @@ import styles from '@/components/store.module.css'
 import { getListing, getStore, getStoreListings } from '@/lib/api'
 import { filtersQuery, toProductCard } from '@/lib/catalogue'
 import { clip, conditionLabel, formatPrice } from '@/lib/format'
-import { campaignToken, productPath, storeCartPath, storePath, viaTag } from '@/lib/links'
+import { campaignToken, productPath, storeCartPath, storePath, storeShopPath, viaTag } from '@/lib/links'
 import { NO_DEPOSIT, PAY_LINE, SEE_FIRST } from '@/lib/safety'
 import { API_URL } from '@/lib/server-config'
 import {
@@ -108,12 +108,12 @@ export default async function ProductPage({ params, searchParams }: Props) {
 
   return (
     <>
-      <StoreHeader view={shop} />
+      <StoreHeader view={shop} active="product" searchBase={storeShopPath(store.slug)} />
       <main className={`page ${shopStyles.storePage}`}>
         <nav aria-label="Breadcrumb" className={shopStyles.crumbs}>
           <Link href={shop.path}>{store.name}</Link>
           <Icon name="chevron" size={14} />
-          <Link href={`${shop.path}${filtersQuery({ category: listing.category })}`}>{listing.category}</Link>
+          <Link href={`${storeShopPath(store.slug)}${filtersQuery({ category: listing.category })}`}>{listing.category}</Link>
           <Icon name="chevron" size={14} />
           <span aria-current="page">{listing.name}</span>
         </nav>
@@ -135,7 +135,7 @@ export default async function ProductPage({ params, searchParams }: Props) {
             )}
             {!view.available && (
               <p className={styles.unavailable} role="status">
-                This product isn&apos;t available any more. <Link href={shop.path}>See what else {store.name} has.</Link>
+                This product isn&apos;t available any more. <Link href={storeShopPath(store.slug)}>See what else {store.name} has.</Link>
               </p>
             )}
 
@@ -197,7 +197,7 @@ export default async function ProductPage({ params, searchParams }: Props) {
           <section className={shopStyles.moreFrom} aria-labelledby="more-title">
             <div className={shopStyles.toolbar}>
               <h2 id="more-title">More from {store.name}</h2>
-              <Link href={shop.path} className={shopStyles.seeAll}>
+              <Link href={storeShopPath(store.slug)} className={shopStyles.seeAll}>
                 See all <Icon name="chevron" size={14} />
               </Link>
             </div>

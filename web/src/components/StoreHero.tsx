@@ -1,12 +1,9 @@
-// The top of the store: its round logo top-left - the shop's own, or BROKA's
-// mark when it uploaded none; never the old square with an initial, which
-// read as a missing picture. Then its name, large, over moving colour -
-// aurora light in the store's category colours and BROKA's violet and blue,
-// orbit rings, stars, and a shimmer running through the letters - with, on a
-// wide screen, its first products fanned out beside it. Under the name: what
-// and where, whether the owner is online, the seller's record, and More for
-// everything else (the Store details page). The page's only animation is
-// here, and it stops for anyone who asked for less motion.
+// The top of the store's home: the shop's cover photo behind its round
+// logo, name, what and where, whether the owner is online, the store's
+// score and the seller's record, and the way into Store details. A plain
+// surface when the store uploaded no cover - never a placeholder picture
+// passed off as the shop's own. No animation: the page reads as a shop,
+// not an app screen.
 import Link from 'next/link'
 
 import type { ProductCardData } from '@/lib/catalogue'
@@ -24,9 +21,9 @@ export function StoreHero({ view, showcase = [] }: { view: StoreView; showcase?:
     .filter(Boolean)
     .join(' · ')
   const deals = owner?.completed_deals ?? 0
-  // Buyer reviews, not deals: a seller with a hundred deals and no review
-  // has no average, and the legacy 5.0 account default must never stand in
-  // for one (backend reviews/stats.py).
+  // Buyer reviews, not deals, make a seller average. A seller with a hundred
+  // deals and no review has no average, and the legacy 5.0 account default
+  // must never stand in for one (backend reviews/stats.py).
   const ownerReviews = owner?.review_count ?? 0
   const sellerRating = ownerReviews > 0 && owner?.rating != null ? owner.rating : null
   // The SHOP's own rating, 0-10, from its reviews, reply speed and tenure
@@ -36,24 +33,14 @@ export function StoreHero({ view, showcase = [] }: { view: StoreView; showcase?:
   const storeRating = store.rating ?? null
   const reviewCount = store.review_count ?? 0
   const pictures = showcase.filter((p) => p.image).slice(0, 3)
-  const [c1, c2] = view.gradient
 
   return (
     <section
       className={styles.hero}
       aria-labelledby="store-name"
-      style={{ ['--hero-a' as string]: c1, ['--hero-b' as string]: c2 ?? c1 }}
+      style={view.cover ? { backgroundImage: `url("${view.cover.src}")` } : undefined}
     >
-      <div className={styles.heroArt} aria-hidden="true">
-        <span className={`${styles.blob} ${styles.blob1}`} />
-        <span className={`${styles.blob} ${styles.blob2}`} />
-        <span className={`${styles.blob} ${styles.blob3}`} />
-        <span className={`${styles.blob} ${styles.blob4}`} />
-        <span className={`${styles.orbit} ${styles.orbit1}`} />
-        <span className={`${styles.orbit} ${styles.orbit2}`} />
-        <span className={styles.stars} />
-        <span className={styles.sheen} />
-      </div>
+      <span className={styles.heroShade} aria-hidden="true" />
 
       <div className={styles.heroBody}>
         {/* The store's own logo, or BROKA's when it uploaded none - the same
@@ -97,7 +84,7 @@ export function StoreHero({ view, showcase = [] }: { view: StoreView; showcase?:
               <Icon name="star" size={15} className={styles.starIcon} />
               {storeRating != null ? (
                 // The scale is part of the figure: an unlabelled 6.5 beside
-                // a five-star icon read as 6.5 out of 5. It links to the
+                // a five-star icon reads as 6.5 out of 5. It links to the
                 // buyer reviews that help build it.
                 <Link
                   href={`${storeDetailsPath(store.slug)}#reviews`}

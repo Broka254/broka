@@ -1,20 +1,20 @@
-// A store's home on the web: https://broka.co.ke/store/<name> - laid out as
-// a shop's website: the store's own header (name, search, filters, cart),
-// its name in lights, what buying here means, the departments, and the
-// catalogue with Add to cart; a cart drawer and a cart page for checkout.
+// A store's home on the web: https://broka.co.ke/store/<name> - the shop's
+// front window. Its cover photo and name, what buying here means, its
+// departments, a few featured and new products, and the way into the full
+// catalogue (/shop) and the business behind it (/about).
 //
-// Rendered on the server (link previews and search engines read it as
-// is); store data is cached for a minute. Search, category, sort,
-// condition and price live in the URL, so every filtered view is a link
-// that can be shared.
+// Rendered on the server (link previews and search engines read it as is);
+// store data is cached for a minute. Filtered views live on /shop, so a
+// catalogue link shared into the homepage lands there instead.
 import type { Metadata } from 'next'
+import Link from 'next/link'
 import { notFound, permanentRedirect } from 'next/navigation'
 
 import { CartDrawer } from '@/components/CartDrawer'
 import { CategoryPills } from '@/components/CategoryPills'
 import { Icon } from '@/components/Icon'
 import { Perks } from '@/components/Perks'
-import { ProductGrid } from '@/components/ProductGrid'
+import { ProductCard } from '@/components/ProductCard'
 import { StoreFooter } from '@/components/StoreFooter'
 import { StoreHeader } from '@/components/StoreHeader'
 import { StoreHero } from '@/components/StoreHero'
@@ -22,9 +22,8 @@ import { VisitBeacon } from '@/components/VisitBeacon'
 import shop from '@/components/shop.module.css'
 import styles from '@/components/store.module.css'
 import { getStore, getStoreCategories, getStoreListings } from '@/lib/api'
-import { CONDITIONS, PRICE_BANDS, SORTS, filtersQuery, panelActive, readFilters, toProductCard } from '@/lib/catalogue'
-import { PAGE_SIZE } from '@/lib/config'
-import { campaignToken, storeCartPath, viaTag } from '@/lib/links'
+import { filtersQuery, readFilters, toProductCard } from '@/lib/catalogue'
+import { campaignToken, storeCartPath, storeShopPath, viaTag } from '@/lib/links'
 import { API_URL } from '@/lib/server-config'
 import { jsonLdScript, storeDescription, storeJsonLd, storePreviewImage, storeView } from '@/lib/storefront'
 
@@ -60,103 +59,114 @@ export default async function StorePage({ params, searchParams }: Props) {
   const store = await getStore(name)
   if (!store) notFound()
 
-  const filters = readFilters(query)
   const via = viaTag(query.via)
   const campaign = campaignToken(query.c)
+  const shopPath = storeShopPath(store.slug)
   // One address per store: /store/Clanix -> /store/clanix.
   if (name !== store.slug) {
-    const q = new URLSearchParams(filtersQuery(filters).slice(1))
+    const q = new URLSearchParams()
     if (via) q.set('via', via)
-    // The campaign token must survive the address tidy-up, or the visit it
-    // was meant to attribute arrives anonymous.
     if (campaign) q.set('c', campaign)
     permanentRedirect(`/store/${store.slug}${q.size ? `?${q}` : ''}`)
   }
+  // Filtered catalogue views live on /shop now: an old shared link with
+  // search or filters lands there with them intact.
+  const filters = readFilters(query)
+  if (filters.q || filters.category || filters.sort !== 'featured' || filters.condition || filters.price) {
+    const q = new URLSearchParams(filtersQuery(filters).slice(1))
+    if (via) q.set('via', via)
+    if (campaign) q.set('c', campaign)
+    permanentRedirect(`${shopPath}${q.size ? `?${q}` : ''}`)
+  }
 
   const view = storeView(store)
-  const [categories, listings] = store.is_active
+  const [categories, featured, newest] = store.is_active
     ? await Promise.all([
         getStoreCategories(store.id),
-        getStoreListings(store.id, {
-          q: filters.q,
-          category: filters.category ?? undefined,
-          sort: filters.sort,
-          condition: filters.condition,
-          price: filters.price,
-        }),
+        getStoreListings(store.id, { limit: 8 }),
+        getStoreListings(store.id, { sort: 'newest', limit: 8 }),
       ])
-    : [[], []]
-  const products = listings.map((l) => toProductCard(l, store.slug, API_URL))
-  const filtered = Boolean(filters.q || filters.category || panelActive(filters))
-  // The chips over the grid: each filter in force, with a link that drops it.
-  const applied = [
-    filters.q && { label: `“${filters.q}”`, to: { q: '' } },
-    filters.sort !== 'featured' && { label: SORTS.find((x) => x.key === filters.sort)!.label, to: { sort: 'featured' as const } },
-    filters.condition && { label: CONDITIONS.find((c) => c.key === filters.condition)!.label, to: { condition: null } },
-    filters.price && { label: `KES ${PRICE_BANDS.find((b) => b.key === filters.price)!.label}`, to: { price: null } },
-  ].filter(Boolean) as Array<{ label: string; to: Partial<typeof filters> }>
-  const count =
-    filtered || !store.is_active
-      ? null
-      : filters.category
-        ? categories.find((c) => c.name === filters.category)?.count
-        : store.listing_count
+    : [[], [], []]
+  const featuredCards = featured.map((l) => toProductCard(l, store.slug, API_URL))
+  const featuredIds = new Set(featuredCards.map((p) => p.id))
+  // Newest earns its own shelf only when it isn't the same products again.
+  const newestCards = newest
+    .map((l) => toProductCard(l, store.slug, API_URL))
+    .filter((p) => !featuredIds.has(p.id))
+    .slice(0, 8)
+  const hasCatalogue = featuredCards.length > 0 || categories.length > 1
 
   return (
     <>
-      <StoreHeader view={view} filters={filters} />
+      <StoreHeader view={view} active="home" searchBase={shopPath} />
       <main className={`page ${shop.storePage}`}>
-        <StoreHero view={view} showcase={filtered ? [] : products} />
+        <StoreHero view={view} showcase={featuredCards} />
         {store.is_active && (
           <>
             <Perks verified={Boolean(store.owner?.verified)} />
-            <section aria-labelledby="catalogue-title" className={shop.catalogue}>
-              {categories.length > 1 && (
-                <CategoryPills basePath={view.path} categories={categories} total={store.listing_count} filters={filters} />
-              )}
-              <div className={shop.toolbar}>
-                <h2 id="catalogue-title">
-                  {filters.category ?? 'All products'}
-                  {count != null && <span className={shop.countTag}>{count}</span>}
-                </h2>
-                {applied.length > 0 && (
-                  <ul className={shop.applied} aria-label="Filters in use">
-                    {applied.map((a) => (
-                      <li key={a.label}>
-                        <a href={`${view.path}${filtersQuery({ ...filters, ...a.to })}`} aria-label={`Remove ${a.label}`}>
-                          {a.label} <Icon name="close" size={13} />
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-              {filtered && (
-                <p className={styles.resultNote} role="status">
-                  {products.length === 0 ? 'No products' : products.length >= PAGE_SIZE ? 'Products' : `${products.length} product${products.length === 1 ? '' : 's'}`}
-                  {filters.q ? ` matching “${filters.q}”` : ''}
-                  {filters.category ? ` in ${filters.category}` : ''} · <a href={view.path}>Show everything</a>
-                </p>
-              )}
-              {products.length > 0 ? (
-                <ProductGrid
-                  key={filtersQuery(filters)}
-                  storeId={store.id}
-                  slug={store.slug}
-                  filters={filters}
-                  initial={products}
-                  pageSize={PAGE_SIZE}
-                />
-              ) : (
-                <div className={`card ${styles.empty}`}>
-                  <span className={shop.emptyCartIcon}>
-                    <Icon name={filtered ? 'search' : 'bag'} size={34} />
-                  </span>
-                  <h2>{filtered ? 'No products match' : 'Nothing listed yet'}</h2>
-                  <p>{filtered ? 'Try another search or filter.' : 'Check back soon: this store is just getting started.'}</p>
+            {categories.length > 1 && (
+              <section aria-labelledby="departments-title" className={shop.homeSection}>
+                <div className={shop.sectionHead}>
+                  <h2 id="departments-title">Shop by category</h2>
+                  <Link href={shopPath} className={shop.seeAll}>
+                    All products <Icon name="chevron" size={14} />
+                  </Link>
                 </div>
-              )}
-            </section>
+                <CategoryPills basePath={shopPath} categories={categories} total={store.listing_count} filters={filters} />
+              </section>
+            )}
+            {featuredCards.length > 0 && (
+              <section aria-labelledby="featured-title" className={shop.homeSection}>
+                <div className={shop.sectionHead}>
+                  <h2 id="featured-title">Featured products</h2>
+                  {store.listing_count > featuredCards.length && (
+                    <Link href={shopPath} className={shop.seeAll}>
+                      See all <Icon name="chevron" size={14} />
+                    </Link>
+                  )}
+                </div>
+                <div className={shop.grid}>
+                  {featuredCards.map((p) => (
+                    <ProductCard key={p.id} product={p} storeId={store.id} />
+                  ))}
+                </div>
+              </section>
+            )}
+            {newestCards.length > 0 && (
+              <section aria-labelledby="newest-title" className={shop.homeSection}>
+                <div className={shop.sectionHead}>
+                  <h2 id="newest-title">Newly added</h2>
+                  <Link href={`${shopPath}${filtersQuery({ sort: 'newest' })}`} className={shop.seeAll}>
+                    See all <Icon name="chevron" size={14} />
+                  </Link>
+                </div>
+                <div className={shop.grid}>
+                  {newestCards.map((p) => (
+                    <ProductCard key={p.id} product={p} storeId={store.id} />
+                  ))}
+                </div>
+              </section>
+            )}
+            {!hasCatalogue && (
+              <div className={`card ${styles.empty}`}>
+                <span className={shop.emptyCartIcon}>
+                  <Icon name="bag" size={34} />
+                </span>
+                <h2>Nothing listed yet</h2>
+                <p>Check back soon: this store is just getting started.</p>
+              </div>
+            )}
+            {view.description && (
+              <section aria-labelledby="intro-title" className={shop.aboutTeaser}>
+                <div className={`card ${styles.detailsCard} ${shop.aboutTeaserCard}`}>
+                  <h2 id="intro-title">About {store.name}</h2>
+                  <p>{view.description}</p>
+                  <Link href={`${view.path}/about`} className={shop.seeAll}>
+                    More about this business <Icon name="chevron" size={14} />
+                  </Link>
+                </div>
+              </section>
+            )}
           </>
         )}
         <VisitBeacon storeId={store.id} via={via} campaign={campaign} />

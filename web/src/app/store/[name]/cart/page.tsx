@@ -30,7 +30,7 @@ export default async function CartPage({ params }: Props) {
   if (!store.is_active) redirect(view.path)
   return (
     <>
-      <StoreHeader view={view} />
+      <StoreHeader view={view} active="cart" />
       <main className={`page ${shop.storePage}`}>
         <CheckoutView
           storeId={store.id}

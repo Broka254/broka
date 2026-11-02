@@ -73,12 +73,12 @@ export default async function StoreDetailsPage({ params, searchParams }: Props) 
   }
   return (
     <>
-      <StoreHeader view={view} />
+      <StoreHeader view={view} active="about" />
       <main className={`page ${shop.storePage}`}>
         <nav aria-label="Breadcrumb" className={shop.crumbs}>
           <Link href={view.path}>{store.name}</Link>
           <Icon name="chevron" size={14} />
-          <span aria-current="page">Store details</span>
+          <span aria-current="page">About</span>
         </nav>
         <h1 className={styles.detailsTitle}>Store details</h1>
         <StoreDetails view={view} reviews={reviews} reviewsFailed={reviewsFailed} />
