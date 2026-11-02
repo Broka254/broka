@@ -203,6 +203,28 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets('a search that leaves one hit keeps the normal grid',
+        (tester) async {
+      final backend = _Backend();
+      await _pumpStore(tester, backend, size: const Size(390, 1250));
+
+      await tester.enterText(
+          find.byKey(const Key('store-search')), 'tecno');
+      await tester.pump(const Duration(milliseconds: 450));
+      await tester.pumpAndSettle();
+
+      // One result, but still a grid tile — never the full-width
+      // single-product card.
+      expect(find.byType(StoreProductCard), findsOneWidget);
+      expect(find.byType(SliverGrid), findsOneWidget);
+      final grid = tester.widget<SliverGrid>(find.byType(SliverGrid));
+      expect(
+          (grid.gridDelegate as SliverGridDelegateWithFixedCrossAxisCount)
+              .crossAxisCount,
+          2);
+      expect(tester.takeException(), isNull);
+    });
+
     // Tall enough that every card is built: lazily-built slivers only
     // materialise the visible rows.
     testWidgets('several products keep the two-column phone grid',

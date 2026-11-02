@@ -380,10 +380,13 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
                   '${_price?.name ?? ''}'),
               sliver: true,
               controller: _grid,
-              // The catalogue owns the row when it holds one product, and
-              // gains columns on tablets and desktops. Other screens keep
-              // the fixed two-column marketplace grid.
-              adaptToItemCount: true,
+              // The catalogue owns the row only when the store itself
+              // holds one product and nothing narrows it: a search or
+              // filter that happens to leave one hit keeps the normal
+              // grid, so one result never blows up into a giant card.
+              // Other screens keep the fixed two-column marketplace grid.
+              adaptToItemCount:
+                  _category == null && _search.isEmpty && !_filtersActive,
               fetchPage: _fetchPage,
               // More of the screen to the products: 8dp sides instead of
               // 12, and a taller photo per card (StoreProductCard.imageShare).
