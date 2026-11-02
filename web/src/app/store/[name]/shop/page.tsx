@@ -105,7 +105,7 @@ export default async function StoreShopPage({ params, searchParams }: Props) {
 
   return (
     <StorefrontShell>
-      <StoreHeader view={view} active="shop" filters={filters} searchBase={path} />
+      <StoreHeader view={view} active="shop" filters={filters} searchBase={path} showSectionNav={false} />
       <main className={`page ${shop.storePage}`}>
         <nav aria-label="Breadcrumb" className={shop.crumbs}>
           <Link href={view.path}>{store.name}</Link>

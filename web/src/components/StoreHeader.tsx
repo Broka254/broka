@@ -24,6 +24,7 @@ export function StoreHeader({
   filters,
   active = 'home',
   searchBase,
+  showSectionNav = true,
 }: {
   view: StoreView
   /** The store page's filters; elsewhere only the search pill shows. */
@@ -32,6 +33,8 @@ export function StoreHeader({
   active?: StoreNavSection
   /** Where the header's search submits; defaults to the section in view. */
   searchBase?: string
+  /** Hide the Home/Shop/category/About row on pages that should match a cleaner reference. */
+  showSectionNav?: boolean
 }) {
   const { store } = view
   const shopPath = storeShopPath(store.slug)
@@ -79,7 +82,7 @@ export function StoreHeader({
             </>
           )}
         </div>
-        {active !== 'home' && (
+        {active !== 'home' && showSectionNav && (
           <nav className={styles.storeNav} aria-label="Store sections">
             <div className={styles.storeNavInner}>
               {links.map((l) => (

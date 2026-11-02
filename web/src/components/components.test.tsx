@@ -113,6 +113,15 @@ const shop = (over: Partial<Store> = {}): Store => ({
 })
 
 describe('StoreLanding', () => {
+  it('can omit the secondary section row while keeping marketplace search and actions', () => {
+    render(<StoreHeader view={storeView(shop())} active="shop" showSectionNav={false} />)
+    expect(screen.getByRole('search')).toBeTruthy()
+    expect(screen.getByRole('navigation', { name: 'Store' })).toBeTruthy()
+    expect(screen.queryByRole('navigation', { name: 'Store sections' })).toBeNull()
+    expect(screen.queryByText('Electronics')).toBeNull()
+    expect(screen.queryByText('About')).toBeNull()
+  })
+
   it('uses the store logo or BROKA default and omits inert search, action icons and shop tabs on the homepage', () => {
     render(<StoreHeader view={storeView(shop())} active="home" />)
     const brand = screen.getByRole('link', { name: 'Clanix home' })

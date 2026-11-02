@@ -74,11 +74,10 @@ describe('store shop page', () => {
     expect(api.getStoreListings).toHaveBeenCalledWith('s1', expect.objectContaining({ q: '', category: undefined }))
   })
 
-  it('marks Shop as the current section', async () => {
+  it('omits the secondary store-section navigation row', async () => {
     render(await StoreShopPage(props()))
-    const nav = screen.getByRole('navigation', { name: 'Store sections' })
-    expect(nav.innerHTML).toContain('aria-current="page"')
-    expect(nav.textContent).toContain('Shop')
+    expect(screen.queryByRole('navigation', { name: 'Store sections' })).toBeNull()
+    expect(screen.getByRole('navigation', { name: 'Breadcrumb' }).textContent).toContain('Shop')
   })
 
   it('carries its own canonical, not the homepage one', async () => {
