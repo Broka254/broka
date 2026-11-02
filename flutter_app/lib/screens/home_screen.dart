@@ -369,7 +369,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     result.fold(
       onSuccess: (data) {
         setState(() {
-          _topCategories = data;
+          _topCategories = _orderByLikelyPopularity(data);
           _categoriesLoaded = true;
         });
         // The rail has to be laid out before it knows how far it scrolls.
@@ -398,8 +398,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // (a category-circle strip, a "Quick Access" chip row, and a Goods/
   // Traders mode toggle that swapped Home's entire body). All four were
   // unified into one horizontally-scrolling rail, one shape for every
-  // item, with one thin divider between the last category and Trending
-  // onward (final polish pass, 2026-08-19 - see isDestination on _RailItem).
+  // item, with a hairline wherever the destinations meet the categories
+  // (final polish pass, 2026-08-19 - see isDestination on _RailItem).
   //
   // Photo cards (2026-10-08): the rail's circles of emoji became the
   // website's category cards - the category's picture, its name over it -
@@ -407,8 +407,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // category as a grid (category_directory_screen.dart). Each category now
   // leads to its types of item, each type to a screen of its own with its
   // brands to filter by, so the first thing a buyer sees of a category is
-  // what is in it. The destinations stay at the end of the same row, drawn
-  // from their gradient and emoji in the same card frame.
+  // what is in it. Popularity pass (2026-11-02): Trending and Stores now
+  // lead the row, the categories follow in _popularCategoryOrder, and
+  // Traders closes it. The destinations are drawn from their gradient and
+  // emoji in the same card frame.
   //
   // Still one row, so the feed keeps the top half of the screen
   // (home_collapsing_scroll_test.dart guards it): the cards are landscape
@@ -420,6 +422,70 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // overflow on two-line labels at large text sizes when it was hardcoded.
   static double _railCardWidth(BuildContext context) =>
       _narrow(context) ? 112.0 : 122.0;
+
+  // The order the categories after Home's two leading destinations are shown
+  // in (2026-11-02), most likely to be browsed first. The backend returns the
+  // taxonomy in seed order - Automobiles, Property, Land first - which is the
+  // order Kenyans sell in, not the order buyers open the app to browse: those
+  // three are the highest-value but least-frequent categories, and leading
+  // with them made a marketplace of phones and clothes read as a car yard.
+  //
+  // This is an editorial guess at popularity, not a measurement - the app has
+  // no analytics pipeline to rank by - so it is deliberately the one place
+  // the order is written down. A category missing from this list (one added
+  // to the backend after it) keeps the backend's position among the unranked,
+  // which is just before "Other", so it still shows up.
+  static const List<String> _popularCategoryOrder = <String>[
+    'Electronics',
+    'Fashion',
+    'Home & Furniture',
+    'Food & Beverages',
+    'Beauty & Personal Care',
+    'Health & Medical',
+    'Baby & Kids',
+    'Agriculture',
+    'Gaming',
+    'Sports & Fitness',
+    'Construction',
+    'Automobiles',
+    'Property',
+    'Land',
+    'Books & Education',
+    'Music & Instruments',
+    'Arts & Crafts',
+    'Business & Industrial',
+    'Pets & Animals',
+    'Services',
+    'Other',
+  ];
+
+  /// Re-cuts the backend's taxonomy order into [_popularCategoryOrder].
+  ///
+  /// Order only: every category the backend returned comes back exactly once,
+  /// whatever its name - filtering here would silently hide listings from the
+  /// one screen that is meant to show every category.
+  static List<Category> _orderByLikelyPopularity(List<Category> categories) {
+    final rank = <String, int>{
+      for (var i = 0; i < _popularCategoryOrder.length; i++)
+        _popularCategoryOrder[i].toLowerCase(): i,
+    };
+    final backendPosition = <String, int>{
+      for (var i = 0; i < categories.length; i++) categories[i].id: i,
+    };
+    // Unknown names tie with "Other", the last-ranked entry; the backend
+    // position below breaks the tie, and "Other" is last there too.
+    final unranked = _popularCategoryOrder.length - 1;
+    final ordered = [...categories];
+    ordered.sort((a, b) {
+      final ra = rank[a.name.toLowerCase().trim()] ?? unranked;
+      final rb = rank[b.name.toLowerCase().trim()] ?? unranked;
+      if (ra != rb) return ra.compareTo(rb);
+      // List.sort is not stable, and two unranked categories swapping places
+      // on every load would look like the rail shuffling itself.
+      return (backendPosition[a.id] ?? 0).compareTo(backendPosition[b.id] ?? 0);
+    });
+    return ordered;
+  }
 
   Widget _buildDiscoveryRail() {
     final narrow = _narrow(context);
@@ -435,19 +501,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       return SizedBox(height: cardHeight + railPadding + _railHeadingHeight(textScale.toDouble()));
     }
     final items = <_RailItem>[
-      // Straight from categoriesRepository.getTopLevel() - however many the
-      // backend returns is however many render. No count, no slots, no index
-      // -> visual mapping: each card asks the resolver for its own name.
-      ..._topCategories.map((c) {
-        final visual = CategoryVisuals.resolve(c.name);
-        return _RailItem(
-          emoji: visual.emoji, label: c.name,
-          colors: visual.gradient,
-          assetPath: visual.assetPath,
-          onTap: () => _openCategoryZone(c),
-        );
-      }),
-      // The four fixed destinations, from the same registry the screens they
+      // Popularity pass (2026-11-02): the row opens with the two things a
+      // buyer is most likely to tap, then the categories in
+      // _popularCategoryOrder, and Traders closes it - instead of the
+      // backend's seed order leading with Automobiles, Property and Land.
+      // The fixed destinations come from the same registry the screens they
       // open read their own title, icon and gradient from - so the card and
       // its destination cannot drift apart (they had: a pink 🔥 pill opened a
       // plain white-on-black AppBar with no trace of either).
@@ -459,6 +517,29 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         isDestination: true,
         onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const TrendingScreen())),
       ),
+      // Store feature, Phase 4 (spec §12/§21): same row, same card -
+      // explicitly NOT a new Home section or grid.
+      _RailItem(
+        emoji: DestinationVisuals.stores.emoji,
+        label: DestinationVisuals.stores.label,
+        colors: DestinationVisuals.stores.gradient,
+        assetPath: DestinationVisuals.stores.assetPath,
+        isDestination: true,
+        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const StoreListScreen())),
+      ),
+      // Straight from categoriesRepository.getTopLevel(), already re-cut by
+      // _orderByLikelyPopularity - however many the backend returns is
+      // however many render. No count, no slots, no index -> visual mapping:
+      // each card asks the resolver for its own name.
+      ..._topCategories.map((c) {
+        final visual = CategoryVisuals.resolve(c.name);
+        return _RailItem(
+          emoji: visual.emoji, label: c.name,
+          colors: visual.gradient,
+          assetPath: visual.assetPath,
+          onTap: () => _openCategoryZone(c),
+        );
+      }),
       // Auctions are off for launch (kAuctionsEnabled): the Auction House
       // is still in the app, with nothing leading to it.
       if (kAuctionsEnabled)
@@ -478,16 +559,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         assetPath: DestinationVisuals.traders.assetPath,
         isDestination: true,
         onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const TraderListScreen())),
-      ),
-      // Store feature, Phase 4 (spec §12/§21): same row, same card -
-      // explicitly NOT a new Home section or grid.
-      _RailItem(
-        emoji: DestinationVisuals.stores.emoji,
-        label: DestinationVisuals.stores.label,
-        colors: DestinationVisuals.stores.gradient,
-        assetPath: DestinationVisuals.stores.assetPath,
-        isDestination: true,
-        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const StoreListScreen())),
       ),
     ];
     // Right-edge fade is a ShaderMask over the ListView's own viewport
@@ -522,9 +593,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 padding: const EdgeInsets.fromLTRB(16, railPadding / 2, 6, railPadding / 2),
                 itemCount: items.length,
                 itemBuilder: (_, i) {
-                  // Divider sits only at the one category→destination boundary,
-                  // never between two categories or between two destinations.
-                  final showDivider = i > 0 && items[i].isDestination && !items[i - 1].isDestination;
+                  // A hairline at each category↔destination boundary (the row
+                  // opens with two destinations and closes on Traders), never
+                  // between two categories or between two destinations.
+                  final showDivider =
+                      i > 0 && items[i].isDestination != items[i - 1].isDestination;
                   final card = Padding(
                     padding: const EdgeInsets.only(right: 10),
                     child: CategoryArtCard(
@@ -1829,8 +1902,8 @@ class _LocationFilterDialogState extends State<_LocationFilterDialog> {
 // the unified discovery rail (real categories + Trending/Auctions/Traders/
 // Stores) - a CategoryArtCard since 2026-10-08. isDestination (final polish
 // pass, 2026-08-19) does NOT change that shape - it only flags the
-// non-category entries so _buildDiscoveryRail() can draw one thin divider
-// ahead of them.
+// non-category entries so _buildDiscoveryRail() can draw the hairline at
+// each boundary between them and the categories.
 class _RailItem {
   final String emoji;
   final String label;

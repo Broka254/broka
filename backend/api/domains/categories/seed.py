@@ -31,9 +31,11 @@ from sqlalchemy import delete, func, select, update
 from api.database import AsyncSessionLocal, Category, CategoryFilter
 
 # Canonical top-level taxonomy (Design Journal Volume 6 / spec §2), in the
-# order sellers and buyers see it: GET /categories returns this order (see
-# service.py), so the Home rail and the sell wizard's category list lead
-# with what Kenyans sell most and end on the catch-all "Other".
+# order sellers see it: GET /categories returns this order (see service.py),
+# so the sell wizard's category list leads with what Kenyans sell most and
+# ends on the catch-all "Other". Home re-cuts this into a browsing order of
+# its own (flutter_app/lib/screens/home_screen.dart, _popularCategoryOrder);
+# the taxonomy itself is unchanged.
 #
 # 2026-09-25 listing overhaul: "Vehicles" is now "Automobiles" (renamed in
 # place - see RENAMED_CATEGORIES), and Land, Food & Beverages, Health &

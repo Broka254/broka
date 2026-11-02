@@ -251,33 +251,70 @@ void main() {
       await _settleRoute(tester);
 
       expect(find.text('ALL CATEGORIES'), findsOneWidget);
-      expect(find.byKey(Key('directory-card-${fakeTopLevelCategories.first}')), findsOneWidget);
-      await tester.tap(find.byKey(const Key('directory-card-Property')));
+      // "See all" shares Home's order (home_screen.dart's
+      // _popularCategoryOrder), so it opens on Electronics, not on the
+      // backend's seed order.
+      expect(find.byKey(const Key('directory-card-Electronics')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('directory-card-Electronics')));
       await _settleRoute(tester);
       expect(
-          find.text(CategoryVisuals.zoneTitleFor('Property').toUpperCase()),
+          find.text(CategoryVisuals.zoneTitleFor('Electronics').toUpperCase()),
           findsOneWidget);
+    });
+
+    testWidgets('Home leads with Trending, Stores, then likely-popular categories',
+        (tester) async {
+      tester.view.physicalSize = const Size(390 * 3.0, 844 * 3.0);
+      tester.view.devicePixelRatio = 3.0;
+      addTearDown(tester.view.reset);
+      HomeScreen.railHintEnabled = false;
+      addTearDown(() => HomeScreen.railHintEnabled = true);
+
+      await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
+      await _settle(tester);
+
+      // 2026-11-02: the rail used to lead with Automobiles, Property and Land
+      // (the backend's seed order) and put Trending and Stores at the far
+      // end. It now opens with the two shortcuts, then Electronics - the
+      // category a buyer is most likely to browse.
+      final rail = find.byKey(const Key('home-category-rail'));
+      final cards = find.descendant(of: rail, matching: find.byType(CategoryArtCard));
+      expect(
+          tester.widgetList<CategoryArtCard>(cards).take(3).map((c) => c.label).toList(),
+          ['Trending', 'Stores', 'Electronics']);
+
+      // "See all" uses the same order, so it does not drop back to the seed
+      // order the rail just stopped leading with.
+      await tester.tap(find.byKey(const Key('home-categories-see-all')));
+      await _settleRoute(tester);
+      expect(
+          tester.widgetList<CategoryArtCard>(find.byType(CategoryArtCard))
+              .take(3).map((c) => c.label).toList(),
+          ['Electronics', 'Fashion', 'Home & Furniture']);
     });
 
     testWidgets('Home\'s categories and pictured destinations are pictures', (tester) async {
       await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
       await _settle(tester);
-      final first = find.byKey(Key('home-rail-card-${fakeTopLevelCategories.first}'));
+      final first = find.byKey(const Key('home-rail-card-Electronics'));
       expect(first, findsOneWidget);
       final image = tester.widget<Image>(find.descendant(of: first, matching: find.byType(Image)));
       expect(((image.image as ResizeImage).imageProvider as AssetImage).assetName,
-          'assets/category_art/automobiles.webp');
+          'assets/category_art/electronics.webp');
 
-      // The destinations sit at the far end of the same row. Trending,
-      // Traders and Stores carry the photos supplied for them (2026-10-28:
-      // image 3 for Trending, 1 for Traders, 2 for Stores); each card must
-      // show its own picture, not a gradient.
+      // Trending and Stores lead the row since the popularity pass
+      // (2026-11-02) and Traders closes it; each carries the photo supplied
+      // for it (2026-10-28: image 3 for Trending, 1 for Traders, 2 for
+      // Stores), and each card must show its own picture, not a gradient.
       final rail = find.descendant(
           of: find.byKey(const Key('home-category-rail')), matching: find.byType(Scrollable));
+      // Left to right, the order they now sit in: scrollUntilVisible only
+      // moves the rail forward, so checking Stores after Traders (the old
+      // order, when both were at the far end) would scroll past it.
       for (final (label, asset) in const [
         ('Trending', 'assets/category_art/trending.webp'),
-        ('Traders', 'assets/category_art/traders.webp'),
         ('Stores', 'assets/category_art/stores.webp'),
+        ('Traders', 'assets/category_art/traders.webp'),
       ]) {
         await tester.scrollUntilVisible(find.byKey(Key('home-rail-card-$label')), 300,
             scrollable: rail);

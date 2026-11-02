@@ -267,7 +267,7 @@ void main() {
       expect(find.text('BROKA'), findsOneWidget);
       expect(find.textContaining('Good '), findsOneWidget);          // greeting
       expect(find.textContaining('Search listings'), findsOneWidget);
-      expect(find.text(_firstCategory), findsOneWidget);              // rail
+      expect(find.text(_firstRailCard), findsOneWidget);              // rail
       expect(find.text('Fresh on Broka'), findsOneWidget);
       expect(find.byType(ProductCard), findsWidgets);
       // Step 19 + brief §11: the nav is outside the scroll view.
@@ -283,7 +283,7 @@ void main() {
 
       final headerAtRest = _headerHeight(tester);
       final navAtRest = tester.getRect(find.text('Home').last);
-      final railAtRest = tester.getRect(find.text(_firstCategory));
+      final railAtRest = tester.getRect(find.text(_firstRailCard));
       final firstCardAtRest = tester.getRect(find.byType(ProductCard).first);
 
       // Steps 7-9: a SLOW swipe up. Deliberately smaller than the header's
@@ -293,7 +293,7 @@ void main() {
 
       expect(_headerHeight(tester), lessThan(headerAtRest),
           reason: 'the header must contract as the user scrolls');
-      expect(tester.getRect(find.text(_firstCategory)).top,
+      expect(tester.getRect(find.text(_firstRailCard)).top,
           lessThan(railAtRest.top),
           reason: 'the discovery rail must travel upward with the content');
       expect(tester.getRect(find.byType(ProductCard).first).top,
@@ -304,7 +304,7 @@ void main() {
       // out at the compact search bar, and no tall empty band is left behind.
       await _scrollHome(tester, -1400);
 
-      expect(find.text(_firstCategory), findsNothing,
+      expect(find.text(_firstRailCard), findsNothing,
           reason: 'the category rail must scroll completely off-screen');
       expect(find.text('Fresh on Broka'), findsNothing,
           reason: 'the feed heading scrolls away with everything else');
@@ -330,7 +330,7 @@ void main() {
       await _scrollHome(tester, 3000);
       expect(_headerHeight(tester), closeTo(headerAtRest, 0.5));
       expect(find.text('BROKA'), findsOneWidget);
-      expect(find.text(_firstCategory), findsOneWidget);
+      expect(find.text(_firstRailCard), findsOneWidget);
     });
 
     testWidgets('step 30: every price on screen is a full KES amount',
@@ -458,7 +458,7 @@ void main() {
       expect(tester.getTopLeft(find.text('🔥 ')).dx, 16);
       expect(tester.getTopLeft(find.byType(ProductCard).first).dx, 16);
       // The rail's first card: 16px of ListView padding.
-      expect(tester.getTopLeft(find.byKey(Key('home-rail-card-$_firstCategory'))).dx, 16);
+      expect(tester.getTopLeft(find.byKey(const Key('home-rail-card-$_firstRailCard'))).dx, 16);
 
       // The search field and the Zeno CTA are boxes rather than bare text, so
       // measure the box, not its contents - their own padding and 1px border
@@ -615,11 +615,11 @@ void main() {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/// The first category the fake backend returns, and so the first pill in the
-/// rail. Width-sensitive assertions use this rather than a name further along
-/// the list, which a narrow viewport never builds - the rail is a lazy
-/// horizontal ListView.
-final _firstCategory = fakeTopLevelCategories.first;
+/// The first card in the rail, which leads with Trending since the
+/// popularity pass (2026-11-02). Width-sensitive assertions use this rather
+/// than a name further along the list, which a narrow viewport never builds -
+/// the rail is a lazy horizontal ListView.
+const _firstRailCard = 'Trending';
 
 /// Scrolls Home's one scroll view by [dy] (negative scrolls down the feed)
 /// and lets the frame settle. Uses the ScrollPosition directly rather than a
