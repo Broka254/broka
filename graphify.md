@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-308 endpoints served by `backend/main.py`. **Auth** is read from each
+310 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 58, optional 6, public 61, token 5, user 178.
+Counts: admin 58, optional 6, public 61, token 5, user 180.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -153,19 +153,20 @@ Counts: admin 58, optional 6, public 61, token 5, user 178.
 | GET | `/buy-agent-requests/me` | user | `get_my_buy_agent_request` (backend/api/domains/buy_agent/router.py:297) |
 | POST | `/buy-agent-requests/parse` | user | `parse_buy_request` (backend/api/domains/buy_agent/router.py:66) |
 | POST | `/buy-agent-requests/parse-intent` | user | `parse_search_intent` (backend/api/domains/buy_agent/router.py:97) |
-| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:1535) |
-| GET | `/calls/incoming` | user | `get_incoming_call` (backend/api/routers/calls.py:2039) |
-| POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:751) |
-| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:1289) |
-| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:2124) |
-| POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:642) |
-| GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:582) |
-| POST | `/calls/unregister-token` | user | `unregister_token` (backend/api/routers/calls.py:731) |
-| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:1634) |
-| POST | `/calls/{room_id}/alerted` | public | `call_alerted` (backend/api/routers/calls.py:966) |
-| POST | `/calls/{room_id}/answer` | public | `call_answered` (backend/api/routers/calls.py:1016) |
-| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:943) |
-| POST | `/calls/{room_id}/turn-credentials` | public | `get_call_turn_credentials` (backend/api/routers/calls.py:620) |
+| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:1624) |
+| GET | `/calls/incoming` | user | `get_incoming_call` (backend/api/routers/calls.py:2153) |
+| POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:755) |
+| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:1345) |
+| GET | `/calls/pending/store/{store_id}` | user | `get_store_pending_call` (backend/api/routers/calls.py:2262) |
+| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:2282) |
+| POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:646) |
+| GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:586) |
+| POST | `/calls/unregister-token` | user | `unregister_token` (backend/api/routers/calls.py:735) |
+| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:1748) |
+| POST | `/calls/{room_id}/alerted` | public | `call_alerted` (backend/api/routers/calls.py:994) |
+| POST | `/calls/{room_id}/answer` | public | `call_answered` (backend/api/routers/calls.py:1044) |
+| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:971) |
+| POST | `/calls/{room_id}/turn-credentials` | public | `get_call_turn_credentials` (backend/api/routers/calls.py:624) |
 | GET | `/categories` | public | `list_categories` (backend/api/domains/categories/router.py:14) |
 | GET | `/categories/tree` | public | `category_tree` (backend/api/domains/categories/router.py:21) |
 | GET | `/categories/{category_id}/filters` | public | `list_filters` (backend/api/domains/categories/router.py:31) |
@@ -245,38 +246,39 @@ Counts: admin 58, optional 6, public 61, token 5, user 178.
 | POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:52) |
 | GET | `/media/og/{asset_id}.jpg` | public | `link_preview_image` (backend/api/domains/media/router.py:144) |
 | POST | `/media/upload` | user | `upload_media` (backend/api/routers/media.py:352) |
-| WS | `/media/ws/store/{store_id}` | token | `store_ws` (backend/api/routers/media.py:605) |
+| WS | `/media/ws/store/{store_id}` | token | `store_ws` (backend/api/routers/media.py:622) |
 | WS | `/media/ws/{listing_id}` | token | `negotiate_ws` (backend/api/routers/media.py:124) |
 | POST | `/mpesa/callback` | public | `mpesa_callback` (backend/api/routers/mpesa.py:421) |
 | POST | `/mpesa/callback/{secret}` | public | `mpesa_callback_secured` (backend/api/routers/mpesa.py:452) |
 | POST | `/mpesa/query` | user | `query_payment_status` (backend/api/routers/mpesa.py:348) |
 | GET | `/mpesa/status/{deal_id}` | user | `get_deal_payment_status` (backend/api/routers/mpesa.py:792) |
 | POST | `/mpesa/stk-push` | user | `initiate_stk_push` (backend/api/routers/mpesa.py:154) |
-| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:5495) |
-| POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1858) |
+| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:5559) |
+| POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1877) |
 | POST | `/negotiate/chat` | user | `broker_chat` (backend/api/domains/ai_broker/router.py:44) **shadowed: never reached** |
-| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:5392) |
-| POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3703) |
+| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:5456) |
+| POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3722) |
 | POST | `/negotiate/dispute-analysis` | user | `dispute_analysis` (backend/api/domains/ai_broker/router.py:85) |
-| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:4878) |
-| POST | `/negotiate/message` | user | `send_message` (backend/api/routers/negotiate.py:1934) |
-| PATCH | `/negotiate/message/{message_id}` | user | `edit_message` (backend/api/routers/negotiate.py:3880) |
-| DELETE | `/negotiate/message/{message_id}` | user | `unsend_message` (backend/api/routers/negotiate.py:3932) |
+| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:4942) |
+| POST | `/negotiate/message` | user | `send_message` (backend/api/routers/negotiate.py:1953) |
+| PATCH | `/negotiate/message/{message_id}` | user | `edit_message` (backend/api/routers/negotiate.py:3947) |
+| DELETE | `/negotiate/message/{message_id}` | user | `unsend_message` (backend/api/routers/negotiate.py:3999) |
 | POST | `/negotiate/price-recommend` | user | `price_recommend` (backend/api/domains/ai_broker/router.py:69) |
 | POST | `/negotiate/scam-check` | user | `scam_check` (backend/api/domains/ai_broker/router.py:60) |
 | POST | `/negotiate/shopping-advisor` | user | `shopping_advisor` (backend/api/domains/ai_broker/router.py:104) |
-| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:5459) |
-| POST | `/negotiate/store/{store_id}/direct-message` | user | `store_direct_message` (backend/api/routers/negotiate.py:4657) |
-| GET | `/negotiate/store/{store_id}/history` | user | `get_store_history` (backend/api/routers/negotiate.py:4743) |
-| POST | `/negotiate/store/{store_id}/mark-delivered` | user | `mark_store_delivered` (backend/api/routers/negotiate.py:4815) |
-| POST | `/negotiate/store/{store_id}/mark-read` | user | `mark_store_read` (backend/api/routers/negotiate.py:4832) |
-| GET | `/negotiate/store/{store_id}/read-status` | user | `get_store_read_status` (backend/api/routers/negotiate.py:4849) |
-| POST | `/negotiate/zeno-action/draft-sms` | user | `zeno_draft_sms` (backend/api/routers/negotiate.py:3438) |
-| GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:3977) |
-| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:4440) |
-| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:4484) |
-| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:4531) |
-| POST | `/negotiate/{listing_id}/zeno-read` | user | `mark_zeno_read` (backend/api/routers/negotiate.py:4508) |
+| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:5523) |
+| POST | `/negotiate/store/{store_id}/direct-message` | user | `store_direct_message` (backend/api/routers/negotiate.py:4749) |
+| GET | `/negotiate/store/{store_id}/history` | user | `get_store_history` (backend/api/routers/negotiate.py:4773) |
+| POST | `/negotiate/store/{store_id}/mark-delivered` | user | `mark_store_delivered` (backend/api/routers/negotiate.py:4879) |
+| POST | `/negotiate/store/{store_id}/mark-read` | user | `mark_store_read` (backend/api/routers/negotiate.py:4896) |
+| GET | `/negotiate/store/{store_id}/read-status` | user | `get_store_read_status` (backend/api/routers/negotiate.py:4913) |
+| GET | `/negotiate/store/{store_id}/thread-info` | user | `get_store_thread_info` (backend/api/routers/negotiate.py:4850) |
+| POST | `/negotiate/zeno-action/draft-sms` | user | `zeno_draft_sms` (backend/api/routers/negotiate.py:3457) |
+| GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:4044) |
+| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:4507) |
+| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:4551) |
+| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:4598) |
+| POST | `/negotiate/{listing_id}/zeno-read` | user | `mark_zeno_read` (backend/api/routers/negotiate.py:4575) |
 | GET | `/payments/zetupay/payments/{reference}` | admin | `zetupay_payment_status` (backend/api/domains/payments/router.py:108) |
 | POST | `/payments/zetupay/test-charge` | admin | `zetupay_test_charge` (backend/api/domains/payments/router.py:77) |
 | POST | `/payments/zetupay/webhook` | public | `zetupay_webhook` (backend/api/domains/payments/router.py:35) |
@@ -824,7 +826,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-139 files in `backend/tests/`.
+140 files in `backend/tests/`.
 
 - `test_admin_additions.py` — Admin additions: SMS cost hook, timeseries, detail reads, users search.
 - `test_admin_alerts.py` — Admin alerts: event-driven creation, dedup, transitions, SSE smoke.
@@ -942,6 +944,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_sms.py` — BROKA - SMS Provider Tests (v6.3) Run: pytest backend/tests/test_sms.py -v
 - `test_sold_out_reports.py` — Sold out with payments outside BROKA: agreed deals no longer take a listing off sale (listings/stock.py), buyers report an item gone and it…
 - `test_store_billing.py` — Online store plans (PRICING.md §5; api/domains/stores/billing.py).
+- `test_store_calls.py` — Store-general calls use the same session, card and history path as chats.
 - `test_store_conversations.py` — Store-general conversations land in the Inbox (regression).
 - `test_store_rating.py` — Store rating, directory order, and the store insights endpoint.
 - `test_store_schema_migration.py` — The store-type migration on a database that predates it.
@@ -1006,7 +1009,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 | `/settings` | `SettingsScreen` |
 | `/splash` | `SplashScreen` |
 | `/start-selling` | `StartSellingScreen` |
-| `/store-chat` | `StoreChatScreen` |
+| `/store-chat` | `NegotiationScreen` |
 | `/store-explainer` | `StoreExplainerScreen` |
 | `/store-manage` | `MyStoreScreen` |
 | `/store-setup` | `StoreSetupScreen` |
@@ -1173,7 +1176,6 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `presentation/store_billing_screen.dart` — BROKA - the store's plan: what it costs, paying for it, and what paying turns on (backend/api/domains/stores/billing.py; PRICING.md §5).
 - `presentation/store_cart_screen.dart` — A store's cart: what the buyer picked, how many, the total, and checkout.
 - `presentation/store_category_screen.dart` — BROKA — stores in one category: the directory's category cards land here, the way Home's category cards land on a Category Zone.
-- `presentation/store_chat_screen.dart` — BROKA - Store Chat Screen Direct buyer <-> store-owner conversation, not tied to any one product.
 - `presentation/store_edit_screen.dart` — Editing one part of an open store, with the same page the setup wizard used for it.
 - `presentation/store_entry.dart` — Where "My Store" / "Open an online store" buttons go.
 - `presentation/store_home_screen.dart` — A store's home in the app - the "mini Jumia" a buyer lands on from a shared link, a product's store badge, or the store directory.
@@ -1422,6 +1424,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `store_card_test.dart` — StoreCard: one card for every store list - the picture on the left, the facts beside it.
 - `store_card_uniformity_test.dart` — One store card, every store list.
 - `store_category_filters_test.dart` — A category screen narrows the way the directory does (2026-10-22).
+- `store_direct_chat_test.dart` — Store conversations are direct chats, not a second messaging product.
 - `store_directory_duplicates_test.dart` — The store directory must show each shop once.
 - `store_directory_test.dart` — The Stores directory is a single-column list of wide cards - the picture on the left of each row, the facts beside it.
 - `store_graphs_and_rating_test.dart` — Distinct store graphs (visits, product views, rating, reviews, response time — one graph each, like the seller dashboard) and the product c…
