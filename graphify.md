@@ -1448,6 +1448,7 @@ Routes under `web/src/app/` (`:name` is a dynamic segment):
 | `/api/stores/:id/listings` | route | More catalogue products for the store page's "Show more" button, as product-card data (never the raw API rows). |
 | `/api/stores/:id/share` | route | A share-button tap on the web storefront, counted for the store owner. |
 | `/api/stores/:id/visit` | route | A store visit from the web storefront, passed on to the API with the visitor's own user agent (the API skips crawlers). |
+| `/download` | page |  |
 | `/og/:file` | route | Link-preview images: https://broka.co.ke/og/<image id>.jpg |
 | `/` | page |  |
 | `/store/:name/about` | page | A store's details on the web: https://broka.co.ke/store/<name>/about. |
@@ -1477,6 +1478,7 @@ Modules:
 - `web/src/lib/types.ts` — The shapes the BROKA API returns, as far as the storefront reads them.
 - `web/src/components/AddToCart.tsx` — Add to cart on a product card, and the − n + stepper it becomes once the product is in the cart - the way shops show it.
 - `web/src/components/AppButton.tsx` — A button into the BROKA app for this page: on Android it opens the app (or the APK download when the app isn't installed); elsewhere it's t…
+- `web/src/components/BrandBackground.tsx`
 - `web/src/components/CartButton.tsx` — The cart in the store's header: how many items, and on a wide screen the total - one tap opens the cart drawer.
 - `web/src/components/CartDrawer.tsx` — The cart, sliding in from the side: what's in it, how many, the total, and the way to checkout.
 - `web/src/components/CatalogueControls.tsx` — Search and filters for a store's catalogue, drawn like the app's Home: a pill search field and, beside it, the filter button (with a dot wh…
@@ -1500,6 +1502,7 @@ Modules:
 - `web/src/components/StoreFooter.tsx` — The foot of a store's pages, as a shop's website ends: the store, its departments, help with buying, and how paying works (the store direct…
 - `web/src/components/StoreHeader.tsx` — The top of every store page, the way a shop's website starts: a thin bar with what buying means, then the store's own header - its name as…
 - `web/src/components/StoreHero.tsx` — The store's cover-led opening card: its own sign and name, what and where it sells, a compact trust row, then the two useful next actions.
+- `web/src/components/StoreLanding.tsx`
 - `web/src/components/StorefrontShell.tsx` — Shared, store-agnostic canvas over BROKA's connected constellation background.
 - `web/src/components/TrustChips.tsx` — The seller's real record: verified, completed deals, rating, deal time, since.
 - `web/src/components/VisitBeacon.tsx` — Counts this page view as a store visit, for the owner's stats, from the visitor's own browser (so crawlers that don't run scripts aren't co…
