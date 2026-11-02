@@ -785,8 +785,8 @@
   position: relative;
   isolation: isolate;
   display: block;
-  flex: 0 0 108px;
-  height: 108px;
+  flex: 0 0 102px;
+  height: 102px;
   overflow: hidden;
   border: 1px solid rgb(42 202 221 / 45%);
   border-radius: 16px;

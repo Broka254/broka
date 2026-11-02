@@ -2747,6 +2747,11 @@
 .storefront .storeNavInner a {
   min-height: 42px;
 }
+.storefront .crumbs { margin-bottom: 2px; }
+.storefront .catalogue { margin-top: 14px; }
+.storefront .catalogue > .homeSection { margin-top: 22px; }
+.storefront .catalogue > .toolbar { margin-top: -2px; }
+.storefront .catalogue .grid { margin-top: 13px; }
 
 .storefront .storeCard {
   position: relative;
