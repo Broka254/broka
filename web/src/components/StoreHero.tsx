@@ -8,7 +8,7 @@ import Link from 'next/link'
 
 import type { ProductCardData } from '@/lib/catalogue'
 import { placeLine, plural } from '@/lib/format'
-import { asset, storeDetailsPath, storeShopPath } from '@/lib/links'
+import { storeDetailsPath, storeShopPath } from '@/lib/links'
 import type { StoreView } from '@/lib/storefront'
 
 import { Icon } from './Icon'
@@ -67,11 +67,15 @@ export function StoreHero({ view, showcase = [] }: { view: StoreView; showcase?:
       )}
       <div className={styles.storeCardBody}>
         <div className={styles.storeHead}>
-          {/* The store's own logo, or BROKA's when it uploaded none - the
-              same fallback the app card and Store details wear. */}
+          {/* Only show an uploaded store logo; otherwise use its own initial
+              rather than suggesting BROKA's mark is the shop's brand. */}
           <div className={styles.storeAvatar} data-testid="store-logo">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={view.logo ?? asset('/logo.png')} alt="" />
+            {view.logo ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={view.logo} alt="" />
+            ) : (
+              <span className={styles.storeInitial} aria-hidden="true">{view.initial}</span>
+            )}
           </div>
           <div className={styles.storeHeadText}>
             <div className={styles.heroChips}>

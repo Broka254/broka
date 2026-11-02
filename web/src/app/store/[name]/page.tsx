@@ -18,6 +18,7 @@ import { ProductCard } from '@/components/ProductCard'
 import { StoreFooter } from '@/components/StoreFooter'
 import { StoreHeader } from '@/components/StoreHeader'
 import { StoreHero } from '@/components/StoreHero'
+import { StorefrontShell } from '@/components/StorefrontShell'
 import { VisitBeacon } from '@/components/VisitBeacon'
 import shop from '@/components/shop.module.css'
 import styles from '@/components/store.module.css'
@@ -99,7 +100,7 @@ export default async function StorePage({ params, searchParams }: Props) {
   const hasCatalogue = featuredCards.length > 0 || categories.length > 1
 
   return (
-    <>
+    <StorefrontShell>
       <StoreHeader view={view} active="home" searchBase={shopPath} />
       <main className={`page ${shop.storePage}`}>
         <StoreHero view={view} showcase={featuredCards} />
@@ -222,6 +223,6 @@ export default async function StorePage({ params, searchParams }: Props) {
       </main>
       <StoreFooter view={view} categories={categories} />
       {store.is_active && <CartDrawer storeId={store.id} storeName={store.name} cartPath={storeCartPath(store.slug)} />}
-    </>
+    </StorefrontShell>
   )
 }

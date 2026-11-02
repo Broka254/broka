@@ -2557,6 +2557,15 @@
   min-width: 0;
 }
 
+.brandInitial {
+  display: grid;
+  place-items: center;
+  color: #5235a5;
+  background: #f0edf8;
+  font-size: 17px;
+  font-weight: 800;
+}
+
 .storeCard {
   border: 1px solid var(--border);
   border-radius: 24px;
@@ -2603,6 +2612,18 @@
   height: 100%;
   border-radius: 999px;
   object-fit: cover;
+}
+
+.storeInitial {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: #f0edf8;
+  color: #5235a5;
+  font-size: 28px;
+  font-weight: 800;
 }
 
 .storeHeadText {
@@ -2695,4 +2716,281 @@
 
 .sellName {
   min-width: 0;
+}
+
+/* ── Reusable independent-storefront theme ─────────────────────────────────
+   The marketplace keeps its own connected dark identity, while a seller's
+   public shop uses familiar retail conventions: light neutral canvas, white
+   surfaces, readable ink, and BROKA violet only for key actions and focus. */
+.storefront {
+  --bg: #f6f6f4;
+  --bg-mid: #f0f1f3;
+  --bg-card: #fff;
+  --violet: #5c3eb6;
+  --blue: #4c66bd;
+  --cyan: #12788a;
+  --green: #18794e;
+  --amber: #8a5a00;
+  --warning: #8a5a00;
+  --danger: #b42318;
+  --text-high: #202124;
+  --text-mid: #535862;
+  --text-low: #656b75;
+  --border: #e2e4e8;
+  --border-strong: #cdd1d8;
+  --cta: #5c3eb6;
+  --radius: 12px;
+  --page-width: 1240px;
+  position: relative;
+  z-index: 1;
+  min-height: 100dvh;
+  background: #f6f6f4;
+  color: #202124;
+  color-scheme: light;
+}
+
+.storefront :global(.card) {
+  background: #fff;
+  border-color: #e2e4e8;
+  backdrop-filter: none;
+  box-shadow: 0 1px 2px rgb(20 24 32 / 0.04);
+}
+
+.storefront :global(.button) {
+  border-radius: 9px;
+  box-shadow: none;
+}
+
+.storefront :global(.button:hover) {
+  box-shadow: none;
+  filter: brightness(0.94);
+}
+
+.storefront :global(.button--ghost) {
+  background: #fff;
+  color: #252831;
+  border-color: #858c98;
+}
+
+.storefront .topbar {
+  background: #f0eff5;
+  border-bottom-color: #e3e0ec;
+  color: #454953;
+}
+
+.storefront .topbarApp,
+.storefront .seeAll {
+  color: #5235a5;
+}
+
+.storefront .header {
+  background: rgb(255 255 255 / 0.98);
+  border-bottom-color: #e2e4e8;
+  box-shadow: 0 2px 8px rgb(20 24 32 / 0.05);
+}
+
+.storefront .brandName {
+  color: #202124;
+}
+
+.storefront .brandTag {
+  color: #666b75;
+}
+
+.storefront .searchPill,
+.storefront .iconButton,
+.storefront .filterButton {
+  background: #fff;
+  border-color: #858c98;
+  color: #252831;
+  box-shadow: none;
+}
+
+.storefront .chip {
+  border-color: #858c98;
+}
+
+.storefront .searchPill:focus-within {
+  border-color: #5c3eb6;
+  box-shadow: 0 0 0 3px rgb(92 62 182 / 0.14);
+}
+
+.storefront .cartButton {
+  background: #5c3eb6;
+  box-shadow: none;
+}
+
+.storefront .storeNav {
+  border-top-color: #eff0f2;
+}
+
+.storefront .storeNavInner a {
+  color: #535862;
+}
+
+.storefront .storeNavInner a:hover,
+.storefront .storeNavActive {
+  color: #392379 !important;
+}
+
+.storefront .storeNavActive {
+  border-bottom-color: #5c3eb6 !important;
+}
+
+.storefront .storeCard {
+  background: #fff;
+  border-color: #e2e4e8;
+  border-radius: 16px;
+  box-shadow: 0 2px 8px rgb(20 24 32 / 0.05);
+}
+
+.storefront .storeAvatar {
+  background: #fff;
+  border-color: #fff;
+  box-shadow: 0 1px 4px rgb(20 24 32 / 0.12);
+}
+
+.storefront .fact {
+  background: #f5f5f7;
+  border-color: #e5e6ea;
+  color: #292c33;
+}
+
+.storefront .factMuted {
+  color: #5b606b;
+}
+
+.storefront .perks li {
+  background: #fff;
+  border-color: #e2e4e8;
+  color: #252831;
+}
+
+.storefront .glassChip {
+  background: #f3f3f5;
+  border-color: #e2e4e8;
+  color: #30333a;
+}
+
+.storefront .chipVerified {
+  color: #17603e;
+}
+
+.storefront .moreWidget {
+  background: #fff;
+  border: 1px solid #858c98;
+  border-radius: 9px;
+  color: #262830;
+  box-shadow: 0 1px 3px rgb(20 24 32 / 0.12);
+}
+
+.storefront .moreWidget svg {
+  color: #262830;
+}
+
+.storefront .sellTile {
+  border-color: #858c98;
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgb(20 24 32 / 0.04);
+}
+
+.storefront .sellTile:hover,
+.storefront .iconButton:hover,
+.storefront .filterButton:hover {
+  border-color: #5c3eb6;
+}
+
+.storefront .perkIcon {
+  background: #f0edf8;
+  color: #5235a5;
+}
+
+.storefront .filterPanel {
+  background: #fff;
+  border-color: #e2e4e8;
+  box-shadow: 0 12px 32px rgb(20 24 32 / 0.14);
+}
+
+.storefront .chipOn,
+.storefront .countTag {
+  background: #efebf8;
+  color: #492f8c;
+}
+
+.storefront .product {
+  background: #fff;
+  border-color: #e2e4e8;
+  box-shadow: 0 2px 8px rgb(20 24 32 / 0.05);
+}
+
+.storefront .product:hover {
+  border-color: #c8bde5;
+  box-shadow: 0 6px 16px rgb(36 31 54 / 0.1);
+}
+
+.storefront .productPrice {
+  color: #5235a5;
+}
+
+.storefront .addToCart {
+  box-shadow: none;
+}
+
+.storefront .empty {
+  background: #fff;
+}
+
+.storefront .drawer {
+  background: #fff;
+  box-shadow: -12px 0 32px rgb(20 24 32 / 0.14);
+}
+
+.storefront .drawerLine,
+.storefront .checkoutLine {
+  background: #fff;
+  border-color: #e2e4e8;
+}
+
+.storefront .drawerFoot {
+  background: #f8f8f9;
+}
+
+.storefront .lineName:hover,
+.storefront .lineFoot strong,
+.storefront .linkButton,
+.storefront .resetFilters {
+  color: #5235a5;
+}
+
+.storefront .footer {
+  background: #fff;
+  border-top-color: #e2e4e8;
+}
+
+.storefront .footerBrand {
+  background: none;
+  background-clip: initial;
+  color: #202124;
+  -webkit-background-clip: initial;
+  -webkit-text-fill-color: #202124;
+}
+
+.storefront .footer li a,
+.storefront .footerBase a {
+  color: #5235a5;
+}
+
+.storefront .footer li a:hover,
+.storefront .footerBase a:hover {
+  color: #392379;
+}
+
+.storefront .footerBase {
+  border-top-color: #e2e4e8;
+}
+
+@media (max-width: 600px) {
+  .storefront .storeCard {
+    border-radius: 12px;
+  }
 }

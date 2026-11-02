@@ -111,17 +111,15 @@ const shop = (over: Partial<Store> = {}): Store => ({
 })
 
 describe('StoreHero', () => {
-  it("wears the shop's logo top-left, or BROKA's when it uploaded none", () => {
+  it("wears the shop's logo top-left, or its own initial when no logo is public", () => {
     const { rerender } = render(<StoreHero view={storeView(shop())} />)
     expect(screen.getByRole('heading', { name: 'Clanix' })).toBeTruthy()
     expect(screen.getByRole('img', { name: 'Verified seller' })).toBeTruthy()
     expect(screen.getByText('Verified store')).toBeTruthy()
     expect(screen.getByText('Electronics · Starehe, Nairobi')).toBeTruthy()
-    // No logo uploaded: BROKA's mark stands in - never an initial.
-    expect(screen.getByTestId('store-logo').querySelector('img')!.getAttribute('src')).toBe(
-      '/store-assets/logo.png',
-    )
-    expect(screen.queryByText('C')).toBeNull()
+    // No public logo: use the store's own initial, not the platform mark.
+    expect(screen.getByTestId('store-logo').querySelector('img')).toBeNull()
+    expect(screen.getByTestId('store-logo').textContent).toBe('C')
     // The owner's buyer rating is out of 5 and counts its reviews.
     expect(screen.getByText('4.8/5')).toBeTruthy()
     expect(screen.getByText('(12)')).toBeTruthy()
@@ -153,7 +151,6 @@ describe('StoreHero', () => {
     )
     expect([...container.querySelectorAll('img')].map((i) => i.getAttribute('src'))).toEqual([
       'https://media.broka.co.ke/img/c1/large.webp',
-      '/store-assets/logo.png',
       'https://cdn/a.webp',
     ])
   })
@@ -303,8 +300,9 @@ describe('StoreDetails', () => {
     expect(screen.queryByText('5.0')).toBeNull()
     expect(within(screen.getByText('On BROKA since').parentElement!).getByText('–')).toBeTruthy()
     expect(screen.getByText('Not verified yet')).toBeTruthy()
-    // No logo uploaded: BROKA's stands in for it.
-    expect(document.querySelector('img[src="/store-assets/logo.png"]')).not.toBeNull()
+    // No public logo: the profile uses its store-specific initial.
+    expect(document.querySelector('img[src="/store-assets/logo.png"]')).toBeNull()
+    expect(screen.getByText('C', { selector: 'span' })).toBeTruthy()
     // An API from before the owner's name was sent.
     expect(screen.getByText('The owner of Clanix')).toBeTruthy()
     expect(screen.getByText('Taking a break')).toBeTruthy()

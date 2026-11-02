@@ -16,6 +16,7 @@ import { Icon } from '@/components/Icon'
 import { ProductGrid } from '@/components/ProductGrid'
 import { StoreFooter } from '@/components/StoreFooter'
 import { StoreHeader } from '@/components/StoreHeader'
+import { StorefrontShell } from '@/components/StorefrontShell'
 import { VisitBeacon } from '@/components/VisitBeacon'
 import shop from '@/components/shop.module.css'
 import styles from '@/components/store.module.css'
@@ -100,7 +101,7 @@ export default async function StoreShopPage({ params, searchParams }: Props) {
         : store.listing_count
 
   return (
-    <>
+    <StorefrontShell>
       <StoreHeader view={view} active="shop" filters={filters} searchBase={path} />
       <main className={`page ${shop.storePage}`}>
         <nav aria-label="Breadcrumb" className={shop.crumbs}>
@@ -162,6 +163,6 @@ export default async function StoreShopPage({ params, searchParams }: Props) {
       </main>
       <StoreFooter view={view} categories={categories} />
       {store.is_active && <CartDrawer storeId={store.id} storeName={store.name} cartPath={storeCartPath(store.slug)} />}
-    </>
+    </StorefrontShell>
   )
 }

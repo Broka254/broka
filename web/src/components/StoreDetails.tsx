@@ -9,7 +9,7 @@
 // Its own page (/store/<name>/about), linked from "More details" under the
 // store's name, so the store's home is left to its products.
 import { monthYearOf, placeLine, plural, yearOf } from '@/lib/format'
-import { asset, storeDetailsPath } from '@/lib/links'
+import { storeDetailsPath } from '@/lib/links'
 import {
   buyerStars,
   replyTimeLabel,
@@ -69,11 +69,15 @@ export function StoreDetails({
   return (
     <div className={styles.storeDetails}>
       <div className={`card ${styles.detailsCard} ${styles.summary}`}>
-        {/* The store's own logo, or BROKA's when it uploaded none - never
-            an initial in a box, which read as a missing picture. */}
+        {/* Do not imply the platform logo belongs to the store when it has
+            not shared a public logo. */}
         <div className={styles.summaryLogo}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={view.logo ?? asset('/logo.png')} alt="" />
+          {view.logo ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={view.logo} alt="" />
+          ) : (
+            <span className={styles.summaryInitial} aria-hidden="true">{view.initial}</span>
+          )}
         </div>
         <div>
           <p className={styles.ownerName}>{store.name}</p>

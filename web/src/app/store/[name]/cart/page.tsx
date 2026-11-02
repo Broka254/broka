@@ -7,6 +7,7 @@ import { notFound, permanentRedirect, redirect } from 'next/navigation'
 import { CheckoutView } from '@/components/CheckoutView'
 import { StoreFooter } from '@/components/StoreFooter'
 import { StoreHeader } from '@/components/StoreHeader'
+import { StorefrontShell } from '@/components/StorefrontShell'
 import shop from '@/components/shop.module.css'
 import { getStore } from '@/lib/api'
 import { storeCartPath } from '@/lib/links'
@@ -29,7 +30,7 @@ export default async function CartPage({ params }: Props) {
   // A paused store sells nothing; its page says so.
   if (!store.is_active) redirect(view.path)
   return (
-    <>
+    <StorefrontShell>
       <StoreHeader view={view} active="cart" />
       <main className={`page ${shop.storePage}`}>
         <CheckoutView
@@ -41,6 +42,6 @@ export default async function CartPage({ params }: Props) {
         />
       </main>
       <StoreFooter view={view} />
-    </>
+    </StorefrontShell>
   )
 }

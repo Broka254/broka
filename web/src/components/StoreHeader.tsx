@@ -10,7 +10,7 @@ import Link from 'next/link'
 
 import { type CatalogueFilters, filtersQuery } from '@/lib/catalogue'
 import { APP_DOWNLOAD_URL } from '@/lib/config'
-import { asset, storeDetailsPath, storeShopPath } from '@/lib/links'
+import { storeDetailsPath, storeShopPath } from '@/lib/links'
 import { PAY_RULE } from '@/lib/safety'
 import type { StoreView } from '@/lib/storefront'
 
@@ -66,8 +66,14 @@ export function StoreHeader({
       <header className={styles.header}>
         <div className={styles.headerInner}>
           <Link href={view.path} className={styles.brand} aria-label={`${store.name} home`}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={view.logo ?? asset('/logo.png')} alt="" className={styles.brandLogo} />
+            {view.logo ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={view.logo} alt="" className={styles.brandLogo} />
+            ) : (
+              <span className={`${styles.brandLogo} ${styles.brandInitial}`} aria-hidden="true">
+                {view.initial}
+              </span>
+            )}
             <span className={styles.brandText}>
               <span className={styles.brandName}>{store.name}</span>
               <span className={styles.brandTag}>Store on BROKA</span>

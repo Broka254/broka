@@ -18,6 +18,7 @@ import { ProductCard } from '@/components/ProductCard'
 import { ShareButtons } from '@/components/ShareButtons'
 import { StoreFooter } from '@/components/StoreFooter'
 import { StoreHeader } from '@/components/StoreHeader'
+import { StorefrontShell } from '@/components/StorefrontShell'
 import { TrustChips } from '@/components/TrustChips'
 import { VisitBeacon } from '@/components/VisitBeacon'
 import shopStyles from '@/components/shop.module.css'
@@ -107,7 +108,7 @@ export default async function ProductPage({ params, searchParams }: Props) {
   const cartPath = storeCartPath(store.slug)
 
   return (
-    <>
+    <StorefrontShell>
       <StoreHeader view={shop} active="product" searchBase={storeShopPath(store.slug)} />
       <main className={`page ${shopStyles.storePage}`}>
         <nav aria-label="Breadcrumb" className={shopStyles.crumbs}>
@@ -216,6 +217,6 @@ export default async function ProductPage({ params, searchParams }: Props) {
       </main>
       <StoreFooter view={shop} />
       <CartDrawer storeId={store.id} storeName={store.name} cartPath={cartPath} />
-    </>
+    </StorefrontShell>
   )
 }
