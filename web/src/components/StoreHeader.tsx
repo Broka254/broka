@@ -10,12 +10,10 @@ import Link from 'next/link'
 
 import { type CatalogueFilters, filtersQuery } from '@/lib/catalogue'
 import { asset, storeDetailsPath, storeShopPath } from '@/lib/links'
-import { PAY_RULE } from '@/lib/safety'
 import type { StoreView } from '@/lib/storefront'
 
 import { CartButton } from './CartButton'
 import { CatalogueControls } from './CatalogueControls'
-import { Icon } from './Icon'
 import { ShareIcon } from './ShareButtons'
 import styles from './shop.module.css'
 
@@ -37,14 +35,8 @@ export function StoreHeader({
 }) {
   const { store } = view
   const shopPath = storeShopPath(store.slug)
-  // A shop's departments in the bar, as a store's site has them: the
-  // sections first, then what it sells. Departments link into the shop
-  // filtered, so the bar is useful, not decoration.
   const links = active === 'home'
-    ? [
-        { key: 'home', label: 'Home', href: view.path },
-        { key: 'about', label: 'About', href: storeDetailsPath(store.slug) },
-      ]
+    ? []
     : [
         { key: 'home', label: 'Home', href: view.path },
         { key: 'shop', label: 'Shop', href: shopPath },
@@ -56,14 +48,6 @@ export function StoreHeader({
         { key: 'about', label: 'About', href: storeDetailsPath(store.slug) },
       ]
   return (
-    <>
-      <div className={styles.topbar}>
-        <p>
-          <Icon name="check" size={15} />
-          <strong>{PAY_RULE}</strong>
-          <span className={styles.topbarMore}>· Delivery or pickup agreed with the store</span>
-        </p>
-      </div>
       <header className={styles.header}>
         <div className={`${styles.headerInner} ${active === 'home' ? styles.homeHeaderInner : ''}`}>
           <Link href={view.path} className={styles.brand} aria-label={`${store.name} home`}>
@@ -74,6 +58,11 @@ export function StoreHeader({
               <span className={styles.brandTag}>Store on BROKA</span>
             </span>
           </Link>
+          {active === 'home' && (
+            <Link href={storeDetailsPath(store.slug)} className={styles.homeAboutButton}>
+              About
+            </Link>
+          )}
           {active !== 'home' && (
             <>
               <div className={styles.headerSearch}>
@@ -90,21 +79,22 @@ export function StoreHeader({
             </>
           )}
         </div>
-        <nav className={styles.storeNav} aria-label="Store sections">
-          <div className={styles.storeNavInner}>
-            {links.map((l) => (
-              <Link
-                key={l.key}
-                href={l.href}
-                aria-current={active === l.key ? 'page' : undefined}
-                className={active === l.key ? styles.storeNavActive : undefined}
-              >
-                {l.label}
-              </Link>
-            ))}
-          </div>
-        </nav>
+        {active !== 'home' && (
+          <nav className={styles.storeNav} aria-label="Store sections">
+            <div className={styles.storeNavInner}>
+              {links.map((l) => (
+                <Link
+                  key={l.key}
+                  href={l.href}
+                  aria-current={active === l.key ? 'page' : undefined}
+                  className={active === l.key ? styles.storeNavActive : undefined}
+                >
+                  {l.label}
+                </Link>
+              ))}
+            </div>
+          </nav>
+        )}
       </header>
-    </>
   )
 }

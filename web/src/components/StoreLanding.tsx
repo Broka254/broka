@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { storeCategoryTiles } from '@/components/CategoryPills'
 import { type ProductCardData, filtersQuery } from '@/lib/catalogue'
 import { categoryArtPath } from '@/lib/category-art'
-import { storeShopPath, storeDetailsPath } from '@/lib/links'
+import { storeDetailsPath, storeShopPath } from '@/lib/links'
 import type { StoreCategory } from '@/lib/types'
 import type { StoreView } from '@/lib/storefront'
 
@@ -34,7 +34,7 @@ export function StoreLanding({
     art: categoryArtPath(name),
   }))
   const heroImage = view.cover?.src ?? view.photos[0]?.src ?? null
-  const heroHref = storeDetailsPath(store.slug)
+  const heroHref = shopPath
   const primaryHref = products.length > 0 ? shopPath : tiles.length > 0 ? '#collections-title' : shopPath
   const primaryLabel = products.length > 0 ? 'Shop all products' : tiles.length > 0 ? 'Explore collections' : 'Visit the shop'
   const context = [store.category, view.isVirtual ? view.delivery : view.place].filter(Boolean).join(' · ')
@@ -60,12 +60,11 @@ export function StoreLanding({
             </div>
             <div className={styles.actions}>
               {store.is_active && <Link href={primaryHref} className={styles.primaryAction}>{primaryLabel} <span aria-hidden="true">↗</span></Link>}
-              <Link href={storeDetailsPath(store.slug)} className={styles.secondaryAction}>Meet the store</Link>
             </div>
             {!store.is_active && <p className={styles.paused} role="status">This store is taking a break right now.</p>}
           </div>
 
-          <Link href={heroHref} className={styles.heroVisual} aria-label={`Meet ${store.name}`}>
+          <Link href={heroHref} className={styles.heroVisual} aria-label={`Browse ${store.name} products`}>
             {heroImage ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
@@ -80,7 +79,7 @@ export function StoreLanding({
             <span className={styles.visualShade} />
             <span className={styles.visualTag}>A look inside this store</span>
             <span className={styles.visualCaption}>
-              <span>Meet {store.name}</span>
+              <span>Explore {store.name}&apos;s shop</span>
               <strong>{store.listing_count > 0 ? `${store.listing_count} products to explore` : 'Discover the collections'}</strong>
               <span className={styles.visualArrow} aria-hidden="true">↗</span>
             </span>

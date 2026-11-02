@@ -121,7 +121,9 @@ describe('StoreLanding', () => {
     expect(brand.querySelector('img')?.getAttribute('src')).toBe('/store-assets/logo.png')
     expect(screen.queryByRole('search')).toBeNull()
     expect(screen.queryByRole('navigation', { name: 'Store' })).toBeNull()
-    expect(screen.queryByRole('link', { name: 'Shop' })).toBeNull()
+    expect(screen.queryByRole('navigation', { name: 'Store sections' })).toBeNull()
+    expect(screen.getByRole('link', { name: 'About' }).getAttribute('href')).toBe('/store/clanix/about')
+    expect(screen.queryByText('See it, then pay the store')).toBeNull()
     expect(screen.queryByRole('link', { name: 'Electronics' })).toBeNull()
     expect(screen.queryByText('Get the app')).toBeNull()
   })
@@ -138,8 +140,8 @@ describe('StoreLanding', () => {
     )
 
     expect(screen.getByRole('heading', { name: 'Clanix' })).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'Meet Clanix' }).getAttribute('href')).toBe('/store/clanix/about')
-    expect(screen.getByRole('link', { name: 'Meet Clanix' }).querySelector('img')?.getAttribute('src')).toBe(
+    expect(screen.getByRole('link', { name: 'Browse Clanix products' }).getAttribute('href')).toBe('/store/clanix/shop')
+    expect(screen.getByRole('link', { name: 'Browse Clanix products' }).querySelector('img')?.getAttribute('src')).toBe(
       'https://media.broka.co.ke/img/c1/large.webp',
     )
     expect(screen.getByRole('link', { name: /Networking/ }).getAttribute('href')).toBe('/store/clanix/shop?subcategory_id=networking')
