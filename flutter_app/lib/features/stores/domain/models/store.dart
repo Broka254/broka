@@ -361,6 +361,11 @@ class Store {
   /// object above is owner-only). Null from older backends.
   final TimeLeft? timeLeft;
   final int listingCount;
+  /// How many buyers follow this shop, and whether the signed-in viewer
+  /// is one of them. Zero/false from backends that predate follows -
+  /// the storefront then simply shows no followers, never a guess.
+  final int followerCount;
+  final bool viewerFollowing;
   /// Straight-line km from the viewer, one decimal, to the owner's
   /// approximate point (±1 km) - null when the viewer sent no location,
   /// the owner hid theirs, or either side has none. Backends before store
@@ -424,6 +429,8 @@ class Store {
     this.billing,
     this.timeLeft,
     this.listingCount = 0,
+    this.followerCount = 0,
+    this.viewerFollowing = false,
     this.distanceKm,
     this.distanceLabel,
     this.distanceApproximate = false,
@@ -481,6 +488,8 @@ class Store {
       billing:      StoreBilling.fromJson(json['billing']),
       timeLeft:     TimeLeft.fromPayload(json),
       listingCount: (json['listing_count'] as num?)?.toInt() ?? 0,
+      followerCount: (json['follower_count'] as num?)?.toInt() ?? 0,
+      viewerFollowing: json['viewer_following'] as bool? ?? false,
       distanceKm: (json['distance_km'] as num?)?.toDouble(),
       distanceLabel: json['distance_label'] as String?,
       distanceApproximate: json['distance_approximate'] as bool? ?? false,
@@ -652,10 +661,55 @@ class StoreRatingBreakdown {
 class StoreCategoryCount {
   final String name;
   final int count;
-  const StoreCategoryCount(this.name, this.count);
+
+  /// The types of item on this shelf ([{id, name, count}]), biggest
+  /// first. Empty for a category with nothing filed under a
+  /// subcategory - and on backends that predate the tiles, where the
+  /// rail falls back to one tile per category.
+  final List<StoreSubcategoryCount> subcategories;
+
+  const StoreCategoryCount(this.name, this.count,
+      [this.subcategories = const []]);
 
   factory StoreCategoryCount.fromJson(Map<String, dynamic> j) =>
-      StoreCategoryCount(j['name'] as String, (j['count'] as num).toInt());
+      StoreCategoryCount(
+        j['name'] as String,
+        (j['count'] as num).toInt(),
+        [
+          for (final s in j['subcategories'] as List? ?? const [])
+            if (s is Map)
+              StoreSubcategoryCount.fromJson(s.cast<String, dynamic>()),
+        ],
+      );
+}
+
+/// One type of item on a store's category shelf: the Shop by Category
+/// rail's tile. [id] is the filter the catalogue sends back.
+class StoreSubcategoryCount {
+  final String id;
+  final String name;
+  final int count;
+  const StoreSubcategoryCount({required this.id, required this.name, required this.count});
+
+  factory StoreSubcategoryCount.fromJson(Map<String, dynamic> j) =>
+      StoreSubcategoryCount(
+        id: j['id'] as String,
+        name: j['name'] as String,
+        count: (j['count'] as num).toInt(),
+      );
+}
+
+/// What following or unfollowing a store answers: the button's new state
+/// and the count beside it, from the one response.
+class StoreFollowState {
+  final bool following;
+  final int followerCount;
+  const StoreFollowState({required this.following, required this.followerCount});
+
+  factory StoreFollowState.fromJson(Map<String, dynamic> j) => StoreFollowState(
+        following: j['following'] as bool? ?? false,
+        followerCount: (j['follower_count'] as num?)?.toInt() ?? 0,
+      );
 }
 
 /// The result of the setup wizard's live link check.

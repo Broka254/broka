@@ -1,16 +1,21 @@
 // A product in a store's catalogue, as a shop shows it: the photo with its
-// condition, the name, the price, and Add to cart - which turns into a
-// − n + stepper once it's in the cart.
+// condition, a save heart, the name, the price, how many are left, and Add
+// to cart - which turns into a − n + stepper once it's in the cart.
 //
 // Not the marketplace ProductCard: that one carries the seller row (avatar,
 // name, rating) and the store's own name, which are the same on every card
 // inside a store (STORES_UI_REVIEW.md M6), and has nothing to buy with.
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../../../../core/utils/result.dart';
 import '../../../../main.dart' show BrokaColors;
+import '../../../../services/api_service.dart';
+import '../../../../utils/auth_gate.dart';
 import '../../../../utils/price_unit.dart';
 import '../../../../widgets/broka_image.dart';
 import '../../../categories/domain/category_visual.dart';
+import '../../../listings/data/repositories/listings_repository.dart';
 import '../../../listings/domain/models/listing.dart';
 import '../../data/store_cart.dart';
 import '../store_cart_screen.dart' show QuantityStepper;
@@ -22,6 +27,8 @@ class StoreProductCard extends StatelessWidget {
     required this.cart,
     required this.onTap,
     this.onAddBlocked,
+    this.showSave = true,
+    this.listings,
   });
 
   final BrokaListing listing;
@@ -32,10 +39,17 @@ class StoreProductCard extends StatelessWidget {
   /// own owner previewing it). Null: adding is allowed.
   final VoidCallback? onAddBlocked;
 
+  /// The save heart. False on the owner's own preview - saving your own
+  /// product is meaningless, and the heart would only mis-tap.
+  final bool showSave;
+
+  /// Injectable for tests; the app uses the shared repository.
+  final ListingsRepository? listings;
+
   /// Height the card needs below its photo at a text scale of 1: padding,
-  /// two lines of name, the price and the 36dp button (ProductGridView's
-  /// itemTextBlock).
-  static const double textBlock = 128;
+  /// two lines of name, the price, the stock line and the 36dp button
+  /// (ProductGridView's itemTextBlock).
+  static const double textBlock = 150;
 
   /// The photo's height as a share of the card's width (ProductGridView's
   /// itemImageShare): square, so the photo is the biggest thing on the
@@ -52,6 +66,23 @@ class StoreProductCard extends StatelessWidget {
         'refurbished' => 'Refurbished',
         _ => null,
       };
+
+  /// How many are left, as the card says it: "Only 3 left" when the
+  /// shelf is nearly empty, "In stock" while it isn't, and "Sold out"
+  /// at zero. A quantity the seller never stated reads as in stock -
+  /// the listing is active and buyable, which is what the line promises.
+  ({String label, Color color, IconData icon}) get _stock {
+    final left = listing.quantity;
+    if (left != null && left <= 0) {
+      return (label: 'Sold out', color: BrokaColors.textMid, icon: Icons.remove_circle_outline_rounded);
+    }
+    if (left != null && left <= 3) {
+      return (label: 'Only $left left', color: BrokaColors.warning,
+          icon: Icons.local_fire_department_outlined);
+    }
+    return (label: 'In stock', color: BrokaColors.success,
+        icon: Icons.verified_outlined);
+  }
 
   /// The card's photo: the stored cover, else the first photo, else what
   /// listings not converted yet carry (the showcase, or base64 photos).
@@ -141,13 +172,22 @@ class StoreProductCard extends StatelessWidget {
                   Positioned(
                     top: 8,
                     left: 8,
-                    right: 8,
+                    right: showSave ? 44 : 8,
                     child: Wrap(spacing: 4, runSpacing: 4, children: [
                       if (_isAuction) const _Badge('Auction', color: BrokaColors.danger),
                       if (listing.isFeatured) const _Badge('Featured', color: BrokaColors.gold),
                       if (_condition != null) _Badge(_condition!, color: BrokaColors.neonBlue),
                     ]),
                   ),
+                  if (showSave)
+                    Positioned(
+                      top: 4,
+                      right: 4,
+                      child: _SaveHeart(
+                        listingId: listing.id,
+                        listings: listings,
+                      ),
+                    ),
                 ]),
               ),
               Padding(
@@ -168,6 +208,8 @@ class StoreProductCard extends StatelessWidget {
                         style: const TextStyle(color: _accent, fontSize: 17,
                             fontWeight: FontWeight.w900)),
                   ),
+                  const SizedBox(height: 3),
+                  _StockLine(stock: _stock),
                   const SizedBox(height: 8),
                   _isAuction ? _viewButton() : _cartControl(context),
                 ]),
@@ -268,4 +310,141 @@ class _Badge extends StatelessWidget {
         child: Text(label, style: TextStyle(color: Color.lerp(color, Colors.white, 0.45),
             fontSize: 9.5, fontWeight: FontWeight.w800, letterSpacing: 0.3)),
       );
+}
+
+/// How many are left, under the price: "In stock" in green, "Only 3
+/// left" in amber, "Sold out" in grey. One line, always - the grid's
+/// textBlock counts on its height.
+class _StockLine extends StatelessWidget {
+  const _StockLine({required this.stock});
+  final ({String label, Color color, IconData icon}) stock;
+
+  @override
+  Widget build(BuildContext context) => Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(stock.icon, size: 13, color: stock.color),
+        const SizedBox(width: 4),
+        Flexible(
+          child: Text(stock.label, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: stock.color, fontSize: 11.5,
+                  fontWeight: FontWeight.w700)),
+        ),
+      ]);
+}
+
+/// The save heart on the photo's top right: the same save the product
+/// screen's heart toggles (GET/POST /listings/{id}/save, through the
+/// engagement read), so a product saved here is saved everywhere.
+///
+/// The state is fetched once per listing and kept for the session: a
+/// catalogue of twenty cards must not ask twenty times on every scroll
+/// back. A visitor who isn't signed in sees the outline; tapping it
+/// asks them to sign in first, the same gate as the product screen.
+class _SaveHeart extends StatefulWidget {
+  const _SaveHeart({required this.listingId, this.listings});
+  final String listingId;
+  final ListingsRepository? listings;
+
+  /// What the session already knows, listing by listing.
+  static final Map<String, bool> _known = {};
+
+  /// Tests start from not knowing anything.
+  @visibleForTesting
+  static void resetCache() => _known.clear();
+
+  @override
+  State<_SaveHeart> createState() => _SaveHeartState();
+}
+
+class _SaveHeartState extends State<_SaveHeart> {
+  ListingsRepository get _repo => widget.listings ?? listingsRepository;
+  bool? _saved;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _saved = _SaveHeart._known[widget.listingId];
+    if (_saved == null && ApiService.currentUserId != null) _load();
+  }
+
+  Future<void> _load() async {
+    final result = await _repo.engagement(widget.listingId);
+    if (!mounted) return;
+    if (result case Success(:final data)) {
+      _SaveHeart._known[widget.listingId] = data.saved;
+      setState(() => _saved = data.saved);
+    }
+  }
+
+  /// Saves, or takes the save back. Shown at once; put back, with a
+  /// word, if the server says no - the product screen's rule.
+  Future<void> _toggle() async {
+    if (_busy) return;
+    if (!await requireAuth(context, reason: 'to save listings')) return;
+    if (!mounted) return;
+    var saved = _saved;
+    saved ??= _SaveHeart._known[widget.listingId];
+    if (saved == null) {
+      // Signed in just now: learn the state before flipping it, or the
+      // first tap on an already-saved product would unsave it.
+      setState(() => _busy = true);
+      final result = await _repo.engagement(widget.listingId);
+      if (!mounted) return;
+      setState(() => _busy = false);
+      if (result case Success(:final data)) {
+        saved = data.saved;
+      } else {
+        return;
+      }
+    }
+    final next = !saved!;
+    setState(() {
+      _saved = next;
+      _busy = true;
+    });
+    _SaveHeart._known[widget.listingId] = next;
+    final result = await _repo.setSaved(widget.listingId, next);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (result case Failure(:final message)) {
+      _SaveHeart._known[widget.listingId] = !next;
+      setState(() => _saved = !next);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final saved = _saved ?? false;
+    return Semantics(
+      button: true,
+      selected: saved,
+      label: saved ? 'Remove from saved items' : 'Save this product',
+      child: GestureDetector(
+        key: Key('save-product-${widget.listingId}'),
+        onTap: _toggle,
+        behavior: HitTestBehavior.opaque,
+        child: Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(0.55),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withOpacity(0.18)),
+          ),
+          child: _busy && _saved == null
+              ? const Padding(
+                  padding: EdgeInsets.all(10),
+                  child: CircularProgressIndicator(strokeWidth: 2,
+                      color: BrokaColors.textMid),
+                )
+              : Icon(
+                  saved ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                  size: 18,
+                  color: saved ? BrokaColors.neonPink : Colors.white.withOpacity(0.9),
+                ),
+        ),
+      ),
+    );
+  }
 }

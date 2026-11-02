@@ -1714,7 +1714,8 @@ async def _init_db_impl():
     _init_log = _logging.getLogger(__name__)
     for _module, _names in (
         ("api.models.dispute", ("DisputeCase", "DisputeEvent", "DisputeEvidence", "DisputeTimer")),
-        ("api.models.store", ("Store", "StoreDailyCount", "StoreCategoryLink", "StoreRatingSnapshot")),
+        ("api.models.store", ("Store", "StoreDailyCount", "StoreCategoryLink", "StoreRatingSnapshot",
+                              "StoreFollow")),
         ("api.models.marketing", ("MarketingCampaign", "MarketingCreative", "MarketingCampaignEvent")),
         ("api.models.external_escrow", ("ExternalEscrow",)),
         ("api.models.media", ("MediaAsset", "MediaBlob")),

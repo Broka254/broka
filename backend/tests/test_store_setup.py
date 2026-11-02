@@ -703,10 +703,11 @@ class TestCatalogue:
         cats = (await client.get(f"/stores/{sid}/categories")).json()
         # Online stores never browse by Other (nor Property, Automobiles,
         # Land, Services): the free-text row stays stored and listed, just
-        # not railed.
+        # not railed. Nothing here was filed under a subcategory, so the
+        # tiles ride along empty.
         assert cats == [
-            {"name": "Electronics", "count": 3},
-            {"name": "Home & Furniture", "count": 1},
+            {"name": "Electronics", "count": 3, "subcategories": []},
+            {"name": "Home & Furniture", "count": 1, "subcategories": []},
         ]
 
         async def names(**params):

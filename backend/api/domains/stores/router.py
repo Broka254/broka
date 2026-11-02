@@ -326,17 +326,20 @@ async def list_stores(
     nearest_first: bool = Query(False, description="Nearest stores first for 'Stores near you'"),
     store_type: Optional[Literal["physical", "virtual"]] = Query(
         None, description="Both kinds when omitted; never hides virtual stores by default"),
+    current_user: Optional[dict] = Depends(get_current_user_optional),
     db: AsyncSession = Depends(get_db),
 ):
     """Browse active stores. Public. With lat/lng every store carries
     distance_km and distance_label ('6 km from you'); with max_distance_km
-    only nearby stores; with nearest_first nearest first."""
+    only nearby stores; with nearest_first nearest first. A signed-in
+    caller also gets their own Following state on every shop."""
     return await StoreService(db).list_stores(
         search=search, category=category or specialization, county=county, subcounty=subcounty,
         limit=limit, offset=offset, with_total=with_total,
         viewer_lat=lat, viewer_lng=lng,
         max_distance_km=max_distance_km, nearest_first=nearest_first,
         store_type=store_type,
+        viewer_id=current_user["id"] if current_user else None,
     )
 
 
@@ -547,6 +550,7 @@ async def get_store_listings(
     store_id: str,
     search: Optional[str] = Query(None, max_length=100),
     category: Optional[str] = None,
+    subcategory_id: Optional[str] = Query(None, max_length=64),
     sort: Literal["featured", "newest", "price_low", "price_high"] = "featured",
     condition: Optional[Literal["new", "used", "refurbished"]] = None,
     min_price: Optional[float] = Query(None, ge=0),
@@ -558,10 +562,13 @@ async def get_store_listings(
 ):
     """The store's catalogue, in the same card format as Home. Public.
     condition and the price range are the storefront's filter panel - the
-    same filters Home's panel sends to /listings."""
+    same filters Home's panel sends to /listings. subcategory_id is one
+    tile of the storefront's Shop by Category rail - the type of item
+    already implies its parent, so no category rides along with it."""
     return await StoreService(db).list_store_listings(
         store_id, limit=limit, offset=offset, with_total=with_total,
         search=search, category=category, sort=sort,
+        subcategory_id=subcategory_id,
         condition=condition, min_price=min_price, max_price=max_price,
     )
 
@@ -699,6 +706,31 @@ async def record_share(
         db, store_id, body.surface, store_stats.share_channel(body.channel), client=client,
     )
     return {"counted": counted}
+
+
+@router.post("/{store_id}/follow")
+async def follow_store(
+    store_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Follow a store: the storefront's Follow button. Idempotent -
+    following twice is the same row - and the owner cannot follow their
+    own shop. Returns {following: true, follower_count} so the button
+    and the count update from one response."""
+    return await StoreService(db).follow_store(store_id, current_user["id"])
+
+
+@router.delete("/{store_id}/follow")
+async def unfollow_store(
+    store_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Unfollow a store. Idempotent too: leaving twice is still gone.
+    Returns {following: false, follower_count}."""
+    return await StoreService(db).unfollow_store(store_id, current_user["id"])
+
 
 
 @router.post("/{store_id}/campaign/{token}/event", status_code=202)

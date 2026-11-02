@@ -373,6 +373,7 @@ class StoreService:
         max_distance_km: Optional[float] = None,
         nearest_first: bool = False,
         store_type: Optional[str] = None,
+        viewer_id: Optional[str] = None,
     ):
         """Browse active stores. A paused store is left out of the
         directory, though its own link still resolves; with store billing
@@ -491,11 +492,18 @@ class StoreService:
 
         # One grouped count, one owners query, one assets query, one
         # subscriptions query and one category-links query for the whole
-        # page - never one per store.
+        # page - never one per store. Follows ride the same rule: one
+        # grouped count and, for a signed-in viewer, one Following lookup
+        # for the page.
         counts = await self._listing_counts_for([s.id for s in stores])
         assets = await self._assets_for(stores)
         owners = await self._owners_for(stores)
         links = await self._categories_for([s.id for s in stores])
+        follow_counts = await self._follow_counts_for([s.id for s in stores])
+        viewer_following = (
+            await self._followed_ids_for([s.id for s in stores], viewer_id)
+            if viewer_id is not None else None
+        )
         # The owners' real buyer-review figures, one query for the page -
         # User.rating is a legacy cache whose 5.0 starting value would show
         # every new seller as perfect.
@@ -509,6 +517,8 @@ class StoreService:
                 billing_subs=subs, category_names=links.get(s.id, []),
                 viewer_lat=viewer_lat, viewer_lng=viewer_lng,
                 owner_reviews=owner_reviews,
+                viewer_id=viewer_id, follow_counts=follow_counts,
+                viewer_following=viewer_following,
             )
             for s in stores
         ]
@@ -809,6 +819,68 @@ class StoreService:
         )).all()
         return {row[0]: row[1] for row in rows}
 
+    async def _follow_counts_for(self, store_ids: list[str]) -> dict[str, int]:
+        """Follower counts for many stores in one grouped query. A store
+        nobody follows has no row, so read with .get(id, 0)."""
+        from api.models.store import StoreFollow
+        if not store_ids:
+            return {}
+        rows = (await self.db.execute(
+            select(StoreFollow.store_id, func.count())
+            .where(StoreFollow.store_id.in_(store_ids))
+            .group_by(StoreFollow.store_id)
+        )).all()
+        return {row[0]: row[1] for row in rows}
+
+    async def _followed_ids_for(self, store_ids: list[str], viewer_id: str) -> set[str]:
+        """The ids among [store_ids] this viewer follows, in one query -
+        the directory's Following states for the whole page at once."""
+        from api.models.store import StoreFollow
+        if not store_ids:
+            return set()
+        rows = (await self.db.execute(
+            select(StoreFollow.store_id)
+            .where(StoreFollow.store_id.in_(store_ids),
+                   StoreFollow.user_id == viewer_id)
+        )).all()
+        return {row[0] for row in rows}
+
+    async def follow_store(self, store_id: str, user_id: str) -> dict:
+        """Follow a store. Idempotent: following twice is the same row,
+        and the answer says so either way. The owner cannot follow their
+        own shop - a follower count the owner can raise by one is not a
+        count anyone can trust."""
+        from api.models.store import StoreFollow
+        store = await self._get_or_404(store_id)
+        if store.owner_id == user_id:
+            raise HTTPException(status_code=400, detail="You cannot follow your own store")
+        existing = (await self.db.execute(
+            select(StoreFollow).where(StoreFollow.store_id == store_id,
+                                      StoreFollow.user_id == user_id)
+        )).scalar_one_or_none()
+        if existing is None:
+            self.db.add(StoreFollow(store_id=store_id, user_id=user_id))
+            try:
+                await self.db.commit()
+            except IntegrityError:
+                # Two taps at once: the second insert loses the race on
+                # the unique pair, which is the same state as success.
+                await self.db.rollback()
+        count = (await self._follow_counts_for([store_id])).get(store_id, 0)
+        return {"following": True, "follower_count": count}
+
+    async def unfollow_store(self, store_id: str, user_id: str) -> dict:
+        """Unfollow a store. Idempotent too: leaving twice is still gone."""
+        from api.models.store import StoreFollow
+        await self._get_or_404(store_id)
+        await self.db.execute(
+            delete(StoreFollow).where(StoreFollow.store_id == store_id,
+                                      StoreFollow.user_id == user_id)
+        )
+        await self.db.commit()
+        count = (await self._follow_counts_for([store_id])).get(store_id, 0)
+        return {"following": False, "follower_count": count}
+
     async def get_store(self, store_id: str, viewer_id: Optional[str] = None) -> dict:
         store = await self._get_or_404(store_id)
         return await self._public_or_owner(store, viewer_id)
@@ -828,10 +900,10 @@ class StoreService:
         if store.deleted_at is not None:
             raise HTTPException(status_code=404, detail="Store not found")
         if viewer_id and store.owner_id == viewer_id:
-            return await self._store_dict(store, owner_view=True)
+            return await self._store_dict(store, owner_view=True, viewer_id=viewer_id)
         if store_billing.enabled() and not await store_billing.store_live(self.db, store):
             raise HTTPException(status_code=404, detail="Store not found")
-        return await self._store_dict(store)
+        return await self._store_dict(store, viewer_id=viewer_id)
 
     async def find_by_slug(self, slug: str) -> Optional[Store]:
         # Links are case-insensitive: someone typing BROKA.co.ke/store/Clanix
@@ -849,7 +921,7 @@ class StoreService:
         than one per owner, so this takes the newest; a deleted one never
         counts, so an owner who deleted their store can open another."""
         store = await self._my_store(owner_id)
-        return await self._store_dict(store, owner_view=True) if store else None
+        return await self._store_dict(store, owner_view=True, viewer_id=owner_id) if store else None
 
     async def _my_store(self, owner_id: str) -> Optional[Store]:
         return (await self.db.execute(
@@ -865,6 +937,7 @@ class StoreService:
         with_total: bool = False,
         search: Optional[str] = None,
         category: Optional[str] = None,
+        subcategory_id: Optional[str] = None,
         sort: Optional[str] = None,
         condition: Optional[str] = None,
         min_price: Optional[float] = None,
@@ -891,8 +964,19 @@ class StoreService:
                 # "Other", so tapping "Other · 3" showed "No products".
                 listing_category = None
                 outside_categories = store_categories.named_listing_categories()
+        if subcategory_id is not None:
+            # The tile carries its own type of item; the id is the filter,
+            # and it already implies its parent category, so no category
+            # needs to ride along with it. An unknown id is a 400, the
+            # same rule as an unknown category above - a mistyped shelf
+            # must say so, not show an empty shop.
+            from api.database import Category
+            sub = await self.db.get(Category, subcategory_id)
+            if sub is None or sub.parent_id is None:
+                raise HTTPException(status_code=400, detail="Unknown subcategory")
         return await ListingService(self.db).list_listings(
             store_id=store_id, category=listing_category,
+            subcategory_id=subcategory_id,
             outside_categories=outside_categories, search=(search or "").strip() or None,
             sort=CATALOGUE_SORTS.get(sort or "featured"),
             condition=condition, min_price=min_price, max_price=max_price,
@@ -1122,8 +1206,14 @@ class StoreService:
 
     async def list_categories(self, store_id: str) -> list[dict]:
         """The categories this store has active products in, with counts,
-        biggest first - the storefront's category rail. Listings whose
-        category isn't one of BROKA's own count under "Other".
+        biggest first - the storefront's category rail. Each entry also
+        carries its `subcategories`: [{id, name, count}], the types of
+        item on that shelf, so the rail can show "Phones" with the phones
+        picture instead of one "Electronics" tile. A listing filed
+        without a subcategory counts toward its category only, and a
+        subcategory whose row was since retired keeps its listings under
+        the category with no tile of its own. Listings whose category
+        isn't one of BROKA's own count under "Other".
 
         Online (goods) stores never browse by Property, Automobiles, Land,
         Services or Other: those rows stay stored, they are just left out
@@ -1145,11 +1235,51 @@ class StoreService:
         if card.id == "goods":
             for excluded in store_categories.ONLINE_STORE_EXCLUDED:
                 counts.pop(excluded, None)
+        subs = await self._subcategory_counts_for(store_id)
         order = {c: i for i, c in enumerate(CANONICAL_CATEGORIES)}
         return [
-            {"name": name, "count": n}
+            {"name": name, "count": n,
+             "subcategories": subs.get(name, [])}
             for name, n in sorted(counts.items(), key=lambda kv: (-kv[1], order.get(kv[0], 99)))
         ]
+
+    async def _subcategory_counts_for(self, store_id: str) -> dict[str, list[dict]]:
+        """{category name: [{id, name, count}]} for the store's live
+        listings, biggest shelf first. One grouped read plus one category
+        lookup for the whole store - never one query per listing.
+
+        Keyed by the listing's own stored category, folded through the
+        same mapping the rail uses, so a tile's count and its shelf
+        always agree. A subcategory id with no row anymore (a retired
+        type of item) is left out: its listings still count toward the
+        category, they just get no tile of their own."""
+        from api.database import Category
+        rows = (await self.db.execute(
+            select(Listing.category, Listing.subcategory_id, func.count())
+            .where(Listing.store_id == store_id, Listing.status == ListingStatus.active,
+                   live_clause(), Listing.subcategory_id.is_not(None))
+            .group_by(Listing.category, Listing.subcategory_id)
+        )).all()
+        if not rows:
+            return {}
+        names = {
+            row[0]: row[1]
+            for row in (await self.db.execute(
+                select(Category.id, Category.name)
+                .where(Category.id.in_({r[1] for r in rows}))
+            )).all()
+        }
+        grouped: dict[str, list[dict]] = defaultdict(list)
+        for category, sub_id, n in rows:
+            name = names.get(sub_id)
+            if name is None:
+                continue
+            grouped[store_categories.for_listing(category)].append(
+                {"id": sub_id, "name": name, "count": n})
+        return {
+            category: sorted(tiles, key=lambda t: (-t["count"], t["name"]))
+            for category, tiles in grouped.items()
+        }
 
     async def store_reviews(
         self, store_id: str, limit: int = 20, offset: int = 0,
@@ -1787,6 +1917,9 @@ class StoreService:
         viewer_lat: Optional[float] = None,
         viewer_lng: Optional[float] = None,
         owner_reviews: Optional[dict[str, tuple[int, Optional[float]]]] = None,
+        viewer_id: Optional[str] = None,
+        follow_counts: Optional[dict[str, int]] = None,
+        viewer_following: Optional[set[str]] = None,
     ) -> dict:
         """The store payload. owner_view=True only for responses to the
         owner themselves (create, update, status, /stores/mine); every other
@@ -1809,6 +1942,10 @@ class StoreService:
                     live_clause(),
                 )
             )).scalar_one()
+        if follow_counts is None:
+            follow_counts = await self._follow_counts_for([store.id])
+        if viewer_id is not None and viewer_following is None:
+            viewer_following = await self._followed_ids_for([store.id], viewer_id)
         from api.domains.media.service import asset_urls, legacy_image_or_none, parse_id_list
         if assets is None:
             assets = await self._assets_for([store])
@@ -1956,6 +2093,17 @@ class StoreService:
             # with no deadline, reads "No expiry" (listings/time_left.py).
             **_store_time_left(billing_sub),
             "listing_count": listing_count,
+            # How many buyers follow this shop, and whether the signed-in
+            # viewer is one of them. The count is public (social proof on
+            # the storefront); the flag is false for a visitor with no
+            # signed-in viewer, never null, so the app draws one button
+            # state without a second read.
+            "follower_count": follow_counts.get(store.id, 0),
+            "viewer_following": (
+                store.id in viewer_following
+                if viewer_id is not None and viewer_following is not None
+                else False
+            ),
             "distance_km": distance_km,
             "distance_label": distance_label,
             # True when the distance is measured to the shop's declared

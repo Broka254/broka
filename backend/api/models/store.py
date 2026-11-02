@@ -279,3 +279,25 @@ class StoreRatingSnapshot(Base):
     review_count        = Column(Integer, nullable=True)
     response_minutes    = Column(Float, nullable=True)
     created_at          = Column(DateTime, default=datetime.utcnow)
+
+
+class StoreFollow(Base):
+    """One buyer following one store: the storefront's Follow button.
+
+    A follow is a buyer saying "tell me about this shop" - today it is the
+    follower count on the storefront and the Following state of the button;
+    new-product notifications for followers are a later step, not this
+    table's promise. One row per (store, user): following twice is the
+    same row, and unfollowing deletes it. The owner cannot follow their
+    own store (rejected in the service, not here - the table itself stays
+    a plain pair of foreign keys).
+    """
+    __tablename__ = "store_follows"
+    __table_args__ = (
+        UniqueConstraint("store_id", "user_id", name="uq_store_follow"),
+    )
+
+    id         = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    store_id   = Column(String, ForeignKey("stores.id"), nullable=False, index=True)
+    user_id    = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
