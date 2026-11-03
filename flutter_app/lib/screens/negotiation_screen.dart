@@ -211,15 +211,34 @@ class _PendingUpload {
   double progress;
 }
 
+typedef _OutboxEntry = ({
+  String clientId,
+  String path,
+  String? replyToMessageId,
+  String? caption,
+  String? listingId,
+  String? storeId,
+  String? buyerId,
+});
+
 /// Durable image outbox: one file per unsent photo under the app documents
 /// directory, plus a tiny metadata sidecar. SharedPreferences only ever
 /// holds the file path and caption - never the image bytes, which would
 /// bloat the JSON cache and duplicate large payloads on every save.
 class _ChatMediaOutbox {
+  static String? _docsPath;
+
+  /// Resolve the outbox directory once, then keep it.
+  ///
+  /// The filesystem steps are synchronous on purpose: a chat opens and
+  /// reads the outbox in the same frame, so awaiting exists()/create()
+  /// here left a restored retry invisible until a later tick.
   static Future<Directory> _dir() async {
-    final docs = await getApplicationDocumentsDirectory();
-    final dir = Directory('${docs.path}/chat_outbox');
-    if (!await dir.exists()) await dir.create(recursive: true);
+    final docsPath =
+        _docsPath ?? (await getApplicationDocumentsDirectory()).path;
+    _docsPath = docsPath;
+    final dir = Directory('$docsPath/chat_outbox');
+    if (!dir.existsSync()) dir.createSync(recursive: true);
     return dir;
   }
 
@@ -293,61 +312,61 @@ class _ChatMediaOutbox {
     }
   }
 
-  static Future<List<({
-    String clientId,
-    String path,
-    String? replyToMessageId,
-    String? caption,
-    String? listingId,
-    String? storeId,
-    String? buyerId,
-  })>> list() async {
+  static Future<List<_OutboxEntry>> list() async {
     try {
-      final dir = await _dir();
-      if (!await dir.exists()) return [];
-      final out = <({
-        String clientId,
-        String path,
-        String? replyToMessageId,
-        String? caption,
-        String? listingId,
-        String? storeId,
-        String? buyerId,
-      })>[];
-      await for (final e in dir.list()) {
-        if (e is! File) continue;
-        final base = e.path.split('/').last;
-        final dot = base.lastIndexOf('.');
-        if (dot < 0) continue;
-        final ext = base.substring(dot + 1);
-        if (ext != 'jpg' && ext != 'png') continue;
-        final id = base.substring(0, dot);
-        String? replyTo;
-        String? caption;
-        String? listingId;
-        String? storeId;
-        String? buyerId;
-        try {
-          final meta = File('${dir.path}/$id.json');
-          if (await meta.exists()) {
-            final m = jsonDecode(await meta.readAsString()) as Map;
-            replyTo = m['reply_to_message_id'] as String?;
-            caption = m['caption'] as String?;
-            listingId = m['listing_id'] as String?;
-            storeId = m['store_id'] as String?;
-            buyerId = m['buyer_id'] as String?;
-          }
-        } catch (_) {}
-        out.add((
-          clientId: id, path: e.path, replyToMessageId: replyTo,
-          caption: caption, listingId: listingId, storeId: storeId,
-          buyerId: buyerId,
-        ));
-      }
-      return out;
+      return _listIn(await _dir());
     } catch (_) {
       return [];
     }
+  }
+
+  /// The same entries as [list], synchronously. A tap on a failed bubble
+  /// cannot wait for the documents directory: this is what lets the retry
+  /// sheet decide, in that frame, whether the staged file belongs here.
+  static List<_OutboxEntry> listSync() {
+    final docsPath = _docsPath;
+    if (docsPath == null) return const [];
+    return _listIn(Directory('$docsPath/chat_outbox'));
+  }
+
+  static List<_OutboxEntry> _listIn(Directory dir) {
+    if (!dir.existsSync()) return const [];
+    final out = <_OutboxEntry>[];
+    for (final e in dir.listSync()) {
+      if (e is! File) continue;
+      final base = e.path.split('/').last;
+      final dot = base.lastIndexOf('.');
+      if (dot < 0) continue;
+      final ext = base.substring(dot + 1);
+      if (ext != 'jpg' && ext != 'png') continue;
+      final id = base.substring(0, dot);
+      String? replyTo;
+      String? caption;
+      String? listingId;
+      String? storeId;
+      String? buyerId;
+      try {
+        final meta = File('${dir.path}/$id.json');
+        if (meta.existsSync()) {
+          final m = jsonDecode(meta.readAsStringSync()) as Map;
+          replyTo = m['reply_to_message_id'] as String?;
+          caption = m['caption'] as String?;
+          listingId = m['listing_id'] as String?;
+          storeId = m['store_id'] as String?;
+          buyerId = m['buyer_id'] as String?;
+        }
+      } catch (_) {}
+      out.add((
+        clientId: id,
+        path: e.path,
+        replyToMessageId: replyTo,
+        caption: caption,
+        listingId: listingId,
+        storeId: storeId,
+        buyerId: buyerId,
+      ));
+    }
+    return out;
   }
 }
 
@@ -1660,7 +1679,23 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   Future<void> _onUnsentTap(ChatMessage m) async {
     final clientId = m.clientId;
     if (clientId == null) return;
-    final canResend = m.msgType == 'text' || _uploads.containsKey(clientId);
+    var canResend = m.msgType == 'text' || _uploads.containsKey(clientId);
+    if (!canResend && m.msgType == 'image') {
+      // A photo written by an earlier run is retryable as soon as its file
+      // exists - waiting for [_restoreMediaOutbox] left a cold-opened bubble
+      // with only Delete, although its bytes were still on disk. The entry's
+      // own thread ids are checked too, so a photo staged for another
+      // conversation is never offered for upload into this one.
+      for (final entry in _ChatMediaOutbox.listSync()) {
+        if (entry.clientId != clientId) continue;
+        canResend = _isCurrentThread(
+          listingId: entry.listingId,
+          storeId: entry.storeId,
+          buyerId: entry.buyerId,
+        );
+        break;
+      }
+    }
     final choice = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: BrokaColors.bgMid,
@@ -3564,8 +3599,14 @@ class _ChatBubble extends StatelessWidget {
     if (unsent && onUnsentTap != null) {
       bubbleContent = GestureDetector(
         key: const Key('unsent-bubble'),
+        // The bubble's own targets (a photo opens its viewer on tap) must
+        // not swallow this one: the message never reached the server, so
+        // the only useful tap on it is Send again / Delete.
+        behavior: HitTestBehavior.opaque,
         onTap: () => onUnsentTap!(message),
-        child: Opacity(opacity: 0.7, child: bubbleContent),
+        child: IgnorePointer(
+          child: Opacity(opacity: 0.7, child: bubbleContent),
+        ),
       );
     } else if (onLongPress != null && !message.isPending) {
       bubbleContent = GestureDetector(
