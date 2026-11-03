@@ -377,6 +377,7 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
     Navigator.pushNamed(context, '/direct-chat', arguments: {
       'storeId': store.id,
       'storeName': store.name,
+      if (store.logoSource != null) 'storeLogo': store.logoSource,
       'role': 'buyer',
     });
   }

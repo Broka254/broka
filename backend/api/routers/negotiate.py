@@ -4816,10 +4816,9 @@ async def get_store_history(
     try:
         import json as _json
         by_id = {}
-        # visibility-ok: reply-preview lookup inside this store thread; the
-        # buyer scope is repeated here because loading every buyer's rows
-        # would let a crafted reply id borrow another shopper's preview.
+        # visibility-ok: reply-preview lookup inside this store thread
         result2 = await db.execute(
+            # visibility-ok: reply-preview lookup inside this store thread
             select(NegotiationMessage).where(
                 NegotiationMessage.store_id == store_id,
                 NegotiationMessage.buyer_id == effective_buyer_id,

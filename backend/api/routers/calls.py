@@ -826,13 +826,14 @@ async def initiate_call(
         # listing/buyer association). Require an actual prior message on
         # this listing-or-store / buyer thread, the same relationship check
         # already used to scope chat history elsewhere.
-        # visibility-ok: selects ids only, existence check that a thread exists
         thread_scope = (
             NegotiationMessage.store_id == payload.store_id
             if payload.store_id else
             NegotiationMessage.listing_id == payload.listing_id
         )
+        # visibility-ok: selects ids only, existence check that a thread exists
         thread_check = await db.execute(
+            # visibility-ok: selects ids only, existence check that a thread exists
             select(NegotiationMessage.id)
             .where(
                 thread_scope,
