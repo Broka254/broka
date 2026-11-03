@@ -253,10 +253,10 @@ Counts: admin 58, optional 6, public 61, token 5, user 180.
 | POST | `/mpesa/query` | user | `query_payment_status` (backend/api/routers/mpesa.py:348) |
 | GET | `/mpesa/status/{deal_id}` | user | `get_deal_payment_status` (backend/api/routers/mpesa.py:792) |
 | POST | `/mpesa/stk-push` | user | `initiate_stk_push` (backend/api/routers/mpesa.py:154) |
-| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:5558) |
+| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:5594) |
 | POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1877) |
 | POST | `/negotiate/chat` | user | `broker_chat` (backend/api/domains/ai_broker/router.py:44) **shadowed: never reached** |
-| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:5455) |
+| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:5491) |
 | POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3722) |
 | POST | `/negotiate/dispute-analysis` | user | `dispute_analysis` (backend/api/domains/ai_broker/router.py:85) |
 | GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:4941) |
@@ -266,7 +266,7 @@ Counts: admin 58, optional 6, public 61, token 5, user 180.
 | POST | `/negotiate/price-recommend` | user | `price_recommend` (backend/api/domains/ai_broker/router.py:69) |
 | POST | `/negotiate/scam-check` | user | `scam_check` (backend/api/domains/ai_broker/router.py:60) |
 | POST | `/negotiate/shopping-advisor` | user | `shopping_advisor` (backend/api/domains/ai_broker/router.py:104) |
-| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:5522) |
+| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:5558) |
 | POST | `/negotiate/store/{store_id}/direct-message` | user | `store_direct_message` (backend/api/routers/negotiate.py:4749) |
 | GET | `/negotiate/store/{store_id}/history` | user | `get_store_history` (backend/api/routers/negotiate.py:4773) |
 | POST | `/negotiate/store/{store_id}/mark-delivered` | user | `mark_store_delivered` (backend/api/routers/negotiate.py:4878) |
