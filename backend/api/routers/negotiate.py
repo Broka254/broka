@@ -5328,29 +5328,64 @@ async def get_inbox(
                 select(User).where(User.id.in_(list(counterpart_ids)))
             )).scalars().all()
             users_by_id = {u.id: u for u in urows}
-        # Store logos via the same asset resolution the store payload uses.
+        # Store photos and logos via asset resolution (shop photos, cover, logo).
+        store_photo_by_id: dict = {}
         store_logo_by_id: dict = {}
         try:
-            from api.domains.media.service import asset_urls, legacy_image_or_none
-            logo_assets: dict = {}
-            logo_ids = [s.logo_id for s in stores_by_id.values() if getattr(s, "logo_id", None)]
-            if logo_ids:
-                from api.models.media import MediaAsset
-                arows = (await db.execute(
-                    select(MediaAsset).where(MediaAsset.id.in_(logo_ids))
-                )).scalars().all()
-                logo_assets = {a.id: a for a in arows}
+            from api.domains.media.service import asset_urls, legacy_image_or_none, parse_id_list
+            from api.domains.stores.media import parse_photo_list
+            from api.models.media import MediaAsset
+            all_asset_ids: set = set()
             for s in stores_by_id.values():
-                url = None
-                asset = logo_assets.get(s.logo_id) if getattr(s, "logo_id", None) else None
-                if asset is not None:
-                    urls = asset_urls(asset)
-                    url = urls.get("thumb") or urls.get("medium") or urls.get("large") if urls else None
-                if not url:
-                    url = legacy_image_or_none(getattr(s, "logo_url", None))
-                store_logo_by_id[s.id] = url
+                if getattr(s, "logo_id", None):
+                    all_asset_ids.add(s.logo_id)
+                if getattr(s, "cover_id", None):
+                    all_asset_ids.add(s.cover_id)
+                if getattr(s, "photo_ids", None):
+                    all_asset_ids.update(parse_id_list(s.photo_ids))
+            assets_by_id: dict = {}
+            if all_asset_ids:
+                arows = (await db.execute(
+                    select(MediaAsset).where(MediaAsset.id.in_(list(all_asset_ids)))
+                )).scalars().all()
+                assets_by_id = {a.id: a for a in arows}
+            for s in stores_by_id.values():
+                # 1. Resolve store photo: first shop photo -> cover -> legacy photos
+                photo_url = None
+                shop_photo_ids = parse_id_list(getattr(s, "photo_ids", None))
+                for pid in shop_photo_ids:
+                    asset = assets_by_id.get(pid)
+                    if asset is not None:
+                        urls = asset_urls(asset)
+                        photo_url = (urls.get("thumb") or urls.get("medium") or urls.get("large")) if urls else None
+                        if photo_url:
+                            break
+                if not photo_url and getattr(s, "cover_id", None):
+                    asset = assets_by_id.get(s.cover_id)
+                    if asset is not None:
+                        urls = asset_urls(asset)
+                        photo_url = (urls.get("thumb") or urls.get("medium") or urls.get("large")) if urls else None
+                if not photo_url and getattr(s, "photos", None):
+                    legacy_photos = parse_photo_list(s.photos)
+                    if legacy_photos:
+                        photo_url = legacy_image_or_none(legacy_photos[0])
+
+                # 2. Resolve store logo: logo_id -> legacy logo_url
+                logo_url = None
+                if getattr(s, "logo_id", None):
+                    asset = assets_by_id.get(s.logo_id)
+                    if asset is not None:
+                        urls = asset_urls(asset)
+                        logo_url = (urls.get("thumb") or urls.get("medium") or urls.get("large")) if urls else None
+                if not logo_url:
+                    logo_url = legacy_image_or_none(getattr(s, "logo_url", None))
+
+                best_photo = photo_url or logo_url
+                best_logo = logo_url or photo_url
+                store_photo_by_id[s.id] = best_photo
+                store_logo_by_id[s.id] = best_logo
         except Exception as exc:
-            logger.debug("[negotiate] inbox store logos unavailable: %s", exc)
+            logger.debug("[negotiate] inbox store images unavailable: %s", exc)
         for sid, bid, my_role in _uniq_keys:
             store = stores_by_id.get(sid)
             if store is None or getattr(store, "deleted_at", None) is not None:
@@ -5388,10 +5423,11 @@ async def get_inbox(
                 "store_id":          store.id,
                 "store_name":        store.name,
                 "store_logo":        store_logo_by_id.get(store.id),
+                "store_photo":       store_photo_by_id.get(store.id),
                 "listing_id":        None,
                 "listing_name":      store.name,
                 "listing_category":  getattr(store, "category", None) or "Store",
-                "listing_image":     store_logo_by_id.get(store.id),
+                "listing_image":     store_photo_by_id.get(store.id) or store_logo_by_id.get(store.id),
                 "listing_price":     0,
                 "location_name":     getattr(store, "county", None),
                 "listing_type":      "direct",
@@ -5403,8 +5439,8 @@ async def get_inbox(
                 "buyer_photo":       buyer_user.profile_photo if buyer_user else None,
                 "counterpart_id":    store.owner_id if my_role == "buyer" else bid,
                 "counterpart_name":  counterpart_name,
-                "counterpart_photo": (owner.profile_photo if owner else None) if my_role == "buyer" else (buyer_user.profile_photo if buyer_user else None),
-                "counterpart_avatar": ((owner.profile_photo if owner else None) or "") if my_role == "buyer" else ((buyer_user.profile_photo if buyer_user else None) or ""),
+                "counterpart_photo": (store_photo_by_id.get(store.id) or (owner.profile_photo if owner else None)) if my_role == "buyer" else (buyer_user.profile_photo if buyer_user else None),
+                "counterpart_avatar": ((store_photo_by_id.get(store.id) or (owner.profile_photo if owner else None)) or "") if my_role == "buyer" else ((buyer_user.profile_photo if buyer_user else None) or ""),
                 "is_online":         is_on,
                 "last_seen":         last_seen_str,
                 "last_message":      ("Message deleted" if getattr(last_msg, "deleted_at", None)

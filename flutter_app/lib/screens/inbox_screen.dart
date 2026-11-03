@@ -11,6 +11,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../main.dart';
 import '../features/categories/domain/category_visual.dart';
+import '../features/stores/presentation/widgets/broka_default_logo.dart';
 import '../widgets/chat_parts.dart' show kChatGradient;
 import '../widgets/collapsing_screen_header.dart';
 import '../widgets/constellation_background.dart';
@@ -376,14 +377,18 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
               final first   = threads.first;
               final unread  = threads.fold(0, (s, t) => s + ((t['unread'] as int?) ?? 0));
               final isExpanded = _expanded == lid;
+              final isStore = first['thread_type'] == 'store';
+              final image = isStore
+                  ? ((first['store_photo'] ?? first['store_logo'] ?? first['listing_image']) as String?)
+                  : (first['listing_image'] as String?);
 
               return _ListingGroup(
                 listingId:   lid,
                 listingName: first['listing_name'] as String,
-                listingImage: first['listing_image'] as String?,
+                listingImage: image,
                 category:    first['listing_category'] as String,
                 price:       (first['listing_price'] as num?)?.toDouble() ?? 0,
-                isStore:     first['thread_type'] == 'store',
+                isStore:     isStore,
                 unreadCount: unread,
                 threadCount: threads.length,
                 isExpanded:  isExpanded,
@@ -584,8 +589,10 @@ class _ListingGroup extends StatelessWidget {
                   listingImage,
                   fit: BoxFit.cover,
                   width: 46, height: 46,
-                  placeholder: Center(child: Text(_emoji(category),
-                      style: const TextStyle(fontSize: 22))),
+                  placeholder: isStore
+                      ? const BrokaDefaultLogo()
+                      : Center(child: Text(_emoji(category),
+                          style: const TextStyle(fontSize: 22))),
                 )),
               ),
               const SizedBox(width: 12),
@@ -677,7 +684,9 @@ class _ThreadRow extends StatelessWidget {
     final myRole     = thread['my_role']       as String;
     final sellerName = thread['seller_name']   as String?;
     final buyerName  = thread['buyer_name']    as String?;
-    final avatarB64  = thread['counterpart_avatar'] as String?;
+    final avatarSource = (thread['counterpart_photo'] as String?)?.isNotEmpty == true
+        ? thread['counterpart_photo'] as String
+        : (thread['counterpart_avatar'] as String?);
     final isOnline   = thread['is_online']     as bool? ?? false;
 
     // Show name of the OTHER party (a store thread names the shop itself
@@ -741,11 +750,15 @@ class _ThreadRow extends StatelessWidget {
                 ),
               ),
               child: ClipOval(
-                child: avatarB64 != null && avatarB64.isNotEmpty
-                    ? Image.memory(base64Decode(avatarB64), fit: BoxFit.cover)
-                    : Center(child: Text(initials, style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.w700,
-                        fontSize: 16))),
+                child: BrokaImage(
+                  avatarSource,
+                  fit: BoxFit.cover,
+                  width: 42,
+                  height: 42,
+                  placeholder: Center(child: Text(initials, style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.w700,
+                      fontSize: 16))),
+                ),
               ),
             ),
             Positioned(bottom: 1, right: 1,

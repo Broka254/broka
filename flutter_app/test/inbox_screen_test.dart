@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:broka/main.dart' show BrokaColors;
 import 'package:broka/screens/inbox_screen.dart';
+import 'package:broka/features/stores/presentation/widgets/broka_default_logo.dart';
 import 'package:broka/services/api_service.dart';
 import 'package:broka/services/local_chat_store.dart';
 import 'package:broka/widgets/broka_image.dart';
@@ -164,12 +165,33 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.text('Clanix Electronics'), findsOneWidget);
     expect(find.text('Store'), findsOneWidget);
+    // Category emoji (📱 for Electronics) is removed for store chats:
+    expect(find.text('📱'), findsNothing);
+    expect(find.byType(BrokaDefaultLogo), findsOneWidget);
     // The single group auto-expands, so the buyer row is visible.
     expect(find.text('Amina Wanjiru'), findsOneWidget);
     await tester.tap(find.text('Amina Wanjiru'));
     await _settle(tester);
     expect(pushed.last.name, '/direct-chat');
     expect((pushed.last.arguments as Map)['storeId'], 's1');
+  });
+
+  testWidgets('a store conversation with store_photo renders the store image and no emoji',
+      (tester) async {
+    pushed.clear();
+    final thread = _storeThread()
+      ..['store_photo'] = 'https://cdn.example.com/shop.webp';
+    setFakeRoute((uri) =>
+        uri.path == '/negotiate/inbox/u1' ? [thread] : null);
+    await tester.pumpWidget(app());
+    await _settle(tester);
+    expect(tester.takeException(), isNull);
+    expect(find.text('Clanix Electronics'), findsOneWidget);
+    expect(find.text('📱'), findsNothing);
+    final imageFinder = find.byWidgetPredicate(
+      (w) => w is BrokaImage && w.source == 'https://cdn.example.com/shop.webp',
+    );
+    expect(imageFinder, findsOneWidget);
   });
 
   testWidgets('my last message ticks: single dull sent, dull double received, '
