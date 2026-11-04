@@ -287,7 +287,12 @@ void main() {
         : null);
     await tester.pumpWidget(app());
     await _settle(tester);
-    expect(find.byType(BrokaImage), findsOneWidget);
+    // Keyed on the photo itself: the conversation row's avatar is a
+    // BrokaImage too, so counting the type would find two and say nothing
+    // about which picture the group is showing.
+    expect(
+        find.byWidgetPredicate((w) => w is BrokaImage && w.source == png),
+        findsOneWidget);
     expect(find.text('Airtel 5G router'), findsOneWidget);
   });
 
