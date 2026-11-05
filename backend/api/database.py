@@ -1745,7 +1745,7 @@ async def _init_db_impl():
         ("api.models.expiry_notification", ("ExpiryNotification",)),
         ("api.models.zetupay", ("ZetuPayPayment", "ZetuPayTransaction")),
         ("api.models.admin_alert", ("AdminAlert",)),
-        ("api.models.platform_cost", ("PlatformCost",)),
+        ("api.models.platform_cost", ("PlatformCost", "PlatformCostManualEntry")),
         ("api.models.push_device", ("PushDevice",)),
         ("api.models.sold_out_report", ("SoldOutReport",)),
         ("api.models.payment_callback", ("PaymentCallback",)),
