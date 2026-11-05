@@ -110,7 +110,16 @@ class ResendEmail:
 
     async def send(self, to: str, subject: str, html: str, text: str) -> bool:
         try:
-            return await _resend_breaker.call(self._send_once, to, subject, html, text)
+            accepted = await _resend_breaker.call(self._send_once, to, subject, html, text)
+            if accepted:
+                # Usage is durable even before a verified per-email price is
+                # configured. The ledger marks it unpriced, never free.
+                from api.core.cost_ledger import record_unpriced_service_usage
+                await record_unpriced_service_usage(
+                    service_key="email", provider="resend", usage_unit="emails",
+                    meta={"event": "provider_accepted"},
+                )
+            return accepted
         except (CircuitOpenError, httpx.HTTPError) as e:
             logger.error("[email:resend] send failed err=%s", type(e).__name__)
             return False
