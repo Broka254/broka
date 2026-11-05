@@ -10,13 +10,14 @@ import asyncio
 import json
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Optional, Sequence
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import (
     Float, String, and_, case, cast, desc, exists, func, literal, or_, select,
     text, union_all,
@@ -28,6 +29,7 @@ from api.database import (
     FeaturedPayment, VerificationPayment, NegotiationMessage,
 )
 from api.models.dispute import CaseBranch, CaseState, DisputeCase
+from api.models.platform_cost import PlatformCost, PlatformCostManualEntry
 from api.models.escrow_ledger import LedgerAccount, LedgerDirection, LedgerEntry
 from api.models.external_escrow import EConfirmEscrowStatus, ExternalEscrow
 from api.models.listing_payment import ListingPayment
@@ -1292,6 +1294,257 @@ async def admin_payments(
         "counts": {"mpesa": mpesa_counts, "zetupay": zetupay_counts},
         "generated_at": _now_iso(),
     }
+
+
+
+# ── Production service costs ──────────────────────────────────────────────────
+
+_COST_SERVICE_CATALOG = {
+    "sms": ("SMS delivery", "messaging", "accepted sends"),
+    "ai": ("AI requests", "artificial_intelligence", "tokens"),
+    "image_generation": ("Image generation", "media_generation", "images"),
+    "email": ("Email delivery", "messaging", "emails"),
+    "hosting": ("Server / hosting", "infrastructure", "usage units"),
+    "database": ("Database", "infrastructure", "usage units"),
+    "storage": ("Storage and media", "infrastructure", "usage units"),
+    "redis": ("Cache / Redis", "infrastructure", "usage units"),
+    "push_notifications": ("Push notifications", "messaging", "notifications"),
+    "payment_services": ("Payment services", "payments", "transactions"),
+    "other": ("Other services", "other", "usage units"),
+}
+_COST_KIND_SERVICE = {
+    "sms": "sms", "ai": "ai", "api": "other",
+    "payment_fee": "payment_services", "infra": "hosting", "other": "other",
+}
+
+
+class ProductionCostManualEntryIn(BaseModel):
+    service_key: str = Field(min_length=1, max_length=80)
+    amount_minor: int = Field(gt=0)
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    occurred_on: date
+    description: str = Field(min_length=3, max_length=500)
+    reference: Optional[str] = Field(default=None, max_length=120)
+
+
+def _cost_entry_out(row: PlatformCostManualEntry, created_by_label: str) -> dict:
+    return {
+        "id": str(row.id), "service_key": row.service_key,
+        "service_label": row.service_label, "amount_minor": int(row.amount_minor),
+        "currency": row.currency, "occurred_on": row.occurred_on.isoformat(),
+        "description": row.description, "reference": row.reference,
+        "created_at": _iso(row.created_at), "created_by_label": created_by_label,
+    }
+
+
+@router.get("/production-costs")
+async def production_costs(
+    from_date: date = Query(alias="from"),
+    to_date: date = Query(alias="to"),
+    admin: User = Depends(require_permission(Permission.VIEW_PRODUCTION_COSTS)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Source-aware service cost ledger. Start date inclusive, end exclusive."""
+    if to_date <= from_date:
+        raise HTTPException(status_code=422, detail="'to' must be after 'from'")
+    start = datetime.combine(from_date, datetime.min.time())
+    end = datetime.combine(to_date, datetime.min.time())
+    cost_rows = (await db.execute(
+        select(PlatformCost)
+        .where(PlatformCost.created_at >= start, PlatformCost.created_at < end)
+        .order_by(PlatformCost.created_at.asc(), PlatformCost.id.asc())
+    )).scalars().all()
+    manual_rows = (await db.execute(
+        select(PlatformCostManualEntry).where(
+            PlatformCostManualEntry.occurred_on >= from_date,
+            PlatformCostManualEntry.occurred_on < to_date,
+        ).order_by(PlatformCostManualEntry.occurred_on.asc(), PlatformCostManualEntry.id.asc())
+    )).scalars().all()
+
+    grouped: dict[tuple[str, str], dict] = {}
+    for row in cost_rows:
+        service_key = _COST_KIND_SERVICE.get(row.kind, "other")
+        currency = (row.currency or "KES").upper()
+        key = (service_key, currency)
+        group = grouped.setdefault(key, {
+            "rows": [], "actual_minor": 0, "estimate_minor": 0,
+            "actual_seen": False, "estimate_seen": False, "unpriced_count": 0,
+            "providers": set(), "last_synced": None, "sms_units": 0,
+            "sms_known": False, "tokens": 0, "tokens_known": False,
+        })
+        group["rows"].append(row)
+        group["providers"].add(row.provider or "Unspecified provider")
+        group["last_synced"] = row.created_at
+        meta = row.meta if isinstance(row.meta, dict) else {}
+        if row.estimated:
+            if meta.get("unpriced") or meta.get("tokens_unknown"):
+                group["unpriced_count"] += 1
+            else:
+                group["estimate_minor"] += int(row.amount_minor)
+                group["estimate_seen"] = True
+        else:
+            group["actual_minor"] += int(row.amount_minor)
+            group["actual_seen"] = True
+        if row.kind == "sms":
+            units = meta.get("units_used")
+            try:
+                group["sms_units"] += max(1, int(units)) if units is not None else 1
+            except (TypeError, ValueError):
+                group["sms_units"] += 1
+            group["sms_known"] = True
+        elif row.kind == "ai":
+            input_tokens, output_tokens = meta.get("input_tokens"), meta.get("output_tokens")
+            if isinstance(input_tokens, int) and isinstance(output_tokens, int):
+                group["tokens"] += max(0, input_tokens) + max(0, output_tokens)
+                group["tokens_known"] = True
+
+    manual_grouped: dict[tuple[str, str], int] = {}
+    for entry in manual_rows:
+        key = (entry.service_key, entry.currency.upper())
+        manual_grouped[key] = manual_grouped.get(key, 0) + int(entry.amount_minor)
+
+    keys = set(grouped) | set(manual_grouped)
+    keys |= {(key, "KES") for key in _COST_SERVICE_CATALOG}
+    services = []
+    for service_key, currency in sorted(keys):
+        label, category, default_unit = _COST_SERVICE_CATALOG.get(service_key, _COST_SERVICE_CATALOG["other"])
+        group = grouped.get((service_key, currency))
+        manual_seen = (service_key, currency) in manual_grouped
+        manual_minor = manual_grouped.get((service_key, currency))
+        actual_seen = bool(group and group["actual_seen"])
+        estimate_seen = bool(group and group["estimate_seen"])
+        if manual_seen:
+            selected_minor, basis = manual_minor, "manual_entry"
+        elif actual_seen:
+            selected_minor, basis = group["actual_minor"], "provider_reported"
+        elif estimate_seen:
+            selected_minor, basis = group["estimate_minor"], "usage_estimate"
+        else:
+            selected_minor, basis = None, "unavailable"
+
+        if service_key == "sms" and group and group["sms_known"]:
+            usage_count, usage_unit = group["sms_units"], "provider units / sends"
+        elif service_key == "ai" and group and group["tokens_known"]:
+            usage_count, usage_unit = group["tokens"], "tokens"
+        else:
+            usage_count, usage_unit = None, None
+        request_count = len(group["rows"]) if group and group["rows"] else None
+        notes = []
+        if group and group["unpriced_count"]:
+            notes.append(
+                f"{group['unpriced_count']} request(s) had unknown token/rate pricing; "
+                "they are counted but excluded from monetary totals."
+            )
+        if service_key in ("email", "image_generation", "database", "storage", "redis", "push_notifications"):
+            notes.append("Usage/cost instrumentation is not yet connected for this service.")
+        if service_key in ("hosting", "other") and not manual_seen and not group:
+            notes.append("Enter provider invoices manually until a billing integration is connected.")
+        providers = sorted(group["providers"]) if group else []
+        services.append({
+            "key": f"{service_key}:{currency}", "label": label, "category": category,
+            "usage_count": usage_count, "usage_unit": usage_unit or (default_unit if usage_count is not None else None),
+            "request_count": request_count, "currency": currency,
+            "provider_reported_minor": group["actual_minor"] if actual_seen else None,
+            "usage_estimate_minor": group["estimate_minor"] if estimate_seen else None,
+            "estimated_max_minor": None, "manual_minor": manual_minor if manual_seen else None,
+            "selected_cost_minor": selected_minor, "selected_cost_basis": basis,
+            "source_label": ", ".join(providers) if providers else ("Administrator entry" if manual_seen else None),
+            "estimate_method": "Configured provider rate and recorded usage" if estimate_seen else None,
+            "pricing_version": None,
+            "last_synced_at": _iso(group["last_synced"]) if group and group["last_synced"] else None,
+            "notes": notes,
+        })
+
+    actor_ids = {row.created_by for row in manual_rows}
+    actors = {}
+    if actor_ids:
+        actor_rows = (await db.execute(select(User).where(User.id.in_(actor_ids)))).scalars().all()
+        actors = {user.id: (user.name or user.email or "Administrator") for user in actor_rows}
+    return {
+        "generated_at": _now_iso(), "from": from_date.isoformat(), "to": to_date.isoformat(),
+        "services": services,
+        "manual_entries": [_cost_entry_out(row, actors.get(row.created_by, "Administrator")) for row in manual_rows],
+        "capabilities": {"manual_entries": True, "provider_sync": False},
+        "notes": [
+            "Provider-reported and usage-estimated rows are kept separate; only the selected basis is counted once per service/currency.",
+            "AI estimates use configured backend rate assumptions and are not provider invoices.",
+            "No defensible maximum is currently available for AI or image generation; maximum estimates remain unavailable.",
+            "Payment-provider fees are service costs. Buyer/seller escrow principal and marketplace GMV are excluded.",
+            "Uninstrumented services remain unavailable until usage or invoice data is connected.",
+        ],
+    }
+
+
+@router.post("/production-costs/manual-entries")
+async def create_production_cost_manual_entry(
+    body: ProductionCostManualEntryIn,
+    request: Request,
+    idempotency_key: str = Header(alias="X-Idempotency-Key", min_length=8, max_length=128),
+    admin: User = Depends(require_permission(Permission.MANAGE_PRODUCTION_COSTS)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a durable manual cost with actor attribution and idempotent retries."""
+    raw_key = body.service_key.strip()
+    if ":" in raw_key:
+        service_key, key_currency = raw_key.rsplit(":", 1)
+        if key_currency.upper() != body.currency.upper():
+            raise HTTPException(status_code=422, detail="Service currency does not match the entry currency")
+    else:
+        service_key = raw_key
+    if service_key not in _COST_SERVICE_CATALOG:
+        raise HTTPException(status_code=422, detail="Unknown production-cost service")
+    label = _COST_SERVICE_CATALOG[service_key][0]
+
+    def same_payload(row: PlatformCostManualEntry) -> bool:
+        return (
+            row.service_key == service_key and row.amount_minor == body.amount_minor
+            and row.currency == body.currency and row.occurred_on == body.occurred_on
+            and row.description == body.description.strip()
+            and row.reference == (body.reference.strip() if body.reference else None)
+            and row.created_by == admin.id
+        )
+
+    existing = (await db.execute(select(PlatformCostManualEntry).where(
+        PlatformCostManualEntry.idempotency_key == idempotency_key
+    ))).scalar_one_or_none()
+    if existing:
+        if not same_payload(existing):
+            raise HTTPException(status_code=409, detail="Idempotency key was already used for a different cost entry")
+        return _cost_entry_out(existing, admin.name or admin.email or "Administrator")
+
+    row = PlatformCostManualEntry(
+        service_key=service_key, service_label=label, amount_minor=body.amount_minor,
+        currency=body.currency, occurred_on=body.occurred_on,
+        description=body.description.strip(),
+        reference=body.reference.strip() if body.reference else None,
+        idempotency_key=idempotency_key, created_by=admin.id, created_at=datetime.utcnow(),
+    )
+    db.add(row)
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        existing = (await db.execute(select(PlatformCostManualEntry).where(
+            PlatformCostManualEntry.idempotency_key == idempotency_key
+        ))).scalar_one_or_none()
+        if existing is None:
+            raise
+        if not same_payload(existing):
+            raise HTTPException(status_code=409, detail="Idempotency key was already used for a different cost entry")
+        return _cost_entry_out(existing, admin.name or admin.email or "Administrator")
+
+    await record_audit(
+        db, admin.id, "production_cost_manual_entry_created", "production_cost", str(row.id),
+        detail=json.dumps({
+            "service_key": service_key, "amount_minor": body.amount_minor,
+            "currency": body.currency, "occurred_on": body.occurred_on.isoformat(),
+            "reference": body.reference, "request_id": request_id_var.get("-"),
+        }),
+        ip_address=client_ip_or_none(request),
+    )
+    await db.commit()
+    await db.refresh(row)
+    return _cost_entry_out(row, admin.name or admin.email or "Administrator")
 
 
 # ── Financial integrity ───────────────────────────────────────────────────────
