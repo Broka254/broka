@@ -262,6 +262,13 @@ async def generate_showcase_image_url(
             "or upload a cover from your gallery.",
             code="rejected",
         )
+    # Count only a successful provider generation. Until the Hugging Face
+    # account's actual billing rate is configured, keep this as unpriced usage.
+    from api.core.cost_ledger import record_unpriced_service_usage
+    await record_unpriced_service_usage(
+        service_key="image_generation", provider="huggingface",
+        usage_unit="images", meta={"model": settings.hf_showcase_model},
+    )
     return outcome
 
 
