@@ -1486,9 +1486,7 @@ async def create_production_cost_manual_entry(
     """Create a durable manual cost with actor attribution and idempotent retries."""
     raw_key = body.service_key.strip()
     if ":" in raw_key:
-        service_key, key_currency = raw_key.rsplit(":", 1)
-        if key_currency.upper() != body.currency.upper():
-            raise HTTPException(status_code=422, detail="Service currency does not match the entry currency")
+        service_key, _key_currency = raw_key.rsplit(":", 1)
     else:
         service_key = raw_key
     if service_key not in _COST_SERVICE_CATALOG:
