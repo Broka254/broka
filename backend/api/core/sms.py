@@ -161,6 +161,26 @@ def sms_gsm7_segments(text: str) -> int:
     return -(-septets // 153)  # ceil without importing math
 
 
+def sms_segments(text: str) -> int:
+    """Billable segments for the text handed to a provider, GSM-7 or UCS-2.
+
+    Texin is sent a GSM-7-normalised body (sms_to_gsm7), so its multipart
+    billing is 153 septets per part. A provider that accepts the original
+    Unicode text is billed as UCS-2 instead: 70 UTF-16 units for one SMS,
+    67 per concatenated part, with an emoji counting as two units. Counting
+    the raw text with sms_gsm7_segments would call 71 Chinese characters one
+    segment - a 2x undercount of the bill.
+    """
+    if not text:
+        return 1
+    # sms_to_gsm7 keeps only what GSM-7 can encode (and maps typographic
+    # punctuation); anything it changes means the body is not pure GSM-7.
+    if sms_to_gsm7(text) != text:
+        units = len(text.encode("utf-16-le")) // 2
+        return 1 if units <= 70 else -(-units // 67)
+    return sms_gsm7_segments(text)
+
+
 # ── Texin delivery tracking ───────────────────────────────────────────────────
 # Texin reports per-message status ("sent" / "delivered" / "failed" /
 # "rejected") via /check_status and the /sms/texin/dlr webhook. "sent" only
@@ -303,7 +323,15 @@ class AfricasTalkingSMS:
             ok = await _at_breaker.call(self._send_once, phone, message)
             if ok:
                 from api.core.cost_ledger import record_sms_cost
-                await record_sms_cost(provider="africas_talking")
+                # The segment count is computed here, from the exact text
+                # handed over, so a multipart message is billed as the units
+                # it actually is rather than as one message.
+                await record_sms_cost(
+                    provider="africas_talking",
+                    # AT receives the original body; if it contains Unicode it
+                    # is billed as UCS-2, not as GSM-7.
+                    segments=sms_segments(message),
+                )
             return ok
         except (CircuitOpenError, httpx.HTTPError) as e:
             logger.error("[sms:africastalking] send failed err=%s", type(e).__name__)
@@ -530,7 +558,12 @@ class MobitechSMS:
             ok = await _mobitech_breaker.call(self._send_once, phone, message)
             if ok:
                 from api.core.cost_ledger import record_sms_cost
-                await record_sms_cost(provider="mobitech")
+                # Mobitech bills per message, but the segment count is still
+                # useful evidence and is recorded as metadata.
+                await record_sms_cost(
+                    provider="mobitech",
+                    segments=sms_segments(message),
+                )
             return ok
         except (CircuitOpenError, httpx.HTTPError) as e:
             logger.error("[sms:mobitech] send failed err=%s", type(e).__name__)
@@ -767,6 +800,9 @@ class TexinSMS:
             row = await record_sms_cost(
                 provider="texin",
                 units=units,
+                # Texin is sent gsm_text, so this is the exact GSM-7 body
+                # its multipart units are computed from.
+                segments=sms_gsm7_segments(sms_to_gsm7(message)),
                 amount_minor=(
                     int(round(float(info["cost"]) * 100))
                     if info.get("cost") is not None else None

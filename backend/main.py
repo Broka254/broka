@@ -95,6 +95,7 @@ from api.domains.disputes.router   import router as disputes_router
 from api.domains.reviews.router    import router as reviews_router
 from api.domains.ai_broker.router  import router as ai_broker_router
 from api.domains.admin.router      import router as admin_router
+from api.domains.service_costs.router import router as service_costs_router
 from api.domains.service_communications.router import (
     admin_router as service_communications_admin_router,
     customer_router as service_communications_customer_router,
@@ -269,6 +270,13 @@ app.include_router(ai_broker_router,  prefix="/negotiate",  tags=["AI Broker v3"
 app.include_router(admin_router,      prefix="/admin",      tags=["Admin v3"])
 from api.domains.admin.alerts_revenue import router as admin_additions_router
 app.include_router(admin_additions_router, prefix="/admin", tags=["Admin v3"])
+# Production cost tracking. Mounted at /admin/revenue/costs, a more specific
+# prefix than /admin/revenue, whose handler lives in alerts_revenue.py above.
+app.include_router(
+    service_costs_router,
+    prefix="/admin/revenue/costs",
+    tags=["Admin - Production Costs"],
+)
 app.include_router(
     service_communications_admin_router,
     prefix="/admin/communications",

@@ -147,7 +147,7 @@ async def generate_ice_servers(ttl: int = _DEFAULT_TTL_SECONDS) -> dict:
             "CLOUDFLARE_TURN_API_TOKEN unset)"
         )
     try:
-        return await _breaker.call(_generate_once, ttl)
+        result = await _breaker.call(_generate_once, ttl)
     except CircuitOpenError:
         raise CloudflareTurnError("Cloudflare TURN is temporarily unavailable")
     # CloudflareTurnError from _generate_once (malformed/invalid Cloudflare
@@ -160,3 +160,24 @@ async def generate_ice_servers(ttl: int = _DEFAULT_TTL_SECONDS) -> dict:
     except httpx.HTTPError as e:
         logger.warning("[cloudflare:turn] request failed err=%s", e)
         raise CloudflareTurnError("Cloudflare TURN credential generation failed")
+
+    # TURN is billed on relayed traffic and allocated credential pairs, not
+    # on the credential fetch. The fetch is a known zero-cost provider call
+    # but is still worth a row: it is the only point the platform can
+    # observe without inventing bytes it did not relay.
+    try:
+        from api.domains.service_costs.service import record_usage
+
+        await record_usage(
+            service_key="calls.cloudflare_turn",
+            operation_type="turn.credentials",
+            status="success",
+            quantity=1,
+            estimated_cost_minor=0,
+            cost_basis="free_tier",
+            cost_confidence="exact",
+            metadata={"ttl_seconds": ttl},
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("[cloudflare:turn] usage record failed: %s", type(exc).__name__)
+    return result

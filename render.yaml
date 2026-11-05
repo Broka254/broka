@@ -115,6 +115,12 @@ services:
         value: "0.15"        # Cost ledger: DeepSeek off-peak input $/1M tokens (PRICING.md)
       - key: AI_DEEPSEEK_OUTPUT_PER_1M_USD
         value: "0.60"        # Cost ledger: DeepSeek off-peak output $/1M tokens (PRICING.md)
+      - key: SERVICE_USAGE_ENABLED
+        value: "true"        # Normalised production-cost usage tracking. Never fails an
+                             # SMS/AI/image operation; see api/domains/service_costs.
+      - key: SERVICE_USAGE_RETENTION_DAYS
+        value: "400"         # Raw events older than this roll into service_usage_daily
+                             # and are deleted in the same transaction.
       - key: DATABASE_URL
         fromDatabase:
           name: broka-db

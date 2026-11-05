@@ -294,6 +294,14 @@ async def _periodic_sweep_loop(interval_seconds: int = 300) -> None:
                     await task_notify_expiry_alerts({})
                 except Exception as exc:
                     logger.error("[sweep] expiry SMS sweep failed: %s", exc)
+                try:
+                    # Flush buffered usage writes, roll old events into daily
+                    # totals, and sample provider-exposed infrastructure
+                    # metrics. Best-effort: accounting never stops the sweep.
+                    from api.domains.service_costs.service import run_cost_maintenance
+                    await run_cost_maintenance()
+                except Exception as exc:
+                    logger.error("[sweep] service-cost maintenance failed: %s", exc)
         await asyncio.sleep(interval_seconds)
 
 

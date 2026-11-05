@@ -60,6 +60,30 @@ class ImageStorage(ABC):
         Raises StorageError when the store can't be reached."""
 
 
+async def _record_storage_put(
+    service_key: str, key: str, size: int, content_type: str
+) -> None:
+    """Usage row for a completed object write. Never raises.
+
+    The billed unit for object storage is the byte written, so quantity is
+    the payload size; there is no invented request count.
+    """
+    try:
+        from api.domains.service_costs.service import record_usage
+
+        await record_usage(
+            service_key=service_key,
+            operation_type="storage.put",
+            status="success",
+            quantity=max(0, int(size)),
+            provider_reference=key,
+            operation_id=f"{service_key}:put:{key}",
+            metadata={"content_type": content_type, "key": key},
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("[media] usage record failed key=%s: %s", key, type(exc).__name__)
+
+
 class DatabaseStorage(ImageStorage):
     name = "db"
 
@@ -75,6 +99,8 @@ class DatabaseStorage(ImageStorage):
                 await db.commit()
         except Exception as exc:
             raise StorageError(f"database put failed: {type(exc).__name__}") from exc
+        # Only after the object is durable is it usage.
+        await _record_storage_put("storage.database_blobs", key, len(data), content_type)
 
     async def get(self, key: str) -> Optional[tuple[bytes, str]]:
         from api.database import AsyncSessionLocal
@@ -148,6 +174,7 @@ class R2Storage(ImageStorage):
             # what failed without repeating credentials-adjacent detail.
             logger.error("[media] R2 put failed key=%s: %s", key, type(exc).__name__)
             raise StorageError(f"R2 put failed: {type(exc).__name__}") from exc
+        await _record_storage_put("storage.r2", key, len(data), content_type)
 
     async def get(self, key: str) -> Optional[tuple[bytes, str]]:
         client = self._get_client()

@@ -210,14 +210,61 @@ class PushService:
                 # FCM tokens are bearer credentials for a device, and a push
                 # title can contain a person's name or message preview.
                 logger.info("[push] FCM accepted")
+                try:
+                    provider_ref = (resp.json() or {}).get("name")
+                except Exception:
+                    # A 200 is an accepted push. An unreadable body (or a
+                    # test/client that returns none) must never turn that
+                    # into a failed send just because accounting wanted an id.
+                    provider_ref = None
+                await self._record_usage(
+                    status="success", provider_reference=provider_ref
+                )
                 return True
             else:
                 # Error bodies can echo the registration token.
                 logger.warning("[push] FCM error status=%d", resp.status_code)
+                await self._record_usage(
+                    status="failed", failure=f"http_{resp.status_code}"
+                )
                 return False
         except Exception as e:
             logger.error("[push] Send failed: %s", type(e).__name__)
+            await self._record_usage(status="failed", failure=type(e).__name__)
             return False
+
+    @staticmethod
+    async def _record_usage(
+        *, status: str,
+        provider_reference: Optional[str] = None,
+        failure: Optional[str] = None,
+    ) -> None:
+        """One production-cost usage row per accepted/refused FCM call.
+
+        FCM has no usage charge at BROKA's volume, so both outcomes are a
+        known zero - not an unknown - and are recorded as such. The call is
+        only recorded once the provider actually answered: a skipped push
+        (no token, no credential) never reaches here.
+        """
+        try:
+            from api.domains.service_costs.service import record_usage
+
+            await record_usage(
+                service_key="push.fcm",
+                operation_type="push.send",
+                status=status,
+                quantity=1,
+                provider_reference=provider_reference,
+                operation_id=(
+                    f"fcm:{provider_reference}" if provider_reference else None
+                ),
+                estimated_cost_minor=0,
+                cost_basis="free_tier",
+                cost_confidence="exact",
+                metadata={"failure": failure} if failure else {},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("[push] usage record failed: %s", type(exc).__name__)
 
     async def send_to_users(
         self,

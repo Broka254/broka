@@ -145,11 +145,54 @@ async def _provider_model(client: httpx.AsyncClient) -> str:
     )
 
 
-async def _run_once(prompt: str, image_data_uri: str, aspect_ratio: str = DEFAULT_ASPECT_RATIO) -> str:
+async def _record_generation(
+    status: str,
+    request_id: Optional[str] = None,
+    aspect_ratio: str = DEFAULT_ASPECT_RATIO,
+    failure: Optional[str] = None,
+) -> None:
+    """Usage row for the production-cost catalogue. Never raises.
+
+    A generation that reached the provider and then failed is still
+    recorded (with 0 images and no priced cost), because the provider may
+    have billed the attempt. Callers must not record a request that was
+    rejected before submission.
+    """
+    try:
+        from api.domains.service_costs.service import record_usage
+
+        metadata = {"model": settings.hf_showcase_model, "aspect_ratio": aspect_ratio}
+        kwargs: dict = {
+            "service_key": "image.huggingface_fal",
+            "operation_type": "image.generate",
+            "status": status,
+            "quantity": 1 if status == "success" else 0,
+        }
+        if status == "success":
+            kwargs.update(
+                provider_reference=request_id,
+                operation_id=f"hf:{request_id}" if request_id else None,
+                metadata=metadata,
+            )
+        else:
+            kwargs.update(
+                apply_pricing=False,
+                estimated_cost_minor=None,
+                cost_basis="unpriced",
+                cost_confidence="unknown",
+                metadata={**metadata, "failure": failure},
+            )
+        await record_usage(**kwargs)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("[hf:showcase] usage record failed: %s", type(exc).__name__)
+
+
+async def _run_once(
+    prompt: str, image_data_uri: str, aspect_ratio: str = DEFAULT_ASPECT_RATIO,
+) -> tuple[str, Optional[str]]:
     """Submits one generation request and polls it to completion. Returns
-    the generated image's provider-hosted URL - temporary, so the caller
-    must download and persist it (see domains/showcase/service.py) rather
-    than storing this URL directly."""
+    (provider-hosted URL, provider request id). The URL is temporary, so the
+    caller must download and persist it (see domains/showcase/service.py)."""
     payload = {
         "prompt": prompt,
         "image_url": image_data_uri,
@@ -204,8 +247,10 @@ async def _run_once(prompt: str, image_data_uri: str, aspect_ratio: str = DEFAUL
             if status == "COMPLETED":
                 break
             if status in ("ERROR", "FAILED"):
+                await _record_generation("failed", request_id, aspect_ratio, f"status_{status}")
                 raise ImageGenerationError(f"generation failed (status={status})")
             if time.monotonic() > deadline:
+                await _record_generation("failed", request_id, aspect_ratio, "timeout")
                 raise ImageGenerationError("generation timed out")
             await asyncio.sleep(_POLL_INTERVAL_SECONDS)
 
@@ -213,6 +258,9 @@ async def _run_once(prompt: str, image_data_uri: str, aspect_ratio: str = DEFAUL
         if 400 <= result.status_code < 500 and result.status_code not in _OUR_FAULT:
             # Finished, but the result was withheld - the output safety
             # check. Same as a refused input: nothing wrong with the service.
+            # The provider did run (and may have billed) the generation, so
+            # it is recorded before the rejection is surfaced.
+            await _record_generation("failed", request_id, aspect_ratio, "result_withheld")
             raise _Rejected(f"the result was withheld (HTTP {result.status_code})")
         result.raise_for_status()
         body = result.json()
@@ -220,8 +268,10 @@ async def _run_once(prompt: str, image_data_uri: str, aspect_ratio: str = DEFAUL
     images = body.get("images") or []
     url = images[0].get("url") if images else None
     if not url:
+        await _record_generation("failed", request_id, aspect_ratio, "no_image")
         raise ImageGenerationError(f"no image in the reply: {body!r}")
-    return url
+    await _record_generation("success", request_id, aspect_ratio)
+    return url, request_id
 
 
 async def _run_guarded(prompt: str, image_data_uri: str, aspect_ratio: str):
@@ -262,7 +312,8 @@ async def generate_showcase_image_url(
             "or upload a cover from your gallery.",
             code="rejected",
         )
-    return outcome
+    url, _request_id = outcome
+    return url
 
 
 async def download_generated_image(url: str) -> tuple[bytes, str]:

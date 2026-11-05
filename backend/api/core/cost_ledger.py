@@ -19,6 +19,7 @@ stored payment_fee rows by definition (see its header comment).
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime
 from typing import Any, Optional
 
@@ -72,12 +73,19 @@ async def record_cost_detached(
     ref_id: Optional[str] = None,
     estimated: bool = False,
     meta: Optional[dict] = None,
+    usage: Optional[dict] = None,
 ) -> Optional[PlatformCost]:
     """record_cost for call sites that hold no session (SMS providers).
 
     Opens, commits and closes its own session. Best-effort by design: cost
     accounting must never fail an OTP send, so every error is logged and
     swallowed and the caller gets None.
+
+    `usage`, when given, is the matching service-catalogue event
+    (api/domains/service_costs). It is written in the SAME session and
+    transaction as the coarse PlatformCost row, so the two ledgers agree on
+    exactly which provider operations happened without opening a second
+    connection per send.
     """
     from api.database import AsyncSessionLocal
 
@@ -94,6 +102,19 @@ async def record_cost_detached(
                 estimated=estimated,
                 meta=meta,
             )
+            if usage:
+                try:
+                    from api.domains.service_costs.service import record_usage_event
+
+                    await record_usage_event(db, **usage)
+                except Exception as exc:
+                    # The coarse ledger row is the older contract and stays
+                    # authoritative for revenue; a catalogue failure must
+                    # not lose it or fail the send.
+                    _log.warning(
+                        "[costs] usage event failed (non-fatal) service=%s: %s",
+                        usage.get("service_key"), type(exc).__name__,
+                    )
             await db.commit()
             return row
     except Exception as exc:
@@ -107,6 +128,7 @@ async def record_sms_cost(
     units: Optional[int] = None,
     amount_minor: Optional[int] = None,
     message_id: Optional[str] = None,
+    segments: Optional[int] = None,
 ) -> Optional[PlatformCost]:
     """One row per message actually handed to an SMS provider.
 
@@ -131,6 +153,12 @@ async def record_sms_cost(
         meta: dict = {"rate_source": "settings"}
         if message_id:
             meta["message_id"] = str(message_id)
+        # `segments` is the locally computed GSM-7 segment count. Texin
+        # reports its own units, which win; the computed count is the
+        # fallback and is always retained for the record.
+        computed_segments = segments if isinstance(segments, int) and segments > 0 else None
+        if computed_segments is not None:
+            meta["segments"] = computed_segments
         if provider == "texin":
             per_unit = int(settings.sms_cost_minor_texin)
             billed_units: Optional[int] = None
@@ -141,7 +169,10 @@ async def record_sms_cost(
             except (TypeError, ValueError):
                 billed_units = None
             if amount_minor is None:
-                amount = per_unit * (billed_units or 1)
+                # units_used wins; when the provider omits it, the locally
+                # computed segment count is the best evidence of how many
+                # billable units the body actually became.
+                amount = per_unit * (billed_units or computed_segments or 1)
             else:
                 amount = int(amount_minor)
             if billed_units is not None:
@@ -157,9 +188,53 @@ async def record_sms_cost(
             # No Africa's Talking rate was verified against our account; the
             # Kenyan bulk market runs KES 0.25-0.80 (PRICING.md), so the
             # default sits at the top of that band and every such row is
-            # flagged estimated until the real rate is configured.
-            amount = int(settings.sms_cost_minor_at)
+            # flagged estimated until the real rate is configured. AT bills
+            # PER SEGMENT: a 2-part message is 2 x the rate, not one flat
+            # charge, so the segment count must scale the amount.
+            amount = int(settings.sms_cost_minor_at) * (computed_segments or 1)
             estimated = True
+        # Snapshot the unit rate that produced this charge, so a later price
+        # change cannot reprice the event in a past report.
+        if provider == "texin":
+            usage_unit_price = per_unit
+        elif provider == "mobitech":
+            usage_unit_price = int(settings.sms_cost_minor_mobitech)
+        else:
+            usage_unit_price = int(settings.sms_cost_minor_at)
+        if provider == "texin":
+            usage_quantity = billed_units or computed_segments or 1
+            usage_unit = "sms_segment"
+            usage_amount = amount
+            usage_basis = (
+                "provider_reported" if billed_units is not None or amount_minor is not None
+                else "configured_rate"
+            )
+        elif provider == "mobitech":
+            # Mobitech bills per message whatever its length, so its billed
+            # unit is the message; the segment count is metadata only.
+            usage_quantity = 1
+            usage_unit = "sms_message"
+            usage_amount = amount
+            usage_basis = "configured_rate"
+        else:
+            usage_quantity = computed_segments or 1
+            usage_unit = "sms_segment"
+            usage_amount = amount
+            usage_basis = "configured_rate"
+        usage = {
+            "service_key": f"sms.{provider}" if provider != "africas_talking" else "sms.africas_talking",
+            "operation_type": "sms.send",
+            "status": "success",
+            "quantity": usage_quantity,
+            "provider_reference": str(message_id) if message_id else None,
+            "operation_id": f"sms:{provider}:{message_id}" if message_id else None,
+            "unit_price_minor": usage_unit_price,
+            "estimated_cost_minor": usage_amount,
+            "cost_basis": usage_basis,
+            "cost_confidence": "estimated" if estimated else "exact",
+            "currency": "KES",
+            "metadata": dict(meta, usage_unit=usage_unit),
+        }
         return await record_cost_detached(
             kind=CostKind.SMS,
             amount_minor=amount,
@@ -168,6 +243,7 @@ async def record_sms_cost(
             ref_id=str(message_id) if message_id else None,
             estimated=estimated,
             meta=meta,
+            usage=usage,
         )
     except Exception as exc:
         _log.warning("[costs] sms record failed (non-fatal): %s", exc)
@@ -287,12 +363,41 @@ async def record_ai_cost(
             meta["model"] = model
         if call_site:
             meta["call_site"] = call_site
+        if meta.get("free_tier"):
+            usage_cost: Optional[int] = 0
+            usage_basis = "free_tier"
+            usage_confidence = "exact"
+        elif meta.get("unpriced") or meta.get("tokens_unknown"):
+            # Real tokens, no verified rate: NULL, not zero. The dashboard
+            # shows "unpriced" and keeps the token counts beside it.
+            usage_cost = None
+            usage_basis = "unpriced"
+            usage_confidence = "unknown"
+        else:
+            usage_cost = int(amount)
+            usage_basis = "derived_rate"
+            usage_confidence = "estimated" if estimated else "exact"
+        usage = {
+            "service_key": f"ai.{provider}",
+            "operation_type": "ai.chat",
+            "status": "success",
+            "quantity": 1,
+            "input_tokens": in_tokens,
+            "output_tokens": out_tokens,
+            "operation_id": f"ai:{provider}:{uuid.uuid4().hex}",
+            "estimated_cost_minor": usage_cost,
+            "cost_basis": usage_basis,
+            "cost_confidence": usage_confidence,
+            "currency": "KES",
+            "metadata": {k: v for k, v in meta.items() if v is not None},
+        }
         return await record_cost_detached(
             kind=CostKind.AI,
             amount_minor=amount,
             provider=provider,
             estimated=estimated,
             meta=meta,
+            usage=usage,
         )
     except Exception as exc:
         _log.warning("[costs] ai record failed (non-fatal): %s", exc)

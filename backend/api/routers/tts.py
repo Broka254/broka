@@ -172,15 +172,44 @@ async def _edge_audio(text: str, voice: str) -> bytes:
     return audio_buffer.getvalue()
 
 
+async def _record_tts(name: str, status: str, *, chars: int, failure: str | None = None) -> None:
+    """Usage row for a paid voice call. Never raises.
+
+    TTS bills per character, which the backend does observe, but BROKA has
+    no verified per-character rate for these providers, so the event is
+    counted exactly and the cost stays unpriced until an invoice is entered.
+    """
+    try:
+        from api.domains.service_costs.service import record_usage
+
+        await record_usage(
+            service_key=f"tts.{name}",
+            operation_type="tts.speak",
+            status=status,
+            quantity=chars,
+            apply_pricing=False,
+            estimated_cost_minor=None,
+            cost_basis="unpriced",
+            cost_confidence="unknown",
+            metadata={"characters": chars, "failure": failure},
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("[tts] usage record failed: %s", type(exc).__name__)
+
+
 async def _paid_voice(name: str, provider, text: str) -> Response | None:
     try:
         spoken = await asyncio.wait_for(provider(text), FALLBACK_TIMEOUT_SECONDS)
     except Exception as e:
         logger.warning("TTS %s failed: %s", name, e)
+        await _record_tts(name, "failed", chars=len(text), failure=type(e).__name__)
         return None
     if spoken is None:
+        # No request left BROKA (no key set) or the provider returned no
+        # audio: not a billable success, and not recorded as usage.
         return None
     logger.info("TTS %s spoke", name)
+    await _record_tts(name, "success", chars=len(text))
     return Response(content=spoken[0], media_type=spoken[1])
 
 

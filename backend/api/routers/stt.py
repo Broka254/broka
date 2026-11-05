@@ -13,6 +13,7 @@ Flutter app can fall back to text input gracefully.
 
 import os
 import logging
+import uuid
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 
@@ -36,6 +37,39 @@ WHISPER_LANG_HINTS = {
 }
 
 MAX_BYTES = 25 * 1024 * 1024   # OpenAI hard limit
+
+
+async def _record_stt(
+    service_key: str,
+    operation_type: str,
+    status: str,
+    *,
+    metadata: dict | None = None,
+    provider_reference: str | None = None,
+) -> None:
+    """Usage row for a speech call that reached its provider. Never raises."""
+    try:
+        from api.domains.service_costs.service import record_usage
+
+        await record_usage(
+            service_key=service_key,
+            operation_type=operation_type,
+            status=status,
+            quantity=1,
+            provider_reference=provider_reference,
+            operation_id=f"{service_key}:{uuid.uuid4().hex}",
+            # Voice providers bill per minute/session, and the backend does
+            # not observe the billed quantity (Whisper's reply omits audio
+            # duration; streaming audio bypasses BROKA). Count the request
+            # exactly and leave cost unpriced until an invoice is entered.
+            apply_pricing=False,
+            estimated_cost_minor=None,
+            cost_basis="unpriced",
+            cost_confidence="unknown",
+            metadata={k: v for k, v in (metadata or {}).items() if v is not None},
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("[stt] usage record failed: %s", type(exc).__name__)
 
 
 @router.post("/transcribe")
@@ -77,13 +111,29 @@ async def transcribe(
             )
     except httpx.HTTPError as exc:
         logger.exception("Whisper request failed: %s", exc)
+        # A timeout can mean the provider received and billed the audio.
+        await _record_stt(
+            "stt.openai_whisper", "stt.transcribe", "failed",
+            metadata={"bytes": len(audio_bytes), "model": "whisper-1",
+                      "failure": type(exc).__name__},
+        )
         raise HTTPException(status_code=502, detail="Transcription service unreachable")
 
     if resp.status_code != 200:
         logger.warning("Whisper %s: %s", resp.status_code, resp.text[:300])
+        await _record_stt(
+            "stt.openai_whisper", "stt.transcribe", "failed",
+            metadata={"bytes": len(audio_bytes), "model": "whisper-1",
+                      "http_status": resp.status_code},
+        )
         raise HTTPException(status_code=502, detail="Transcription failed")
 
     body = resp.json()
+    await _record_stt(
+        "stt.openai_whisper", "stt.transcribe", "success",
+        metadata={"bytes": len(audio_bytes), "model": "whisper-1",
+                  "language_hint": lang_hint or "auto"},
+    )
     return {
         "text": body.get("text", "").strip(),
         "language": language,
@@ -169,6 +219,10 @@ async def deepgram_token(_user: dict = Depends(get_current_user)):
     if resp.status_code != 200:
         # Status code only. resp.text can contain the rejected credential.
         logger.warning("Deepgram token grant returned %s", resp.status_code)
+        await _record_stt(
+            "stt.deepgram", "stt.voice_session", "failed",
+            metadata={"http_status": resp.status_code},
+        )
         raise HTTPException(status_code=502, detail="Could not start a voice session")
 
     try:
@@ -182,6 +236,12 @@ async def deepgram_token(_user: dict = Depends(get_current_user)):
         logger.warning("Deepgram token grant returned no access_token")
         raise HTTPException(status_code=502, detail="Could not start a voice session")
 
+    # A granted token is a voice session that will be billed by Deepgram even
+    # though the audio never reaches this backend.
+    await _record_stt(
+        "stt.deepgram", "stt.voice_session", "success",
+        metadata={"ttl_seconds": DEEPGRAM_TOKEN_TTL_SECONDS},
+    )
     return {
         "access_token": token,
         # Deepgram echoes the granted TTL; fall back to what we asked for.
@@ -246,6 +306,10 @@ async def assemblyai_token(_user: dict = Depends(get_current_user)):
     if resp.status_code != 200:
         # Status code only. resp.text can contain the rejected credential.
         logger.warning("AssemblyAI token request returned %s", resp.status_code)
+        await _record_stt(
+            "stt.assemblyai", "stt.voice_session", "failed",
+            metadata={"http_status": resp.status_code},
+        )
         raise HTTPException(status_code=502, detail="Could not start a voice session")
 
     try:
@@ -259,6 +323,10 @@ async def assemblyai_token(_user: dict = Depends(get_current_user)):
         logger.warning("AssemblyAI token request returned no token")
         raise HTTPException(status_code=502, detail="Could not start a voice session")
 
+    await _record_stt(
+        "stt.assemblyai", "stt.voice_session", "success",
+        metadata={"ttl_seconds": ASSEMBLYAI_TOKEN_TTL_SECONDS},
+    )
     return {
         "token": token,
         "expires_in_seconds": body.get(

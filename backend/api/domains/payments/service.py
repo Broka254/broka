@@ -240,6 +240,40 @@ async def _settle(db: AsyncSession, payment: ZetuPayPayment, event: zetupay.Zetu
     # report time (complete by construction, backfills history, no
     # redelivery double-count). A stored payment_fee row would double-count
     # against the derived figure — see cost_ledger.py's header.
+    #
+    # The normalised catalogue records the settled transaction once, keyed by
+    # the provider's transaction id so a redelivered webhook cannot duplicate
+    # it. Its fee is an ESTIMATE (ZetuPay publishes no schedule); the
+    # PlatformCost ledger above is untouched, so revenue.py still derives its
+    # own figure exactly as before.
+    try:
+        from api.core.cost_ledger import zetupay_fee_minor
+        from api.domains.service_costs.service import record_usage_event
+
+        fee_minor, fee_estimated = zetupay_fee_minor(payment.amount)
+        await record_usage_event(
+            db,
+            service_key="payments.zetupay",
+            operation_type="payment.settled",
+            status="success",
+            quantity=1,
+            provider_reference=event.receipt or event.wave_transaction_id,
+            operation_id=(
+                f"zetupay:{event.wave_transaction_id}"
+                if event.wave_transaction_id else f"zetupay:{payment.reference}"
+            ),
+            estimated_cost_minor=int(fee_minor),
+            cost_basis="derived_rate",
+            cost_confidence="estimated" if fee_estimated else "exact",
+            currency="KES",
+            metadata={
+                "amount_kes": payment.amount,
+                "purpose": payment.purpose,
+                "wave_transaction_id": event.wave_transaction_id,
+            },
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("[zetupay] usage record failed: %s", type(exc).__name__)
     await _domain(payment.purpose).zetupay_settled(db, payment.target_id, event.receipt)
 
 

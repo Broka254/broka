@@ -67,7 +67,7 @@ class ResendEmail:
 
     _URL = "https://api.resend.com/emails"
 
-    async def _send_once(self, to: str, subject: str, html: str, text: str) -> bool:
+    async def _send_once(self, to: str, subject: str, html: str, text: str) -> Optional[str]:
         payload = {
             "from": settings.resend_from,
             "to": [to],
@@ -104,16 +104,63 @@ class ResendEmail:
         message_id = (resp.json() or {}).get("id")
         if not message_id:
             logger.error("[email:resend] accepted but no message id (recipient redacted)")
-            return False
+            return None
         logger.info("[email:resend] queued id=%s (recipient redacted)", message_id)
-        return True
+        return str(message_id)
 
     async def send(self, to: str, subject: str, html: str, text: str) -> bool:
         try:
-            return await _resend_breaker.call(self._send_once, to, subject, html, text)
-        except (CircuitOpenError, httpx.HTTPError) as e:
-            logger.error("[email:resend] send failed err=%s", type(e).__name__)
+            message_id = await _resend_breaker.call(
+                self._send_once, to, subject, html, text
+            )
+        except CircuitOpenError:
+            # No request left this process: nothing was handed to the
+            # provider and nothing can have been billed.
+            logger.error("[email:resend] circuit open; email not sent")
             return False
+        except httpx.HTTPError as e:
+            logger.error("[email:resend] send failed err=%s", type(e).__name__)
+            await self._record(status="failed", failure=type(e).__name__)
+            return False
+
+        if message_id:
+            await self._record(status="success", message_id=message_id)
+            return True
+        # A 200 with no message id means Resend accepted the call but queued
+        # nothing. It is not a send, and it is recorded as a failure.
+        await self._record(status="failed", failure="no_message_id")
+        return False
+
+    @staticmethod
+    async def _record(
+        *, status: str, message_id: Optional[str] = None, failure: Optional[str] = None
+    ) -> None:
+        """Usage row for the production-cost catalogue. Never raises."""
+        try:
+            from api.domains.service_costs.service import record_usage
+
+            kwargs = {
+                "service_key": "email.resend",
+                "operation_type": "email.send",
+                "status": status,
+                "quantity": 1,
+                "metadata": {"category": "verification_otp"},
+            }
+            if message_id:
+                kwargs["provider_reference"] = message_id
+                kwargs["operation_id"] = f"email:resend:{message_id}"
+            else:
+                # A failed attempt has no provider id and no known charge.
+                kwargs.update(
+                    apply_pricing=False,
+                    estimated_cost_minor=None,
+                    cost_basis="unpriced",
+                    cost_confidence="unknown",
+                    metadata={"category": "verification_otp", "failure": failure},
+                )
+            await record_usage(**kwargs)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("[email:resend] usage record failed: %s", type(exc).__name__)
 
 
 def get_email_provider() -> EmailProvider:

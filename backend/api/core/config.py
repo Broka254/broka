@@ -299,6 +299,21 @@ class Settings:
     ai_deepseek_output_per_1m_usd: float = field(default_factory=lambda: float(
         os.getenv("AI_DEEPSEEK_OUTPUT_PER_1M_USD", "0.60")
     ))
+
+    # ── Production service-cost tracking (api/domains/service_costs) ─────────
+    # Failure to record an SMS/AI/image operation must never fail that
+    # operation: tracking is best-effort. Set this off only to stop the
+    # usage writes entirely (e.g. during a database migration window).
+    service_usage_enabled: bool = field(default_factory=lambda: os.getenv(
+        "SERVICE_USAGE_ENABLED", "true"
+    ).strip().lower() in ("1", "true", "yes", "on"))
+    # Raw provider events older than this are rolled into service_usage_daily
+    # and deleted from service_usage_events in the same transaction, so the
+    # report keeps its history while the hot table stays bounded. Below 30
+    # days is refused by the rollup task: too short to answer a monthly report.
+    service_usage_retention_days: int = field(default_factory=lambda: int(
+        os.getenv("SERVICE_USAGE_RETENTION_DAYS", "400")
+    ))
     otp_length: int = field(default_factory=lambda: int(os.getenv("OTP_LENGTH", "6")))
     otp_expiry_seconds: int = field(default_factory=lambda: int(os.getenv("OTP_EXPIRY_SECONDS", "300")))
     otp_max_attempts: int = field(default_factory=lambda: int(os.getenv("OTP_MAX_ATTEMPTS", "5")))

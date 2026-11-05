@@ -1476,7 +1476,7 @@ async def _apply_optional_statements(conn, statements) -> None:
         await conn.execute(text(prepared))
 
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 SCHEMA_REVISIONS = (
     (1, "legacy_schema_adoption"),
     (2, "durable_payment_intents_and_callbacks"),
@@ -1499,6 +1499,11 @@ SCHEMA_REVISIONS = (
     # Store-general conversations: NegotiationMessage.store_id and
     # ThreadReadState.store_id (+ listing_id made nullable there).
     (11, "store_conversations"),
+    # Production service-cost tracking (api/models/service_cost.py). New
+    # tables only, so create_all() creates them; the revision makes an
+    # already-migrated database wait for the explicit release step rather
+    # than serving reports against missing tables.
+    (12, "production_service_costs"),
 )
 
 # Tables/columns that must exist before an API process is safe to serve
@@ -1746,6 +1751,10 @@ async def _init_db_impl():
         ("api.models.zetupay", ("ZetuPayPayment", "ZetuPayTransaction")),
         ("api.models.admin_alert", ("AdminAlert",)),
         ("api.models.platform_cost", ("PlatformCost",)),
+        ("api.models.service_cost", (
+            "ServiceCatalog", "ServiceUsageEvent", "ServicePricing",
+            "ServiceCostEntry", "ServiceCostAdjustment", "ServiceUsageDaily",
+        )),
         ("api.models.push_device", ("PushDevice",)),
         ("api.models.sold_out_report", ("SoldOutReport",)),
         ("api.models.payment_callback", ("PaymentCallback",)),
@@ -2378,6 +2387,17 @@ async def _init_db_impl():
                 print(f"✅ Store billing: {granted} store(s) given grace time")
         except Exception as e:
             print(f"⚠️ Store billing grace backfill failed (non-fatal): {type(e).__name__}")
+
+    # Production service-cost catalogue (api/domains/service_costs/catalog.py).
+    # Reference data, idempotent; a failure is reported and does not stop the
+    # API. Instrumentation resolves the catalogue lazily if this is skipped.
+    try:
+        from api.domains.service_costs.catalog import seed_service_catalog
+        seeded = await seed_service_catalog()
+        if seeded:
+            print(f"✅ Service cost catalogue: {seeded} services")
+    except Exception as e:
+        print(f"⚠️ Service cost catalogue seed failed (non-fatal): {type(e).__name__}")
 
     print(f"✅ Database migrated to schema version {SCHEMA_VERSION}")
 

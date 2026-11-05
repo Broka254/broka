@@ -117,6 +117,32 @@ async def stk_push(
     if str(body.get("ResponseCode")) != "0" or not body.get("CheckoutRequestID"):
         logger.warning("[mpesa_stk] push refused: %s", body.get("ResponseDescription") or body.get("errorMessage"))
         raise MpesaUnavailable("STK push refused")
+    # Daraja accepted the prompt. It is not a completed payment and its
+    # collection fee is not known yet, so the event is `accepted` with a
+    # NULL cost. The customer can still cancel; the settled fee is derived
+    # by the revenue report from successful payments.
+    try:
+        from api.domains.service_costs.service import record_usage
+
+        checkout_id = body.get("CheckoutRequestID")
+        await record_usage(
+            service_key="payments.daraja",
+            operation_type="payment.stk_push",
+            status="accepted",
+            quantity=1,
+            provider_reference=checkout_id,
+            operation_id=f"daraja:{checkout_id}",
+            apply_pricing=False,
+            estimated_cost_minor=None,
+            cost_basis="unpriced",
+            cost_confidence="unknown",
+            metadata={
+                "amount_kes": int(amount),
+                "merchant_request_id": body.get("MerchantRequestID"),
+            },
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("[mpesa_stk] usage record failed: %s", type(exc).__name__)
     return body
 
 

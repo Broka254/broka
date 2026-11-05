@@ -55,6 +55,10 @@ class Permission(str, enum.Enum):
     MANAGE_COMMUNICATIONS = "can_manage_communications"
     VIEW_FEEDBACK         = "can_view_feedback"
     MANAGE_FEEDBACK       = "can_manage_feedback"
+    # Production-cost tracking (api/domains/service_costs): recording a
+    # provider invoice or overriding an estimate writes financial history,
+    # so it is a distinct capability from reading the admin dashboard.
+    MANAGE_COSTS          = "can_manage_costs"
 
     # AI
     USE_AI_BROKER         = "can_use_ai_broker"
@@ -100,6 +104,7 @@ _ADMIN_PERMISSIONS: set[Permission] = _USER_PERMISSIONS | {
     Permission.MANAGE_COMMUNICATIONS,
     Permission.VIEW_FEEDBACK,
     Permission.MANAGE_FEEDBACK,
+    Permission.MANAGE_COSTS,
 }
 
 # Permissions blocked for suspended/fraud-flagged users
