@@ -1363,7 +1363,10 @@ async def production_costs(
 
     grouped: dict[tuple[str, str], dict] = {}
     for row in cost_rows:
-        service_key = _COST_KIND_SERVICE.get(row.kind, "other")
+        meta = row.meta if isinstance(row.meta, dict) else {}
+        service_key = meta.get("service_key") or _COST_KIND_SERVICE.get(row.kind, "other")
+        if service_key not in _COST_SERVICE_CATALOG:
+            service_key = "other"
         currency = (row.currency or "KES").upper()
         key = (service_key, currency)
         group = grouped.setdefault(key, {
@@ -1375,7 +1378,6 @@ async def production_costs(
         group["rows"].append(row)
         group["providers"].add(row.provider or "Unspecified provider")
         group["last_synced"] = row.created_at
-        meta = row.meta if isinstance(row.meta, dict) else {}
         if row.estimated:
             if meta.get("unpriced") or meta.get("tokens_unknown"):
                 group["unpriced_count"] += 1
@@ -1426,6 +1428,9 @@ async def production_costs(
             usage_count, usage_unit = group["sms_units"], "provider units / sends"
         elif service_key == "ai" and group and group["tokens_known"]:
             usage_count, usage_unit = group["tokens"], "tokens"
+        elif service_key in ("email", "image_generation") and group and group["rows"]:
+            usage_count = len(group["rows"])
+            usage_unit = "emails" if service_key == "email" else "images"
         else:
             usage_count, usage_unit = None, None
         request_count = len(group["rows"]) if group and group["rows"] else None
@@ -1448,7 +1453,7 @@ async def production_costs(
             "usage_estimate_minor": group["estimate_minor"] if estimate_seen else None,
             "estimated_max_minor": None, "manual_minor": manual_minor if manual_seen else None,
             "selected_cost_minor": selected_minor, "selected_cost_basis": basis,
-            "source_label": ", ".join(providers) if providers else ("Administrator entry" if manual_seen else None),
+            "source_label": "Administrator entry" if manual_seen else (", ".join(providers) if providers else None),
             "estimate_method": "Configured provider rate and recorded usage" if estimate_seen else None,
             "pricing_version": None,
             "last_synced_at": _iso(group["last_synced"]) if group and group["last_synced"] else None,
