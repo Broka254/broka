@@ -83,6 +83,16 @@ async def test_cost_read_is_admin_only_and_keeps_unpriced_usage_unpriced(client)
                 kind="sms", amount_minor=900, currency="KES", provider="texin",
                 estimated=False, meta={"units_used": 3}, created_at=datetime(2026, 11, 6),
             ),
+            PlatformCost(
+                kind="api", amount_minor=0, currency="KES", provider="resend",
+                estimated=True, meta={"service_key": "email", "unpriced": True},
+                created_at=start + timedelta(hours=5),
+            ),
+            PlatformCost(
+                kind="api", amount_minor=0, currency="KES", provider="huggingface",
+                estimated=True, meta={"service_key": "image_generation", "unpriced": True},
+                created_at=start + timedelta(hours=6),
+            ),
         ])
         await db.commit()
 
@@ -107,9 +117,12 @@ async def test_cost_read_is_admin_only_and_keeps_unpriced_usage_unpriced(client)
     assert services["ai:KES"]["usage_estimate_minor"] == 25
     assert services["ai:KES"]["selected_cost_basis"] == "usage_estimate"
     assert any("unknown token/rate pricing" in note for note in services["ai:KES"]["notes"])
+    assert services["email:KES"]["usage_count"] == 1
+    assert services["email:KES"]["request_count"] == 1
     assert services["email:KES"]["selected_cost_minor"] is None
     assert services["email:KES"]["selected_cost_basis"] == "unavailable"
-    assert "instrumentation is not yet connected" in " ".join(services["email:KES"]["notes"])
+    assert services["image_generation:KES"]["usage_count"] == 1
+    assert services["image_generation:KES"]["selected_cost_minor"] is None
     # The row exactly at the exclusive upper boundary is not included.
     assert services["sms:KES"]["provider_reported_minor"] == 29
     assert body["capabilities"]["manual_entries"] is True
