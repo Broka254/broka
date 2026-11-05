@@ -1480,7 +1480,9 @@ async def production_costs(
                 f"{group['unpriced_count']} request(s) had unknown token/rate pricing; "
                 "they are counted but excluded from monetary totals."
             )
-        if service_key in ("email", "image_generation", "database", "storage", "redis", "push_notifications"):
+        if service_key in ("email", "image_generation"):
+            notes.append("Successful provider usage is tracked, but the provider price is not configured; no cost is assumed.")
+        elif service_key in ("database", "storage", "redis", "push_notifications"):
             notes.append("Usage/cost instrumentation is not yet connected for this service.")
         if service_key in ("hosting", "other") and not manual_seen and not group:
             notes.append("Enter provider invoices manually until a billing integration is connected.")
