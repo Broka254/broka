@@ -1400,6 +1400,34 @@ async def production_costs(
                 group["tokens"] += max(0, input_tokens) + max(0, output_tokens)
                 group["tokens_known"] = True
 
+    # Collection fees are deliberately derived by the canonical revenue
+    # calculator, not stored as platform_cost rows (which would double-count).
+    from api.core.revenue import revenue_report
+    revenue = await revenue_report(
+        db,
+        from_raw=from_date.isoformat() + "T00:00:00Z",
+        to_raw=to_date.isoformat() + "T00:00:00Z",
+        bucket="day",
+    )
+    derived_fee = next(
+        (item for item in revenue["costs"]["kinds"] if item["key"] == "payment_fee"),
+        None,
+    )
+    if derived_fee:
+        fee_group = grouped.setdefault(("payment_services", "KES"), {
+            "rows": [], "actual_minor": 0, "estimate_minor": 0,
+            "actual_seen": False, "estimate_seen": False, "unpriced_count": 0,
+            "providers": set(), "last_synced": None, "sms_units": 0,
+            "sms_known": False, "tokens": 0, "tokens_known": False,
+            "derived_fee_count": 0,
+        })
+        # The current tariff schedule is a modelled charge, not a provider
+        # invoice. Keep it in estimates and identify its provenance.
+        fee_group["estimate_minor"] += int(derived_fee["amount_minor"])
+        fee_group["estimate_seen"] = True
+        fee_group["derived_fee_count"] = int(derived_fee["count"])
+        fee_group["providers"].add("Derived from settled payment records")
+
     manual_grouped: dict[tuple[str, str], int] = {}
     for entry in manual_rows:
         key = (entry.service_key, entry.currency.upper())
@@ -1431,9 +1459,15 @@ async def production_costs(
         elif service_key in ("email", "image_generation") and group and group["rows"]:
             usage_count = len(group["rows"])
             usage_unit = "emails" if service_key == "email" else "images"
+        elif service_key == "payment_services" and group and group.get("derived_fee_count"):
+            usage_count = int(group["derived_fee_count"])
+            usage_unit = "settled transactions"
         else:
             usage_count, usage_unit = None, None
-        request_count = len(group["rows"]) if group and group["rows"] else None
+        request_count = (
+            len(group["rows"]) + int(group.get("derived_fee_count", 0))
+            if group and (group["rows"] or group.get("derived_fee_count")) else None
+        )
         notes = []
         if group and group["unpriced_count"]:
             notes.append(
