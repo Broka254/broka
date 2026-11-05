@@ -101,6 +101,38 @@ async def record_cost_detached(
         return None
 
 
+async def record_unpriced_service_usage(
+    *,
+    service_key: str,
+    provider: str,
+    usage_unit: str,
+    ref_type: Optional[str] = None,
+    ref_id: Optional[str] = None,
+    meta: Optional[dict] = None,
+) -> Optional[PlatformCost]:
+    """Record a successful billable-service event when no trustworthy price is known.
+
+    The zero amount is storage-only: estimated/unpriced metadata tells reports
+    to expose usage but never to present it as a free service or zero spend.
+    """
+    details = dict(meta or {})
+    details.update({
+        "service_key": service_key,
+        "usage_unit": usage_unit,
+        "unpriced": True,
+        "price_status": "not_configured",
+    })
+    return await record_cost_detached(
+        kind=CostKind.API,
+        amount_minor=0,
+        provider=provider,
+        ref_type=ref_type,
+        ref_id=ref_id,
+        estimated=True,
+        meta=details,
+    )
+
+
 async def record_sms_cost(
     *,
     provider: str,
