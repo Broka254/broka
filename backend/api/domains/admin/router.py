@@ -1351,7 +1351,13 @@ async def production_costs(
     end = datetime.combine(to_date, datetime.min.time())
     cost_rows = (await db.execute(
         select(PlatformCost)
-        .where(PlatformCost.created_at >= start, PlatformCost.created_at < end)
+        .where(
+            PlatformCost.created_at >= start,
+            PlatformCost.created_at < end,
+            # Collection fees are derived below by revenue_report; stored rows
+            # of this kind are intentionally excluded to avoid double counting.
+            PlatformCost.kind != "payment_fee",
+        )
         .order_by(PlatformCost.created_at.asc(), PlatformCost.id.asc())
     )).scalars().all()
     manual_rows = (await db.execute(
