@@ -32,6 +32,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
+import '../core/cache/data_changes.dart';
+import '../core/cache/screen_cache.dart';
+import '../core/navigation/app_route_observer.dart';
 import '../core/utils/result.dart';
 import '../utils/backend_time.dart';
 import '../main.dart';
@@ -44,6 +47,7 @@ import '../utils/price_format.dart';
 import '../widgets/constellation_background.dart';
 import '../widgets/delivery_nudge.dart';
 import '../widgets/product_grid_view.dart';
+import '../widgets/stale_data_banner.dart';
 import '../widgets/zeno_avatar.dart';
 import '../features/categories/data/repositories/categories_repository.dart';
 import '../features/categories/domain/models/category.dart';
@@ -68,6 +72,7 @@ import '../features/traders/presentation/trader_list_screen.dart';
 import '../features/stores/presentation/store_list_screen.dart';
 import '../features/listings/domain/models/listing.dart' show BrokaListing;
 import '../features/listings/data/repositories/listings_repository.dart';
+import '../features/listings/data/listing_feed_cache.dart';
 import '../features/launch_offers/data/launch_offers_repository.dart';
 import '../features/launch_offers/domain/launch_offers.dart';
 import '../features/launch_offers/presentation/launch_offer_widgets.dart';
@@ -92,7 +97,8 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
+class _HomeScreenState extends State<HomeScreen>
+    with TickerProviderStateMixin, RouteAware, WidgetsBindingObserver {
   int _navIndex = 0;
   // Dormant by design, not dead: see the "Standalone location row removed"
   // note further down. Kept as ready plumbing for a "near me" filter.
@@ -133,10 +139,34 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // ListingsRepository, used everywhere else in the app since Phase 1).
   String? _conditionFilter;
   String? _sortFilter;
-  // Bumped whenever something outside the filters changed (returned from
-  // Sell, or from a product detail screen) to force the grid below to
-  // remount and refetch, since ProductGridView keys off filter state.
-  int _feedRefreshNonce = 0;
+  // _feedRefreshNonce removed (data-saving pass). It was bumped on every
+  // return from Inbox, Sell, Zeno, Menu and a product page, and it was part
+  // of the grid's key: coming back from reading a message remounted the
+  // grid, threw the loaded pages away and downloaded the feed again - on a
+  // weak connection, an empty feed where the listings had been. Home stays
+  // mounted under those screens, so its feed, pages, scroll position and
+  // filters are all still there on return. The feed now refreshes only
+  // when something says it should: a pull, the copy outliving its
+  // freshness time (CachePolicies.homeFeed), or a listing change made in
+  // the app (DataChanges) - see _onReturnedToHome.
+
+  /// Each listing's JSON as fetched, for the feed's saved copy.
+  final Map<String, Map<String, dynamic>> _rawListings = {};
+
+  StreamSubscription<DataChange>? _changesSub;
+
+  /// A listing changed while Home was covered: refresh on return.
+  bool _feedDirty = false;
+
+  /// A listing or store changed: launch-offer counts may have moved.
+  bool _offersDirty = false;
+
+  /// A background refresh failed: the feed shown is the saved one, past
+  /// its freshness time. Drives the StaleDataBanner over the feed.
+  bool _feedStale = false;
+  Timer? _feedRetryTimer;
+  int _feedRetryAttempt = 0;
+  bool _appInFront = true;
 
   // Category carousel (Design Journal Volume 6, Ch.3/Ch.24)
   List<Category> _topCategories = [];
@@ -151,9 +181,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // blocking it (a failure just hides the hero).
   LaunchOffers? _launchOffers;
 
-  Future<void> _loadLaunchOffers() async {
+  Future<void> _loadLaunchOffers({bool force = false}) async {
     if (ApiService.currentUserId == null) return;
-    final result = await launchOffersRepository.offers();
+    final result = await launchOffersRepository.offers(forceRefresh: force);
     if (!mounted) return;
     result.fold(
       onSuccess: (offers) => setState(() => _launchOffers = offers),
@@ -173,10 +203,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final authed = await requireAuth(context, reason: _navReasons[2]);
     if (!authed || !mounted) return;
     Navigator.pushNamed(context, '/sell').then((_) {
-      if (mounted) {
-        _loadLaunchOffers();
-        setState(() => _feedRefreshNonce++);
-      }
+      // A listing published from Sell reached the feed through DataChanges
+      // (POST /listings/ marks it dirty); returning alone refetches nothing.
+      if (mounted) _onReturnedToHome();
     });
   }
 
@@ -184,7 +213,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final authed = await requireAuth(context, reason: _navReasons[2]);
     if (!authed || !mounted) return;
     await StoreEntry.open(context);
-    if (mounted) _loadLaunchOffers();
+    if (mounted) _onReturnedToHome();
   }
 
   // Design Journal Volume 6, Ch.9/Ch.29 (Appendix C). Variant A is the
@@ -247,6 +276,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     // explicit call site (e.g. an opt-in "near me" filter) if and when
     // Home grows a feature that genuinely needs it.
     _railScrollController.addListener(_onRailScroll);
+    WidgetsBinding.instance.addObserver(this);
+    _changesSub = DataChanges.instance.events.listen(_onDataChange);
     _loadTopCategories();
     // _loadTrending()/_loadLiveAuctions() removed (home-redesign brief
     // round 2, 2026-08-17): Home no longer renders a Trending grid or a
@@ -264,7 +295,115 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != null) {
+      appRouteObserver.unsubscribe(this);
+      appRouteObserver.subscribe(this, route);
+    }
+  }
+
+  /// Back on Home from whatever was pushed over it - including screens Home
+  /// did not open itself (a notification's chat, a deep link).
+  @override
+  void didPopNext() => _onReturnedToHome();
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _appInFront = true;
+      // Back in front, possibly back online: catch up if the feed is old
+      // or a retry was waiting - without the user having to leave Home.
+      if (_isCurrentRoute) _onReturnedToHome();
+    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
+      _appInFront = false;
+      // No retries in the background; resuming picks them up.
+      if (_feedRetryTimer?.isActive ?? false) _feedDirty = true;
+      _feedRetryTimer?.cancel();
+    }
+  }
+
+  bool get _isCurrentRoute => ModalRoute.of(context)?.isCurrent ?? true;
+
+  void _onDataChange(DataChange change) {
+    if (!mounted) return;
+    if (change.domain != DataDomain.listings && change.domain != DataDomain.store) return;
+    // A deletion leaves the feed at once, wherever it was in it - not after
+    // the next refresh, and not only if it was on page 0.
+    final id = change.listingId;
+    if (id != null && change.isDelete) {
+      _feedController.removeWhere((item) => item is BrokaListing && item.id == id);
+    }
+    _feedDirty = true;
+    _offersDirty = true;
+    // Changed from Home itself (the publish queue finishing in the
+    // background): refresh now. Otherwise, on return.
+    if (_isCurrentRoute) _onReturnedToHome();
+  }
+
+  /// Refreshes what needs it, and nothing else: the feed only when a
+  /// listing changed or the copy shown is past its freshness time; launch
+  /// offers through their own short-lived cache.
+  void _onReturnedToHome() {
+    if (!mounted) return;
+    final at = _feedController.firstPageFetchedAt;
+    final old = at != null &&
+        DateTime.now().difference(at) >= CachePolicies.homeFeed.freshFor;
+    if (_feedDirty || old) {
+      _feedDirty = false;
+      unawaited(_softRefreshFeed());
+    }
+    if (_offersDirty) {
+      _offersDirty = false;
+      _loadLaunchOffers();
+    }
+  }
+
+  /// One background refresh at a time: a return reported both by the
+  /// route that was popped (.then) and by the route observer (didPopNext)
+  /// must not fetch page 0 twice.
+  Future<bool>? _feedRefreshing;
+
+  Future<bool> _softRefreshFeed() =>
+      _feedRefreshing ??= _feedController.softRefresh().whenComplete(() => _feedRefreshing = null);
+
+  static const _feedRetryDelays = [
+    Duration(seconds: 30), Duration(minutes: 1), Duration(minutes: 2), Duration(minutes: 5),
+  ];
+
+  /// What every background refresh of the feed reported.
+  void _onFeedSoftRefresh(bool ok) {
+    if (!mounted) return;
+    if (ok) {
+      _feedRetryTimer?.cancel();
+      _feedRetryAttempt = 0;
+      if (_feedStale) setState(() => _feedStale = false);
+      return;
+    }
+    if (_feedController.firstPageFetchedAt == null) return;
+    if (!_feedStale) setState(() => _feedStale = true);
+    // Try again on its own, backing off - coming back online fixes the feed
+    // without a pull - but only while Home is on screen, and never in a loop.
+    _feedRetryTimer?.cancel();
+    final delay = _feedRetryDelays[math.min(_feedRetryAttempt, _feedRetryDelays.length - 1)];
+    _feedRetryAttempt++;
+    _feedRetryTimer = Timer(delay, () {
+      if (!mounted) return;
+      if (_isCurrentRoute && _appInFront) {
+        unawaited(_softRefreshFeed());
+      } else {
+        _feedDirty = true;
+      }
+    });
+  }
+
+  @override
   void dispose() {
+    appRouteObserver.unsubscribe(this);
+    WidgetsBinding.instance.removeObserver(this);
+    _changesSub?.cancel();
+    _feedRetryTimer?.cancel();
     _railHintTimer?.cancel();
     _railScrollController.removeListener(_onRailScroll);
     _railScrollController.dispose();
@@ -277,12 +416,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // the listings also picks up a new category or a Buy Agent match rather
   // than leaving them stale.
   Future<void> _onRefresh() async {
+    // A pull always asks the server, past every cache.
+    _feedDirty = false;
     await Future.wait([
       _feedController.refresh(),
-      _loadTopCategories(),
+      _loadTopCategories(force: true),
       _loadActiveBuyAgentRequest(),
-      _loadLaunchOffers(),
+      _loadLaunchOffers(force: true),
     ]);
+    if (!mounted) return;
+    final at = _feedController.firstPageFetchedAt;
+    final stale = at != null &&
+        _feedController.showingSavedCopy &&
+        DateTime.now().difference(at) >= CachePolicies.homeFeed.freshFor;
+    if (stale != _feedStale) setState(() => _feedStale = stale);
+    if (!stale) {
+      _feedRetryTimer?.cancel();
+      _feedRetryAttempt = 0;
+    }
   }
 
   // The filter panel is a sliver below the header now, so opening it while
@@ -363,8 +514,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   // ── Category carousel ─────────────────────────────────────────────────────
 
-  Future<void> _loadTopCategories() async {
-    final result = await categoriesRepository.getTopLevel();
+  Future<void> _loadTopCategories({bool force = false}) async {
+    final result = await categoriesRepository.getTopLevel(forceRefresh: force);
     if (!mounted) return;
     result.fold(
       onSuccess: (data) {
@@ -922,6 +1073,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       location: _locationFilter,
       lat: ApiService.currentUserLat,
       lng: ApiService.currentUserLng,
+      lean: true,
+      onRaw: (raw) {
+        for (final j in raw) {
+          final id = j['id'];
+          if (id is String) _rawListings[id] = j;
+        }
+      },
     );
     // A failure is thrown, not turned into an empty page. As an empty page it
     // showed "No listings yet - be the first to post!" to anyone offline, and
@@ -1117,7 +1275,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     setState(() => _navIndex = i);
     final routes = ['', '/inbox', '/sell', '/zeno', '/menu'];
     Navigator.pushNamed(context, routes[i]).then((_) {
-      if (mounted) setState(() { _navIndex = 0; _feedRefreshNonce++; });
+      if (mounted) {
+        setState(() => _navIndex = 0);
+        _onReturnedToHome();
+      }
       // Back from reading: bring the Inbox badge down now, not at the
       // poller's next tick.
       unawaited(GlobalPollerService.instance.catchUp());
@@ -1146,7 +1307,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         builder: (_) => const ZenoScreen(startInVoice: true),
       ),
     ).then((_) {
-      if (mounted) setState(() { _navIndex = 0; _feedRefreshNonce++; });
+      if (mounted) {
+        setState(() => _navIndex = 0);
+        _onReturnedToHome();
+      }
     });
   }
 
@@ -1284,6 +1448,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 if (ApiService.currentUserId != null)
                   const SliverToBoxAdapter(child: DeliveryNudge()),
                 SliverToBoxAdapter(child: _buildFeedHeading()),
+                if (_feedStale)
+                  SliverToBoxAdapter(
+                    child: StaleDataBanner(
+                      what: 'listings',
+                      fetchedAt: _feedController.firstPageFetchedAt,
+                      onRetry: () => unawaited(_softRefreshFeed()),
+                    ),
+                  ),
                 _buildFeedSliver(),
                 const SliverToBoxAdapter(child: SizedBox(height: 12)),
               ],
@@ -1658,7 +1830,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     // it refetches WITHOUT remounting, which is what pull-to-refresh needs
     // (a remount would throw away the scroll position mid-gesture).
     return ProductGridView(
-      key: ValueKey('goods|$_committedPriceFilter|$_locationFilter|$_conditionFilter|$_sortFilter|$_feedRefreshNonce'),
+      key: ValueKey('goods|$_committedPriceFilter|$_locationFilter|$_conditionFilter|$_sortFilter'),
       sliver: true,
       // 16px page gutter, matching every section above it, with the grid's
       // own 12px inter-card spacing untouched (brief §16). The default
@@ -1667,9 +1839,26 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
       controller: _feedController,
       fetchPage: _fetchListingsPage,
+      // The feed for these filters, saved on the phone: shown at once the
+      // next time Home is built (cold start, offline, back after a long
+      // absence), refreshed in the background only once it is old.
+      cache: ListingFeedCache(
+        key: CacheKey.forUser(CacheFeature.homeFeed, ApiService.currentUserId, {
+          'max_price': _priceLimited ? _committedPriceFilter.round() : null,
+          'location': _locationFilter,
+          'condition': _conditionFilter,
+          'sort': _sortFilter,
+        }),
+        raw: _rawListings,
+      ),
+      itemId: (item) => (item as BrokaListing).id,
+      onSoftRefreshResult: _onFeedSoftRefresh,
       onTapItem: (item) {
+        // Opening a listing and coming back changes nothing in the feed;
+        // editing or deleting it from there reaches the feed through
+        // DataChanges.
         Navigator.pushNamed(context, '/product', arguments: {'listingId': (item as BrokaListing).id}).then((_) {
-          if (mounted) setState(() => _feedRefreshNonce++);
+          if (mounted) _onReturnedToHome();
         });
       },
       emptyStateBuilder: (_) => _emptyState(),

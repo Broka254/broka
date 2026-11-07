@@ -181,6 +181,16 @@ class GlobalPollerService {
   /// badge is right before the first sweep answers.
   final ValueNotifier<int> unreadTotal = ValueNotifier<int>(0);
 
+  /// Every sweep's inbox, for an open InboxScreen to show instead of
+  /// asking for the same list itself: it fetched on every open and every
+  /// return to the foreground - the second request each time, a moment
+  /// after this one.
+  final ValueNotifier<InboxSnapshot?> inbox = ValueNotifier<InboxSnapshot?>(null);
+
+  /// Started and sweeping (stop() clears it): an InboxScreen can rely on
+  /// [inbox] being kept current.
+  bool get isRunning => _running;
+
   static int unreadIn(Iterable<Map<String, dynamic>> threads) => threads.fold(
       0, (sum, t) => sum + (((t['unread'] ?? t['unread_count']) as num?)?.toInt() ?? 0));
 
@@ -412,6 +422,7 @@ class GlobalPollerService {
     _shownCallNotifications.clear();
     _acknowledgedRooms.clear();
     unreadTotal.value = 0;
+    inbox.value = null;
   }
 
   String get _inboxScope =>
@@ -460,7 +471,18 @@ class GlobalPollerService {
     if (ApiService.currentUserId == null) return;
     _checking = true;
     try {
-      final threads = await ApiService.getInbox();
+      // Conditional: an unchanged inbox comes back as an empty 304 and the
+      // previous list (ApiService.getInbox). Every check below still runs
+      // on it - they are idempotent on an unchanged list (seen-message
+      // marks, _deliveredMarks), and incoming calls have their own request.
+      final threads = await ApiService.getInbox(conditional: true);
+      final changed = !ApiService.lastInboxNotModified;
+      inbox.value = InboxSnapshot(
+        threads: threads,
+        confirmedAt: DateTime.now(),
+        userId: ApiService.currentUserId,
+        changed: changed,
+      );
       // This service already fetches the full inbox every ~7s for
       // notification purposes - piggyback on that to keep InboxScreen's
       // offline cache warm too, so going offline no longer means "blank
@@ -470,8 +492,10 @@ class GlobalPollerService {
       // stayed empty for the whole session if the user hadn't opened the
       // Inbox tab (with a connection) at least once, even if they'd been
       // actively chatting the whole time.
-      unawaited(LocalChatStore.save(_inboxScope,
-          threads.length > 300 ? threads.sublist(0, 300) : threads));
+      if (changed) {
+        unawaited(LocalChatStore.save(_inboxScope,
+            threads.length > 300 ? threads.sublist(0, 300) : threads));
+      }
       // The thread on screen is being read as it arrives; its count is
       // about to be zero (the chat marks it read), so don't flash it.
       unreadTotal.value = unreadIn(threads.where((t) => !_isOnScreen(t)));
@@ -1120,4 +1144,25 @@ class GlobalPollerService {
       debugPrint('[Push] ring acknowledgement for $roomId unconfirmed - will retry');
     }
   }
+}
+
+/// One sweep's inbox (GlobalPollerService.inbox).
+class InboxSnapshot {
+  const InboxSnapshot({
+    required this.threads,
+    required this.confirmedAt,
+    required this.userId,
+    required this.changed,
+  });
+
+  final List<Map<String, dynamic>> threads;
+
+  /// When the server last confirmed this list (a 304 confirms it too).
+  final DateTime confirmedAt;
+
+  /// Whose inbox it is - checked by the reader, never shown to another.
+  final String? userId;
+
+  /// False for a 304: [threads] is the list already delivered.
+  final bool changed;
 }

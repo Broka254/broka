@@ -8,6 +8,8 @@ import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'instrumented_client.dart';
+
 class ApiException implements Exception {
   final int statusCode;
   final String message;
@@ -35,7 +37,10 @@ class ApiClient {
   String? _token;
   final http.Client _http;
 
-  ApiClient({http.Client? client}) : _http = client ?? http.Client();
+  // Through InstrumentedClient by default: request counts for NetworkStats,
+  // and a successful change marks the cached screens it affects out of date
+  // (DataChanges). A caller-supplied client (tests) is used as it is.
+  ApiClient({http.Client? client}) : _http = client ?? InstrumentedClient(http.Client());
 
   // ── Session ───────────────────────────────────────────────────────────────
 

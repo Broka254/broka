@@ -22,7 +22,9 @@ import '../services/api_service.dart';
 import '../widgets/broka_image.dart';
 import '../services/chat_screen_memory.dart';
 import '../services/last_screen_tracker.dart';
+import '../services/global_poller_service.dart';
 import '../services/local_chat_store.dart';
+import '../core/cache/screen_cache.dart';
 import '../core/errors/user_facing_error.dart';
 
 class InboxScreen extends StatefulWidget {
@@ -57,8 +59,12 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
   /// waiting for a pull-to-refresh the user may never think of.
   static const _retryEvery = Duration(seconds: 15);
 
-  // Currently expanded listing group (null = all collapsed)
+  // Currently expanded listing group (null = all collapsed). Remembered
+  // with the scroll position across visits (_InboxMemory): the Inbox is a
+  // pushed route, rebuilt on every open, and used to come back collapsed
+  // and at the top every time.
   String? _expanded;
+  late final ScrollController _scroll;
 
   // Per-account inbox cache. Shared with GlobalPollerService, which keeps
   // this warm in the background - see LocalChatStore.inboxListScopeFor.
@@ -72,22 +78,56 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     LastScreenTracker.save('/inbox');
+    final memory = _InboxMemory.forUser(ApiService.currentUserId);
+    _expanded = memory?.expanded;
+    _scroll = ScrollController(initialScrollOffset: memory?.offset ?? 0);
+    GlobalPollerService.instance.inbox.addListener(_onPollerInbox);
     _loadInbox();
   }
 
   @override
   void dispose() {
+    _InboxMemory.save(ApiService.currentUserId, _expanded,
+        _scroll.hasClients ? _scroll.offset : 0);
+    GlobalPollerService.instance.inbox.removeListener(_onPollerInbox);
+    _scroll.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _retryTimer?.cancel();
     super.dispose();
   }
 
+  /// The poller's sweep (every ~7s while BROKA is in front) already holds
+  /// this account's inbox: shown here, so the open Inbox stays current
+  /// without a request of its own - and a stale banner clears as soon as
+  /// any sweep reaches the server.
+  void _onPollerInbox() {
+    final snap = GlobalPollerService.instance.inbox.value;
+    if (snap == null || !mounted) return;
+    if (snap.userId == null || snap.userId != ApiService.currentUserId) return;
+    // Older loads still in flight must not land over this.
+    _loadSeq++;
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    setState(() {
+      if (snap.changed || _threads.isEmpty) {
+        _applyThreads([for (final t in snap.threads) Map<String, dynamic>.from(t)]);
+      }
+      _loading = false;
+      _error = null;
+      _isOffline = false;
+      _refreshFailed = false;
+    });
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Back in front after time away (or off the network): what is on
-    // screen may be stale, so fetch again rather than trusting it.
+    // screen may be stale. main.dart's resume handler runs the poller's
+    // catch-up, whose answer arrives here through _onPollerInbox - asking
+    // again here was the same request twice. Without a running poller
+    // (signed in moments ago, tests), fetch as before.
     if (state == AppLifecycleState.resumed) {
-      unawaited(_loadInbox());
+      if (!GlobalPollerService.instance.isRunning) unawaited(_loadInbox());
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
       // No quiet retries while the app is away - the poller and pushes
@@ -265,6 +305,7 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
             displacement: 72,
             onRefresh: _loadInbox,
             child: CustomScrollView(
+              controller: _scroll,
               physics: const AlwaysScrollableScrollPhysics(),
               slivers: [
                 SliverPersistentHeader(
@@ -838,5 +879,30 @@ class _ThreadRow extends StatelessWidget {
         ]),
       ),
     );
+  }
+}
+
+/// Which group was open and how far down the Inbox was, per account, for
+/// the next visit this session. In memory only: after a restart the Inbox
+/// opens at the top, as any app does.
+class _InboxMemory {
+  _InboxMemory(this.userId, this.expanded, this.offset);
+  final String? userId;
+  final String? expanded;
+  final double offset;
+
+  static _InboxMemory? _last;
+
+  /// Off under `flutter test` (like ScreenCache): each test opens a fresh
+  /// Inbox and must not inherit the last test's open group.
+  static bool enabled = !ScreenCache.isFlutterTest;
+
+  static _InboxMemory? forUser(String? userId) {
+    final m = _last;
+    return enabled && m != null && m.userId == userId ? m : null;
+  }
+
+  static void save(String? userId, String? expanded, double offset) {
+    if (enabled) _last = _InboxMemory(userId, expanded, offset);
   }
 }

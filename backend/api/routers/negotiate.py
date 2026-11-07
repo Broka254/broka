@@ -32,12 +32,15 @@ PRIVACY MODEL:
   - The /history endpoint filters by the caller's JWT role.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, Field
 from typing import List, Optional
+import hashlib
 import httpx
 import os
 import logging
@@ -4937,9 +4940,38 @@ async def get_store_read_status(
     return out
 
 
+# Fields of an inbox row that follow the clock rather than the data: "12s
+# ago", "Active 5m ago", the online dot. Left out of the ETag, or it would
+# change every few seconds whether or not a message had arrived, and the
+# app's 7-second poll would never once get its 304.
+_INBOX_VOLATILE_KEYS = frozenset({"time_ago", "is_online", "last_seen"})
+
+
+def inbox_etag(threads: list) -> str:
+    """A weak validator for an inbox: the same rows (less their clock-driven
+    text) give the same tag, any change to a row, its order or its unread
+    counts gives a new one."""
+    stable = [
+        {k: v for k, v in t.items() if k not in _INBOX_VOLATILE_KEYS}
+        for t in threads
+    ]
+    body = json.dumps(stable, sort_keys=True, default=str, separators=(",", ":"))
+    return 'W/"' + hashlib.sha256(body.encode("utf-8")).hexdigest()[:32] + '"'
+
+
+def _etag_matches(if_none_match: Optional[str], etag: str) -> bool:
+    if not if_none_match:
+        return False
+    def bare(tag: str) -> str:
+        tag = tag.strip()
+        return tag[2:] if tag.startswith("W/") else tag
+    return any(bare(t) == bare(etag) for t in if_none_match.split(",")) or if_none_match.strip() == "*"
+
+
 @router.get("/inbox/{user_id}")
 async def get_inbox(
     user_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
@@ -5469,7 +5501,17 @@ async def get_inbox(
     threads.sort(key=lambda x: x["_sort_ts"], reverse=True)
     for t in threads:
         t.pop("_sort_ts", None)
-    return threads
+    # Conditional GET (data-saving pass). The app's foreground poller asks
+    # for this every 7 seconds and nearly every answer is the one it already
+    # has; it sends the last ETag and gets an empty 304 instead of the whole
+    # list. A client that sends no If-None-Match - every older app build,
+    # and the Inbox screen itself - gets exactly the response it always did,
+    # plus the header.
+    etag = inbox_etag(threads)
+    headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+    if _etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers=headers)
+    return JSONResponse(content=jsonable_encoder(threads), headers=headers)
 
 
 # ── Auto-resolution timers (seller silence / buyer silence) ─────────────────

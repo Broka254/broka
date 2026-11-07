@@ -456,11 +456,17 @@ jobs:
           ls -lh "${{ steps.find_apk.outputs.apk_path }}"
 
       - name: Delete previous release
+        # Only a push to main releases the APK (AGENTS.md). A pull request
+        # used to replace latest-release with its own unmerged build.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release delete latest-release --yes --repo ${{ github.repository }} 2>/dev/null || true; git push --delete origin latest-release 2>/dev/null || true
 
       - name: Create GitHub Release
+        # Only a push to main releases the APK (AGENTS.md). A pull request
+        # used to replace latest-release with its own unmerged build.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         # The release page says when the APK has no Firebase. A build
         # warning is easy to miss, and such an APK installs and runs
         # normally - it just never rings while closed. That is what was

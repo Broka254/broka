@@ -244,6 +244,12 @@ async def load_listing_media(db: AsyncSession, listings, sellers=()) -> dict:
     return await load_assets(db, ids)
 
 
+# A legacy inline seller selfie longer than this is left off lean cards: the
+# card draws it 20px across, and some are megabytes (the card falls back to
+# the seller's initials).
+LEAN_MAX_INLINE_AVATAR = 100_000
+
+
 class ListingService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -825,6 +831,8 @@ class ListingService:
         # Listings filed under none of these names (any case): a store's
         # "Other" shelf (StoreService.list_store_listings).
         outside_categories: Optional[List[str]] = None,
+        # Leaner cards for app builds that ask (GET /listings/?lean=true).
+        lean: bool = False,
     ):
         """Phase 3 (broka_mockup_actualization_spec.md §7): "Filters must
         affect actual backend results. Do not implement fake UI-only
@@ -1044,7 +1052,7 @@ class ListingService:
             d = self._listing_dict(
                 listing, seller=sellers_by_id.get(listing.seller_id),
                 store=stores_by_id.get(listing.store_id),
-                assets=assets, card=True,
+                assets=assets, card=True, lean=lean,
                 seller_review=seller_reviews.get(listing.seller_id, (0, None)),
             )
             if viewer_lat is not None and viewer_lng is not None:
@@ -1298,6 +1306,37 @@ class ListingService:
         active = active_r.scalar() or 0
         return {"total": total, "active": active, "sold": total - active}
 
+    async def get_seller_summary(self, seller_id: str) -> dict:
+        """The Seller Dashboard's totals, counted here instead of on the phone.
+
+        The dashboard downloaded up to 200 of the seller's listings - every
+        card's photos and seller fields - only to count them and add up their
+        views. This counts the same population GET /listings/?seller_id=
+        returns (active and live: the listings buyers can see), so the
+        figures match what the dashboard showed when it counted them itself,
+        without the 200 cap.
+        """
+        featured = case((Listing.is_featured.is_(True), 1), else_=0)
+        row = (await self.db.execute(
+            select(
+                func.count(Listing.id),
+                func.coalesce(func.sum(Listing.views), 0),
+                func.coalesce(func.sum(featured), 0),
+            ).where(
+                Listing.seller_id == seller_id,
+                Listing.status == ListingStatus.active,
+                live_clause(),
+            )
+        )).one()
+        total, views, featured_count = (int(row[0] or 0), int(row[1] or 0), int(row[2] or 0))
+        return {
+            "total_listings": total,
+            # The same population: every one of them is active.
+            "active_listings": total,
+            "featured_listings": featured_count,
+            "total_views": views,
+        }
+
     async def get_seller_revenue(self, seller_id: str, period: str = "week") -> dict:
         """Real revenue-over-time for the seller dashboard, aggregated from
         actually-completed deals (status == released, i.e. the buyer
@@ -1516,8 +1555,16 @@ class ListingService:
         listing: Listing, seller: Optional[User] = None, store: Optional[Store] = None,
         assets: Optional[dict] = None, card: bool = False,
         seller_review: tuple[int, Optional[float]] = (0, None),
+        lean: bool = False,
     ) -> dict:
         """PUBLIC listing payload. Anything added here is world-readable.
+
+        lean (with card): for app builds that read `cover` and
+        `seller_avatar_url`. Card mode alone still sends a legacy inline
+        showcase beside a stored cover, a legacy first photo beside a legacy
+        showcase, and a legacy base64 selfie of any size on every card -
+        none of which such a card shows, and the last often a megabyte. Lean
+        leaves those out; a card keeps every image it would have drawn.
 
         Images. `assets` is what load_listing_media returned for the page;
         without it the listing is served as if it had no image assets.
@@ -1584,6 +1631,17 @@ class ListingService:
                 seller_profile_photo = None
             verified_video = None
             advert_video = None
+            if lean:
+                # The card draws cover first, then the showcase, then the
+                # first photo: whatever comes after the one it draws is
+                # never looked at.
+                if cover_asset is not None:
+                    showcase_image_url = None
+                    verified_photos = None
+                elif showcase_image_url:
+                    verified_photos = None
+                if seller_profile_photo and len(seller_profile_photo) > LEAN_MAX_INLINE_AVATAR:
+                    seller_profile_photo = None
 
         # asset_urls is None for an asset whose record lists no size at all
         # (damaged metadata). Spreading or indexing that raised TypeError and

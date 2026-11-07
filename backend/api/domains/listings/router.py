@@ -211,6 +211,10 @@ async def list_listings(
     attributes: Optional[str] = None,  # JSON-encoded dict, e.g. '{"brand":"Samsung"}'
     sort: Optional[str] = None,
     with_total: bool = False,
+    # Opt-in leaner cards (data-saving pass): leaves out legacy inline images
+    # a current card never shows (see ListingService._listing_dict). Old app
+    # builds don't send it and get exactly the cards they always did.
+    lean: bool = False,
     # Bounded. This was a bare `int = 20` with no ceiling, so any caller
     # could ask for limit=1000000 and have the database assemble it - an
     # unauthenticated endpoint doing unbounded work on request. 200 is the
@@ -247,6 +251,7 @@ async def list_listings(
         with_total=with_total,
         limit=limit,
         offset=offset,
+        lean=lean,
     )
 
 
@@ -996,6 +1001,21 @@ async def seller_metrics(
         # than no guess. See domains/trust/seller_advice.
         "advice": build_advice(current_block, history),
     }
+
+
+@router.get("/seller/{seller_id}/summary")
+async def get_seller_summary(
+    seller_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The seller dashboard's totals - products, featured, views - in one
+    small response, so the app need not download every listing to count
+    them. Own figures only, like revenue and metrics."""
+    from fastapi import HTTPException
+    if current_user["id"] != seller_id:
+        raise HTTPException(status_code=403, detail="Not authorized for this seller's summary")
+    return await ListingService(db).get_seller_summary(seller_id)
 
 
 @router.get("/seller/{seller_id}/revenue")

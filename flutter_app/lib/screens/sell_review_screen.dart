@@ -48,7 +48,8 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
   }
 
   Future<void> _loadOffer() async {
-    final result = await launchOffersRepository.offers();
+    // Decides what this person is told they will pay: always the live count.
+    final result = await launchOffersRepository.offers(forceRefresh: true);
     if (!mounted) return;
     result.fold(
       onSuccess: (offers) => setState(() => _listingOffer = offers.listingFree),
