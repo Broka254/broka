@@ -20,6 +20,7 @@ import '../../../widgets/product_grid_view.dart';
 import '../../discovery/domain/destination_visual.dart';
 import '../data/repositories/trending_repository.dart';
 import '../../listings/domain/models/listing.dart';
+import '../../stores/presentation/storefront_launcher.dart';
 
 class TrendingScreen extends StatefulWidget {
   const TrendingScreen({super.key});
@@ -100,8 +101,8 @@ class _TrendingScreenState extends State<TrendingScreen> {
                       '/product',
                       arguments: {'listingId': (item as BrokaListing).id},
                     ),
-                    onViewStore: (storeId, storeSlug) => Navigator.pushNamed(
-                        context, '/store-view', arguments: {'storeId': storeId}),
+                    onViewStore: (_, storeSlug) =>
+                        visitStoreBySlug(context, storeSlug),
                     emptyStateBuilder: (_) => BrokaEmptyState(
                       emoji: _visual.emoji,
                       gradient: _visual.gradient,

@@ -35,6 +35,7 @@ import '../features/listings/data/repositories/listings_repository.dart';
 import '../features/listings/domain/models/listing.dart';
 import '../main.dart';
 import '../services/api_service.dart';
+import '../features/stores/presentation/storefront_launcher.dart';
 import '../services/search_history.dart';
 import '../widgets/collapsing_screen_header.dart';
 import '../widgets/constellation_background.dart';
@@ -443,8 +444,7 @@ class _ListingSearchScreenState extends State<ListingSearchScreen> {
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
             fetchPage: (page) => _fetchPage(query, sort, page),
             onTapItem: (item) => _openListing(item as BrokaListing),
-            onViewStore: (storeId, _) =>
-                Navigator.pushNamed(context, '/store-view', arguments: {'storeId': storeId}),
+            onViewStore: (_, storeSlug) => visitStoreBySlug(context, storeSlug),
             emptyStateBuilder: (_) => BrokaEmptyState(
               emoji: '🔍',
               gradient: const [BrokaColors.neonBlue, BrokaColors.neonPurple],

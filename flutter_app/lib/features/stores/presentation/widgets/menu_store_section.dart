@@ -37,6 +37,7 @@ import '../../data/repositories/stores_repository.dart';
 import '../../data/store_share.dart';
 import '../../../categories/domain/category_visual.dart';
 import '../../domain/models/store.dart';
+import '../storefront_launcher.dart';
 import '../setup/store_setup_controller.dart';
 import '../store_entry.dart';
 
@@ -184,8 +185,7 @@ class _MenuStoreSectionState extends State<MenuStoreSection> {
     if (mounted && _revisions() != before) _load();
   }
 
-  void _preview(Store store) =>
-      Navigator.pushNamed(context, '/store-view', arguments: {'storeId': store.id});
+  Future<void> _preview(Store store) => visitStoreWebsite(context, store);
 
   Future<void> _share(Store store, ShareDestination to) async {
     final messenger = ScaffoldMessenger.of(context);

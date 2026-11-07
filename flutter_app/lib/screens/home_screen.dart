@@ -55,6 +55,7 @@ import '../features/categories/domain/category_visual.dart';
 import '../features/discovery/domain/destination_visual.dart';
 import '../features/categories/presentation/category_navigation.dart';
 import '../features/categories/presentation/widgets/category_art_card.dart';
+import '../features/stores/presentation/storefront_launcher.dart';
 import '../features/trending/presentation/trending_screen.dart';
 import '../features/auctions/domain/auctions_enabled.dart';
 import '../features/safe_payment/payments_shown.dart';
@@ -1862,8 +1863,7 @@ class _HomeScreenState extends State<HomeScreen>
         });
       },
       emptyStateBuilder: (_) => _emptyState(),
-      onViewStore: (storeId, storeSlug) =>
-          Navigator.pushNamed(context, '/store-view', arguments: {'storeId': storeId}),
+      onViewStore: (_, storeSlug) => visitStoreBySlug(context, storeSlug),
     );
   }
 

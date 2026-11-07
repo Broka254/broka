@@ -10,14 +10,29 @@ Store _store({
 }) =>
     Store(
       id: 'store-1',
-      name: 'Clanix',
+      name: 'Clanix Online Shop',
       slug: slug,
       url: url,
     );
 
 void main() {
-  test('opens the exact public store URL in an in-app browser view', () async {
-    final store = _store();
+  test('builds the dedicated public route from the immutable store slug', () {
+    expect(
+      storeWebsiteUriForSlug('Clanix-2'),
+      Uri.parse('https://www.broka.co.ke/store/clanix-2'),
+    );
+    expect(storeWebsiteUriForSlug(null), isNull);
+    expect(storeWebsiteUriForSlug('  '), isNull);
+    expect(storeWebsiteUriForSlug('../clanix'), isNull);
+  });
+
+  test('opens the canonical singular URL in an in-app browser view', () async {
+    // A stale plural/profile URL in an API payload must never send the buyer
+    // back to the generic page; the immutable slug is the source of truth.
+    final store = _store(
+      slug: 'clanix-2',
+      url: 'https://www.broka.co.ke/stores/clanix-2',
+    );
     Uri? openedUri;
     LaunchMode? openedMode;
 
@@ -31,17 +46,15 @@ void main() {
     );
 
     expect(opened, isTrue);
-    expect(openedUri, Uri.parse(store.url));
+    expect(openedUri, Uri.parse('https://www.broka.co.ke/store/clanix-2'));
     expect(openedMode, LaunchMode.inAppBrowserView);
   });
 
-  test('falls back to the official BROKA slug URL, never an arbitrary host',
-      () async {
-    final store = _store(url: 'https://untrusted.example/store/clanix');
+  test('opens a product-feed store from its slug', () async {
     Uri? openedUri;
 
-    final opened = await launchStoreWebsite(
-      store,
+    final opened = await launchStoreBySlug(
+      'clanix',
       launcher: (uri, _) async {
         openedUri = uri;
         return true;
@@ -49,37 +62,34 @@ void main() {
     );
 
     expect(opened, isTrue);
-    expect(openedUri, Uri.parse('https://broka.co.ke/store/clanix'));
+    expect(openedUri, Uri.parse('https://www.broka.co.ke/store/clanix'));
   });
 
-  testWidgets(
-    'shows a visible message when the store URL cannot be opened',
-    (tester) async {
-      final store = _store();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Builder(
-            builder: (context) => Scaffold(
-              body: TextButton(
-                onPressed: () => visitStoreWebsite(
-                  context,
-                  store,
-                  launcher: (_, __) async => false,
-                ),
-                child: const Text('Open store'),
+  testWidgets('shows feedback when the slug is missing or launch fails',
+      (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => visitStoreBySlug(
+                context,
+                null,
+                launcher: (_, __) async => false,
               ),
+              child: const Text('Open store'),
             ),
           ),
         ),
-      );
+      ),
+    );
 
-      await tester.tap(find.text('Open store'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 350));
-      expect(
-        find.text("Couldn't open this store's website. Please try again."),
-        findsOneWidget,
-      );
-    },
-  );
+    await tester.tap(find.text('Open store'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(
+      find.text("Couldn't open this store's website. Please try again."),
+      findsOneWidget,
+    );
+  });
 }

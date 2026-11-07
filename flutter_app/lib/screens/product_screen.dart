@@ -33,6 +33,7 @@ import '../features/categories/domain/category_visual.dart';
 import '../features/listings/data/repositories/listings_repository.dart';
 import '../features/listings/domain/models/listing_engagement.dart';
 import '../core/network/api_client.dart';
+import '../features/stores/presentation/storefront_launcher.dart';
 import '../core/utils/result.dart';
 import '../features/safe_payment/escrow_callout.dart';
 import '../features/safe_payment/payments_shown.dart';
@@ -1685,8 +1686,7 @@ class _ProductScreenState extends State<ProductScreen> {
   Widget _visitStoreButton(Listing l) {
     return OutlinedButton.icon(
       key: const Key('product-visit-store'),
-      onPressed: () => Navigator.pushNamed(
-        context, '/store-view', arguments: {'storeId': l.storeId}),
+      onPressed: () => visitStoreBySlug(context, l.storeSlug),
       style: OutlinedButton.styleFrom(
         foregroundColor: BrokaColors.textHigh,
         minimumSize: const Size.fromHeight(52),

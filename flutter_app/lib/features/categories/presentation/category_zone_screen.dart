@@ -35,6 +35,7 @@ import '../../listings/data/repositories/listings_repository.dart';
 import '../../listings/domain/models/listing.dart';
 import '../data/repositories/categories_repository.dart';
 import '../domain/models/category.dart';
+import '../../stores/presentation/storefront_launcher.dart';
 import 'category_navigation.dart';
 import 'filter_bottom_sheet.dart';
 import 'widgets/category_art_card.dart';
@@ -282,8 +283,8 @@ class _CategoryZoneScreenState extends State<CategoryZoneScreen> {
                       // makes it fetch fresh instead, same as a relaunch.
                       arguments: {'listingId': (item as BrokaListing).id},
                     ),
-                    onViewStore: (storeId, storeSlug) => Navigator.pushNamed(
-                        context, '/store-view', arguments: {'storeId': storeId}),
+                    onViewStore: (_, storeSlug) =>
+                        visitStoreBySlug(context, storeSlug),
                     emptyStateBuilder: (_) => BrokaEmptyState(
                       emoji: visual.emoji,
                       gradient: zoneColors,

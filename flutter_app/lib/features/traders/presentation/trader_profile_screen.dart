@@ -24,6 +24,7 @@ import '../../discovery/domain/destination_visual.dart';
 import '../../listings/data/repositories/listings_repository.dart';
 import '../../listings/domain/models/listing.dart';
 import '../data/repositories/traders_repository.dart';
+import '../../stores/presentation/storefront_launcher.dart';
 import '../domain/models/trader.dart';
 
 /// A profile photo as the backend sends it: one of BROKA's image URLs, or
@@ -242,8 +243,8 @@ class _TraderProfileScreenState extends State<TraderProfileScreen> {
             },
             onTapItem: (item) => Navigator.pushNamed(context, '/product',
                 arguments: {'listingId': (item as BrokaListing).id}),
-            onViewStore: (storeId, storeSlug) => Navigator.pushNamed(
-                context, '/store-view', arguments: {'storeId': storeId}),
+            onViewStore: (_, storeSlug) =>
+                visitStoreBySlug(context, storeSlug),
             emptyStateBuilder: (_) => const Padding(
               padding: EdgeInsets.symmetric(vertical: 32),
               child: Center(
@@ -514,11 +515,11 @@ class _TraderProfileScreenState extends State<TraderProfileScreen> {
       ]);
 
   Widget _stores(Trader trader) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        _sectionTitle(trader.stores.length == 1 ? 'Store' : 'Stores'),
-        for (final s in trader.stores)
-          GestureDetector(
-            onTap: () => Navigator.pushNamed(context, '/store-view', arguments: {'storeId': s.id}),
-            child: _glass(
+      _sectionTitle(trader.stores.length == 1 ? 'Store' : 'Stores'),
+      for (final s in trader.stores)
+        GestureDetector(
+          onTap: () => visitStoreBySlug(context, s.slug),
+          child: _glass(
               margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               child: Row(children: [

@@ -5,37 +5,19 @@ import '../domain/models/store.dart';
 
 typedef StoreUrlLauncher = Future<bool> Function(Uri uri, LaunchMode mode);
 
-/// Uses the API-provided store link when it is a canonical BROKA storefront.
-/// Older or incomplete payloads fall back to the slug-based public route.
-Uri? storeWebsiteUri(Store store) {
-  final slug = store.slug.trim().toLowerCase();
-  if (!RegExp(r'^[a-z0-9-]{1,64}$').hasMatch(slug)) return null;
-
-  final supplied = Uri.tryParse(store.url.trim());
-  final isBrokaHost = supplied != null &&
-      const {'broka.co.ke', 'www.broka.co.ke'}
-          .contains(supplied.host.toLowerCase());
-  final segments = supplied?.pathSegments ?? const <String>[];
-  if (supplied != null &&
-      supplied.scheme.toLowerCase() == 'https' &&
-      isBrokaHost &&
-      segments.length == 2 &&
-      segments.first == 'store' &&
-      segments.last.toLowerCase() == slug) {
-    return supplied;
-  }
-
-  return Uri.https('broka.co.ke', '/store/$slug');
+/// The web storefront's canonical route is `/store/<slug>` (web/src/lib/links.ts).
+/// Use the immutable slug, never a display name, store ID, or a legacy plural
+/// `/stores/<slug>` URL from an older payload.
+Uri? storeWebsiteUriForSlug(String? rawSlug) {
+  final slug = rawSlug?.trim().toLowerCase();
+  if (slug == null || !RegExp(r'^[a-z0-9-]{1,64}$').hasMatch(slug)) return null;
+  return Uri.https('www.broka.co.ke', '/store/$slug');
 }
 
-/// Opens the store website, not the reusable in-app StoreHomeScreen.
-/// In-app browser mode prevents Android's verified /store app link from
-/// handing this deliberate website visit back to the generic app screen.
-Future<bool> launchStoreWebsite(
-  Store store, {
+Future<bool> _launchStoreWebsiteUri(
+  Uri? uri, {
   StoreUrlLauncher? launcher,
 }) async {
-  final uri = storeWebsiteUri(store);
   if (uri == null) return false;
 
   final StoreUrlLauncher open = launcher ??
@@ -47,14 +29,35 @@ Future<bool> launchStoreWebsite(
   }
 }
 
-/// Gives the user feedback rather than silently leaving a dead tap if the
-/// browser cannot open the store's public URL.
-Future<void> visitStoreWebsite(
-  BuildContext context,
+/// Opens the dedicated website instead of the generic in-app StoreHomeScreen.
+/// In-app browser mode prevents Android's verified `/store` app link from
+/// handing this deliberate website visit back to the generic app screen.
+Future<bool> launchStoreWebsite(
   Store store, {
   StoreUrlLauncher? launcher,
-}) async {
-  final opened = await launchStoreWebsite(store, launcher: launcher);
+}) =>
+    _launchStoreWebsiteUri(
+      storeWebsiteUriForSlug(store.slug),
+      launcher: launcher,
+    );
+
+/// Opens a storefront from a product feed that only has its immutable slug.
+Future<bool> launchStoreBySlug(
+  String? slug, {
+  StoreUrlLauncher? launcher,
+}) =>
+    _launchStoreWebsiteUri(
+      storeWebsiteUriForSlug(slug),
+      launcher: launcher,
+    );
+
+/// Gives the user feedback rather than silently leaving a dead tap if the
+/// browser cannot open the store's public URL.
+Future<void> _visitStoreUri(
+  BuildContext context,
+  Future<bool> Function() open,
+) async {
+  final opened = await open();
   if (opened || !context.mounted) return;
 
   ScaffoldMessenger.maybeOf(context)?.showSnackBar(
@@ -63,3 +66,23 @@ Future<void> visitStoreWebsite(
     ),
   );
 }
+
+Future<void> visitStoreWebsite(
+  BuildContext context,
+  Store store, {
+  StoreUrlLauncher? launcher,
+}) =>
+    _visitStoreUri(
+      context,
+      () => launchStoreWebsite(store, launcher: launcher),
+    );
+
+Future<void> visitStoreBySlug(
+  BuildContext context,
+  String? slug, {
+  StoreUrlLauncher? launcher,
+}) =>
+    _visitStoreUri(
+      context,
+      () => launchStoreBySlug(slug, launcher: launcher),
+    );

@@ -43,6 +43,7 @@ import '../../listings/domain/models/listing.dart';
 import '../data/repositories/stores_repository.dart';
 import '../data/store_share.dart';
 import '../domain/models/store.dart';
+import 'storefront_launcher.dart';
 import '../domain/models/store_product.dart';
 import 'setup/store_setup_controller.dart';
 import 'store_billing_screen.dart';
@@ -347,8 +348,7 @@ class _Dashboard extends StatelessWidget {
                 IconButton(
                   tooltip: 'View as a buyer',
                   icon: const Icon(Icons.visibility_outlined),
-                  onPressed: () => Navigator.of(context).pushNamed('/store-view',
-                      arguments: {'storeId': store.id}),
+                  onPressed: () => visitStoreWebsite(context, store),
                 ),
               ],
               flexibleSpace: FlexibleSpaceBar(
@@ -851,8 +851,7 @@ class _OverviewTabState extends State<_OverviewTab> {
           Expanded(child: _QuickAction(
             icon: Icons.visibility_outlined,
             label: 'View as a buyer',
-            onTap: () => Navigator.of(context).pushNamed('/store-view',
-                arguments: {'storeId': store.id}),
+            onTap: () => visitStoreWebsite(context, store),
           )),
         ]),
         const SizedBox(height: 22),
