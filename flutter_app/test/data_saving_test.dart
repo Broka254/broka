@@ -142,6 +142,8 @@ void main() {
         cache: cache,
         fetchPage: (p) async {
           fetched.add(p);
+          // Only page 0 has anything; an empty page 1 ends the feed.
+          if (p > 0) return <BrokaListing>[];
           await Future<void>.delayed(const Duration(milliseconds: 300));
           return [BrokaListing.fromJson(fakeListingJson(99))];
         },
