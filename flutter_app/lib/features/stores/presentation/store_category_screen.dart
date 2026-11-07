@@ -30,7 +30,7 @@ import '../data/repositories/stores_repository.dart';
 import '../domain/models/store.dart';
 import '../domain/store_categories.dart';
 import '../domain/store_locator.dart';
-import 'store_home_screen.dart';
+import 'storefront_launcher.dart';
 import 'store_map_screen.dart';
 import 'widgets/store_card.dart';
 import 'widgets/store_details_view.dart' show showStoreDetails;
@@ -354,10 +354,7 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
             (_, i) => StoreCard(
               key: Key('nearby-store-${rail[i].id}'),
               store: rail[i],
-              onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => StoreHomeScreen(storeId: rail[i].id))),
+              onTap: () => visitStoreWebsite(context, rail[i]),
               onDetails: () => showStoreDetails(context, rail[i],
                   repository: _repo),
               onMap: () => openStoreMap(context, rail[i],
@@ -448,10 +445,7 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
           delegate: SliverChildBuilderDelegate(
             (_, i) => StoreCard(
               store: main[i],
-              onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => StoreHomeScreen(storeId: main[i].id))),
+              onTap: () => visitStoreWebsite(context, main[i]),
               onDetails: () => showStoreDetails(context, main[i],
                   repository: _repo),
               onMap: () => openStoreMap(context, main[i],

@@ -56,7 +56,7 @@ import '../domain/store_categories.dart';
 import '../domain/store_locator.dart';
 import 'nearby_stores_screen.dart';
 import 'store_category_screen.dart';
-import 'store_home_screen.dart';
+import 'storefront_launcher.dart';
 import 'store_map_screen.dart';
 import 'widgets/distance_filter.dart';
 import 'widgets/store_card.dart';
@@ -707,10 +707,7 @@ class _StoreListScreenState extends State<StoreListScreen> {
           (_, i) => StoreCard(
             key: Key('$keyPrefix-${stores[i].id}'),
             store: stores[i],
-            onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => StoreHomeScreen(storeId: stores[i].id))),
+            onTap: () => visitStoreWebsite(context, stores[i]),
             onDetails: () =>
                 showStoreDetails(context, stores[i], repository: _repo),
             onMap: () => openStoreMap(context, stores[i],
