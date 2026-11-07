@@ -27,6 +27,7 @@ import 'package:flutter/material.dart';
 import '../../../main.dart';
 import '../../../core/utils/result.dart';
 import '../../../services/api_service.dart';
+import '../../../widgets/broka_image.dart';
 import '../../../widgets/broka_search_field.dart';
 import '../../../widgets/collapsing_screen_header.dart';
 import '../../../widgets/constellation_background.dart';
@@ -289,6 +290,9 @@ class _TraderCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final photo = traderPhoto(trader.profilePhoto);
     final cover = trader.coverUrl;
+    // From the disk cache like every other picture (BrokaImage); a plain
+    // NetworkImage downloaded it again on every visit.
+    final coverImage = BrokaImage.provider(cover);
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -301,10 +305,10 @@ class _TraderCard extends StatelessWidget {
               color: cover != null ? BrokaColors.neonBlue.withOpacity(0.45) : BrokaColors.border),
           // The trader's own background (POST /traders/me/cover), darkened
           // so the name and numbers stay readable on any picture.
-          image: cover == null
+          image: coverImage == null
               ? null
               : DecorationImage(
-                  image: NetworkImage(cover),
+                  image: coverImage,
                   fit: BoxFit.cover,
                   onError: (_, __) {},
                   colorFilter: ColorFilter.mode(Colors.black.withOpacity(0.58), BlendMode.darken),

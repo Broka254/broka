@@ -30,10 +30,11 @@ class PhotoCapture {
   static const phoneCameraMaxWidth = 1080.0;
 
   // A gallery pick, as the sell wizard's cover step takes one
-  // (sell_showcase_screen.dart). The server keeps at most 1600 px; this
-  // leaves room for a wide store cover without uploading a 12 MP original.
+  // (sell_showcase_screen.dart). The server keeps at most 1600 px on the
+  // long side, whatever the shape - a wide store cover included - so this
+  // was 2048 only to upload 60% more pixels than were ever stored.
   static const galleryQuality = 85;
-  static const galleryMaxSide = 2048.0;
+  static const galleryMaxSide = 1600.0;
 
   /// BROKA's camera, for up to [maxPhotos] photos counting [alreadyTaken].
   /// Each one is handed to [onCaptured] the moment it's taken (move it

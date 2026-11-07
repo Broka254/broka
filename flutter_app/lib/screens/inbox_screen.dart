@@ -108,6 +108,7 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
     _loadSeq++;
     _retryTimer?.cancel();
     _retryTimer = null;
+    _retries = 0;
     setState(() {
       if (snap.changed || _threads.isEmpty) {
         _applyThreads([for (final t in snap.threads) Map<String, dynamic>.from(t)]);
@@ -144,9 +145,25 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
         s.contains('Network is unreachable') || s.contains('TimeoutException');
   }
 
+  // Retries in a row that failed (reset by any answer).
+  int _retries = 0;
+
+  /// One quiet retry, later each time: 15, 30, then every 60 seconds.
+  ///
+  /// None while the poller runs: its sweep fetches this same inbox and
+  /// hands every success to [_onPollerInbox], which clears the banner -
+  /// a timer of our own was the same request a second time. It used to
+  /// retry every 15 seconds, for as long as the server stayed down.
   void _armRetry() {
     _retryTimer?.cancel();
-    _retryTimer = Timer.periodic(_retryEvery, (_) => unawaited(_loadInbox()));
+    _retryTimer = null;
+    if (GlobalPollerService.instance.isRunning) return;
+    final delay = _retryEvery * (1 << (_retries >= 2 ? 2 : _retries));
+    _retries++;
+    _retryTimer = Timer(delay, () {
+      _retryTimer = null;
+      unawaited(_loadInbox());
+    });
   }
 
   void _applyThreads(List<Map<String, dynamic>> data) {
@@ -198,6 +215,7 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
       if (!mounted || seq != _loadSeq) return;
       _retryTimer?.cancel();
       _retryTimer = null;
+      _retries = 0;
       setState(() {
         _applyThreads(data);
         _loading = false;

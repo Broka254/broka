@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-321 endpoints served by `backend/main.py`. **Auth** is read from each
+322 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 68, optional 6, public 61, token 5, user 181.
+Counts: admin 68, optional 6, public 61, token 5, user 182.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -157,6 +157,7 @@ Counts: admin 68, optional 6, public 61, token 5, user 181.
 | POST | `/auth/token/revoke-all` | user | `revoke_all_tokens` (backend/api/domains/auth/refresh_router.py:170) |
 | POST | `/auth/upgrade-to-seller` | user | `upgrade_to_seller` (backend/api/domains/auth/router.py:334) |
 | GET | `/auth/user/{user_id}` | user | `get_user_profile` (backend/api/domains/auth/router.py:480) |
+| GET | `/auth/user/{user_id}/presence` | user | `get_user_presence` (backend/api/domains/auth/router.py:493) |
 | POST | `/buy-agent-requests` | user | `create_buy_agent_request` (backend/api/domains/buy_agent/router.py:254) |
 | POST | `/buy-agent-requests/action` | user | `zeno_action` (backend/api/domains/buy_agent/router.py:221) |
 | POST | `/buy-agent-requests/converse` | user | `converse_with_zeno` (backend/api/domains/buy_agent/router.py:178) |
@@ -264,32 +265,32 @@ Counts: admin 68, optional 6, public 61, token 5, user 181.
 | POST | `/mpesa/query` | user | `query_payment_status` (backend/api/routers/mpesa.py:348) |
 | GET | `/mpesa/status/{deal_id}` | user | `get_deal_payment_status` (backend/api/routers/mpesa.py:792) |
 | POST | `/mpesa/stk-push` | user | `initiate_stk_push` (backend/api/routers/mpesa.py:154) |
-| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:5636) |
+| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:5664) |
 | POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1880) |
 | POST | `/negotiate/chat` | user | `broker_chat` (backend/api/domains/ai_broker/router.py:44) **shadowed: never reached** |
-| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:5533) |
+| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:5561) |
 | POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3725) |
 | POST | `/negotiate/dispute-analysis` | user | `dispute_analysis` (backend/api/domains/ai_broker/router.py:85) |
-| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:4972) |
+| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:5000) |
 | POST | `/negotiate/message` | user | `send_message` (backend/api/routers/negotiate.py:1956) |
 | PATCH | `/negotiate/message/{message_id}` | user | `edit_message` (backend/api/routers/negotiate.py:3950) |
 | DELETE | `/negotiate/message/{message_id}` | user | `unsend_message` (backend/api/routers/negotiate.py:4002) |
 | POST | `/negotiate/price-recommend` | user | `price_recommend` (backend/api/domains/ai_broker/router.py:69) |
 | POST | `/negotiate/scam-check` | user | `scam_check` (backend/api/domains/ai_broker/router.py:60) |
 | POST | `/negotiate/shopping-advisor` | user | `shopping_advisor` (backend/api/domains/ai_broker/router.py:104) |
-| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:5600) |
-| POST | `/negotiate/store/{store_id}/direct-message` | user | `store_direct_message` (backend/api/routers/negotiate.py:4752) |
-| GET | `/negotiate/store/{store_id}/history` | user | `get_store_history` (backend/api/routers/negotiate.py:4776) |
-| POST | `/negotiate/store/{store_id}/mark-delivered` | user | `mark_store_delivered` (backend/api/routers/negotiate.py:4881) |
-| POST | `/negotiate/store/{store_id}/mark-read` | user | `mark_store_read` (backend/api/routers/negotiate.py:4898) |
-| GET | `/negotiate/store/{store_id}/read-status` | user | `get_store_read_status` (backend/api/routers/negotiate.py:4915) |
-| GET | `/negotiate/store/{store_id}/thread-info` | user | `get_store_thread_info` (backend/api/routers/negotiate.py:4852) |
+| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:5628) |
+| POST | `/negotiate/store/{store_id}/direct-message` | user | `store_direct_message` (backend/api/routers/negotiate.py:4753) |
+| GET | `/negotiate/store/{store_id}/history` | user | `get_store_history` (backend/api/routers/negotiate.py:4777) |
+| POST | `/negotiate/store/{store_id}/mark-delivered` | user | `mark_store_delivered` (backend/api/routers/negotiate.py:4883) |
+| POST | `/negotiate/store/{store_id}/mark-read` | user | `mark_store_read` (backend/api/routers/negotiate.py:4900) |
+| GET | `/negotiate/store/{store_id}/read-status` | user | `get_store_read_status` (backend/api/routers/negotiate.py:4917) |
+| GET | `/negotiate/store/{store_id}/thread-info` | user | `get_store_thread_info` (backend/api/routers/negotiate.py:4854) |
 | POST | `/negotiate/zeno-action/draft-sms` | user | `zeno_draft_sms` (backend/api/routers/negotiate.py:3460) |
 | GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:4047) |
-| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:4510) |
-| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:4554) |
-| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:4601) |
-| POST | `/negotiate/{listing_id}/zeno-read` | user | `mark_zeno_read` (backend/api/routers/negotiate.py:4578) |
+| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:4511) |
+| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:4555) |
+| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:4602) |
+| POST | `/negotiate/{listing_id}/zeno-read` | user | `mark_zeno_read` (backend/api/routers/negotiate.py:4579) |
 | GET | `/payments/zetupay/payments/{reference}` | admin | `zetupay_payment_status` (backend/api/domains/payments/router.py:108) |
 | POST | `/payments/zetupay/test-charge` | admin | `zetupay_test_charge` (backend/api/domains/payments/router.py:77) |
 | POST | `/payments/zetupay/webhook` | public | `zetupay_webhook` (backend/api/domains/payments/router.py:35) |
@@ -1268,12 +1269,14 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 - `cache/cache_store.dart` — Where ScreenCache keeps its entries.
 - `cache/data_changes.dart` — DataChanges - one place that knows when something the app has cached was changed, and tells the screens that show it.
+- `cache/image_cache_managers.dart` — Where downloaded pictures are kept on the phone.
 - `cache/screen_cache.dart` — ScreenCache - what BROKA has already downloaded, kept on the phone.
 - `errors/user_facing_error.dart` — What the user is told when something fails.
 - `legal/legal_documents.dart` — The legal documents the app shows, the revisions it submits, and the exact declarations a new account must make.
 - `navigation/app_route_observer.dart` — Tells a screen when the user came back to it (RouteAware.didPopNext) whichever way they left: the bottom nav, a notification tap that pushe…
 - `network/api_client.dart` — BROKA v3.0 - Core API Client Centralises HTTP logic: base URL, auth headers, error handling, retries.
 - `network/auction_ws_client.dart` — lib/core/network/auction_ws_client.dart Mirrors deal_ws_client.dart's exact reconnect contract: 25s JSON pings, backoff starting at 1s and…
+- `network/data_saver.dart` — Data saver - Settings' switch for people on a small mobile bundle.
 - `network/deal_ws_client.dart` — BROKA v3.0 - Deal Status WebSocket Client
 - `network/instrumented_client.dart` — The http.Client every BROKA request goes through: ApiClient's (by default) and ApiService's top-level http calls (main.dart runs the app in…
 - `network/network_stats.dart` — NetworkStats - counts of what the app asked the network for, and what the cache answered instead.
@@ -1314,6 +1317,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `sell_wizard_data.dart` — BROKA - Sell Wizard Data
 - `showcase_generator.dart` — The AI cover image, from the sell wizard's Cover image step.
 - `sms_autofill_service.dart` — BROKA — Automatic OTP capture (Android SMS Retriever API).
+- `upload_shrink.dart` — Photos are made no bigger than the server keeps before they are uploaded.
 - `webrtc_service.dart` — BROKA - WebRTC Service Manages one P2P audio or video call via WebSocket signaling on the BROKA backend.
 - `zeno_chat_store.dart` — Zeno conversations, kept on the phone.
 - `zeno_sms_prompts.dart` — How Zeno asks "should I SMS you when a buyer shows up?" on the sell wizard's last step.
@@ -1343,6 +1347,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `axis_line_chart.dart` — BROKA — line chart with axes
 - `broka_image.dart` — One widget for every image the backend sends, whatever shape it is in.
 - `broka_search_field.dart` — The search box inside a screen: the Category Zones ("Electronics Zone"), Traders and Stores.
+- `cached_tile_provider.dart` — Map tiles kept on the phone.
 - `chat_ambient_background.dart` — BROKA — Ambient constellation background for conversation screens
 - `chat_parts.dart` — BROKA - the pieces every chat screen is built from.
 - `collapsing_screen_header.dart` — lib/widgets/collapsing_screen_header.dart
@@ -1434,6 +1439,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `marketing_studio_test.dart` — The Marketing Studio's last step: a generated poster leaves the phone through the share sheet, and the server hears about it once - as a sa…
 - `menu_test.dart` — The Menu tab (formerly Profile), and the Profile and Settings screens it opens.
 - `missed_call_notification_test.dart` — Missed calls and unread messages, as reported from a phone (2026-10-02): "notification for missed calls is not working", and nothing on Hom…
+- `mobile_data_test.dart` — What the app no longer downloads or sends on mobile data (mobile-data pass, 2026-11-07).
 - `negotiation_screens_test.dart` — The two negotiation screens on Home's visual system (2026-09-26): the Zeno negotiation room (NegotiateScreen) and the one-on-one chat (Nego…
 - `notification_faces_test.dart` — Faces on notifications (2026-10-08).
 - `notification_init_test.dart` — The incoming-call notification for a closed app was never posted.
@@ -1485,6 +1491,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `user_profile_screen_test.dart` — The user profile (2026-09-30): on Home's visual system, showing only figures the API returns, and reviews that load - with "Write a review"…
 - `voip_call_permissions_test.dart` — The app closed the moment a call was placed or answered.
 - `voip_call_screen_test.dart` — The call screen, upgraded (2026-10-02).
+- `ws_backoff_test.dart` — The live auction and deal sockets back off when the server won't have them (mobile-data pass, 2026-11-07).
 - `zeno_about_listing_test.dart` — Zeno, opened from a listing's "Ask Zeno" card (2026-09-29): the listing pinned under the header, questions about it, its id on every turn s…
 - `zeno_assistant_test.dart` — Zeno as the user's assistant (2026-09-27): one-on-one conversation that can also DO things - open a screen, search, hand over to the Buying…
 - `zeno_chat_test.dart` — Zeno's conversation after the 2026-09-26 pass: it survives closing the screen (and the app), it can be started over, it sends Zeno only the…

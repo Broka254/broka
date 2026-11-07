@@ -3,7 +3,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart'
-    show defaultTargetPlatform, debugPrint, TargetPlatform;
+    show defaultTargetPlatform, debugPrint, TargetPlatform, visibleForTesting;
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -700,6 +700,47 @@ class ApiService {
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
+  /// False once the server has said it has no presence route (an older
+  /// backend): callers go back to [getUserProfile] without asking again.
+  static bool _presenceRouteKnownMissing = false;
+
+  /// Whether [userId] is online and when they were last seen (`is_online`,
+  /// `last_seen`, `last_seen_label`) - the chat header's 30-second refresh.
+  /// It used to fetch the whole profile for that one line, an inline base64
+  /// photo included on older accounts, 120 times an hour.
+  ///
+  /// Null when the presence could not be had: the request failed, or the
+  /// server predates the route - then the caller refreshes the full profile
+  /// as before.
+  static Future<Map<String, dynamic>?> getUserPresence(String userId) async {
+    if (_presenceRouteKnownMissing) return null;
+    try {
+      final response = await _sendAuthed(() => http
+          .get(Uri.parse('$baseUrl/auth/user/$userId/presence'), headers: _headers)
+          .timeout(const Duration(seconds: 15)));
+      if (response.statusCode == 200) {
+        final body = jsonDecode(response.body);
+        return body is Map<String, dynamic> ? body : null;
+      }
+      // FastAPI's own 404 for a path it doesn't route says "Not Found"; a
+      // missing user says "User not found".
+      if (response.statusCode == 404 || response.statusCode == 405) {
+        try {
+          final detail = (jsonDecode(response.body) as Map?)?['detail'];
+          if (detail == 'Not Found' || detail == 'Method Not Allowed') {
+            _presenceRouteKnownMissing = true;
+          }
+        } catch (_) {}
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @visibleForTesting
+  static void resetPresenceRoute() => _presenceRouteKnownMissing = false;
+
   // Platform-wide, anonymised dispute-resolution stats (Volume 2 §2.3).
   // Public endpoint (no auth required), cheap Redis-cached read on the
   // backend. Returns null fields (not 0) when there's no resolved-dispute
@@ -1224,10 +1265,29 @@ class ApiService {
   /// History for either kind of direct thread. Store conversations use the
   /// store endpoint because their identity is (store_id, buyer_id); a store
   /// has no single listing that can stand in for it.
+  /// True when the last conditional getThreadHistory() was answered 304:
+  /// the thread is exactly as it was, and the list returned is the last one.
+  static bool lastHistoryNotModified = false;
+
+  // The last full answer per thread, with its ETag, for conditional
+  // requests. Kept for a few threads, in memory, for the account that got
+  // them; a 304 is never answered from another account's copy.
+  static final Map<String, ({String userId, String etag, String body})> _historyCache = {};
+  static const int _historyCacheCap = 6;
+
+  @visibleForTesting
+  static void clearHistoryCache() => _historyCache.clear();
+
+  /// [conditional]: send the ETag of the last answer for this thread, so
+  /// an unchanged conversation comes back as an empty 304 instead of all
+  /// of it. The direct chat's fallback poll asks every few seconds while
+  /// its socket is down; nearly every answer was the one it already had.
+  /// A server that sends no ETag (older backends) is asked in full as before.
   static Future<List<Message>> getThreadHistory({
     String? listingId,
     String? storeId,
     String? buyerId,
+    bool conditional = false,
   }) async {
     _requireExactlyOneThread(listingId, storeId);
     final path = storeId != null && storeId.isNotEmpty
@@ -1236,18 +1296,45 @@ class ApiService {
     final uri = Uri.parse('$baseUrl$path').replace(
       queryParameters: buyerId != null ? {'buyer_id': buyerId} : null,
     );
-    final response = await _sendAuthed(() => http.get(uri, headers: _headers)
+    final uid = currentUserId ?? '';
+    final cacheKey = uri.toString();
+    lastHistoryNotModified = false;
+    Map<String, String> headers() {
+      final held = _historyCache[cacheKey];
+      return {
+        ..._headers,
+        if (conditional && held != null && held.userId == uid) 'If-None-Match': held.etag,
+      };
+    }
+
+    final response = await _sendAuthed(() => http.get(uri, headers: headers())
         .timeout(const Duration(seconds: 30)));
-    // Explicit status check (rather than relying on non-2xx bodies
-    // happening to fail the `as List` cast below) so a server error always
-    // throws and never gets treated as "a real, empty conversation" -
-    // negotiate_screen.dart/negotiation_screen.dart cache whatever this
-    // returns, and an accidental empty-but-200 response would wipe that
-    // cache exactly like the inbox bug did.
-    if (response.statusCode != 200) {
+    final held = _historyCache[cacheKey];
+    String body;
+    if (response.statusCode == 304 && held != null && held.userId == uid) {
+      lastHistoryNotModified = true;
+      body = held.body;
+    } else if (response.statusCode == 200) {
+      body = response.body;
+      final etag = response.headers['etag'];
+      _historyCache.remove(cacheKey);
+      if (etag != null && etag.isNotEmpty) {
+        _historyCache[cacheKey] = (userId: uid, etag: etag, body: body);
+        while (_historyCache.length > _historyCacheCap) {
+          _historyCache.remove(_historyCache.keys.first);
+        }
+      }
+    } else {
+      // Explicit status check (rather than relying on non-2xx bodies
+      // happening to fail the `as List` cast below) so a server error always
+      // throws and never gets treated as "a real, empty conversation" -
+      // negotiate_screen.dart/negotiation_screen.dart cache whatever this
+      // returns, and an accidental empty-but-200 response would wipe that
+      // cache exactly like the inbox bug did. A 304 with nothing held to
+      // answer it from lands here too.
       throw Exception('History request failed (${response.statusCode})');
     }
-    final List data = jsonDecode(response.body);
+    final List data = jsonDecode(body);
     return data.map((e) => Message.fromJson(e as Map<String, dynamic>)).toList();
   }
 

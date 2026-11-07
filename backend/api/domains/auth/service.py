@@ -856,6 +856,21 @@ class AuthService:
             d["seller_standing"] = standing
         return d
 
+    async def get_user_presence(self, user_id: str) -> dict:
+        """The presence fields of get_user_profile, alone (a chat header's
+        30-second refresh)."""
+        from api.core.presence import online_status
+        user = await self.repo.get_by_id(user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        is_online, last_seen_label = online_status(user.last_seen)
+        return {
+            "id": user.id,
+            "last_seen": user.last_seen.isoformat() if user.last_seen else None,
+            "is_online": is_online,
+            "last_seen_label": last_seen_label,
+        }
+
     # Where another user is, to two decimal places: about a kilometre. The
     # "Show my location" setting promises an approximate location, and the
     # stored value is the phone's GPS fix.

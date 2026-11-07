@@ -40,6 +40,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../core/network/data_saver.dart';
 import '../core/utils/result.dart';
 import '../features/account/data/repositories/account_repository.dart';
 import '../features/auth/presentation/change_password_screen.dart';
@@ -96,6 +97,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _load();
     _checkDelivery();
     unawaited(ZenoLauncherPrefs.load());
+    unawaited(DataSaver.load());
     _lifecycle = AppLifecycleListener(onResume: _checkDelivery);
   }
 
@@ -264,6 +266,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
               key: const Key('settings-location-switch'),
               value: _locationVisible ?? false,
               onChanged: _locationVisible == null || _savingLocation ? null : _setLocationVisible,
+            ),
+          ),
+        ]),
+        const MenuSectionLabel('Mobile data'),
+        MenuGroup(children: [
+          MenuTile(
+            icon: Icons.data_usage_rounded,
+            tint: BrokaColors.neonGreen,
+            title: 'Data saver',
+            subtitle: 'Smaller product photos and fewer background checks - for a small data bundle',
+            trailing: ValueListenableBuilder<bool>(
+              valueListenable: DataSaver.enabled,
+              builder: (_, on, __) => _switch(
+                key: const Key('settings-data-saver-switch'),
+                value: on,
+                onChanged: DataSaver.setEnabled,
+              ),
             ),
           ),
         ]),

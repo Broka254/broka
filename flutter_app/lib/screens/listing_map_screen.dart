@@ -14,6 +14,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../main.dart';
 import '../models/listing.dart';
 import '../services/api_service.dart';
+import '../widgets/cached_tile_provider.dart';
 
 class ListingMapScreen extends StatefulWidget {
   const ListingMapScreen({super.key});
@@ -441,6 +442,8 @@ class _ListingMapScreenState extends State<ListingMapScreen> {
         TileLayer(
           urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
           userAgentPackageName: 'com.broka.app',
+          // On disk, not refetched on every visit (CachedTileProvider).
+          tileProvider: CachedTileProvider.shared,
           // Dark-style tiles from CartoDB (matches Broka's dark theme)
           // Swap urlTemplate to the line below for a dark map:
           // 'https://cartodb-basemaps-{s}.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png'

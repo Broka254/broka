@@ -8,6 +8,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../main.dart' show BrokaColors;
+import '../../../widgets/cached_tile_provider.dart';
 import '../domain/models/store.dart';
 
 /// Opens [store] on the in-app map when it has a mappable point; without
@@ -115,6 +116,8 @@ class StoreMapScreen extends StatelessWidget {
               TileLayer(
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'ke.co.broka.app',
+                // On disk, not refetched on every visit (CachedTileProvider).
+                tileProvider: CachedTileProvider.shared,
               ),
               if (viewer != null)
                 PolylineLayer(polylines: [

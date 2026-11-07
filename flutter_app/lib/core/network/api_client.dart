@@ -40,7 +40,14 @@ class ApiClient {
   // Through InstrumentedClient by default: request counts for NetworkStats,
   // and a successful change marks the cached screens it affects out of date
   // (DataChanges). A caller-supplied client (tests) is used as it is.
-  ApiClient({http.Client? client}) : _http = client ?? InstrumentedClient(http.Client());
+  ApiClient({http.Client? client}) : _http = client ?? _instrumented(http.Client());
+
+  /// The app runs inside http.runWithClient with an InstrumentedClient
+  /// (main.dart), so inside it http.Client() already is one. Wrapping it
+  /// again counted every request twice in NetworkStats and ran each change
+  /// through DataChanges twice.
+  static http.Client _instrumented(http.Client client) =>
+      client is InstrumentedClient ? client : InstrumentedClient(client);
 
   // ── Session ───────────────────────────────────────────────────────────────
 
@@ -205,9 +212,14 @@ class ApiClient {
     return _handleResponse(response);
   }
 
-  Future<dynamic> delete(String path) async {
+  Future<dynamic> delete(
+    String path, {
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
     final uri = Uri.parse('$_baseUrl$path');
-    final response = await _send(() => _http.delete(uri, headers: _headers));
+    // A timeout like every other method: without one, a request lost on a
+    // dropped mobile connection left its caller waiting for good.
+    final response = await _send(() => _http.delete(uri, headers: _headers).timeout(timeout));
     return _handleResponse(response);
   }
 

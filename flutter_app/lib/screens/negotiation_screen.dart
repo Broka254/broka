@@ -372,6 +372,27 @@ class _ChatMediaOutbox {
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
+/// How a voice note is recorded: AAC, one channel, 22.05 kHz, 32 kbit/s -
+/// clear speech at about 240 KB a minute. The record package's defaults
+/// (stereo, 44.1 kHz, 128 kbit/s) made every minute of talking nearly a
+/// megabyte to send, and the same again for the other side to play.
+const voiceNoteConfig = RecordConfig(
+  encoder: AudioEncoder.aacLc,
+  bitRate: 32000,
+  sampleRate: 22050,
+  numChannels: 1,
+);
+
+/// 4-second ticks between two of the direct chat's fallback polls (while
+/// its socket is down), after [quietPolls] polls in a row found nothing
+/// new: 4, 8, 16, then 32 seconds.
+int directChatPollTicksBetween(int quietPolls) {
+  if (quietPolls < 3) return 1;
+  if (quietPolls < 6) return 2;
+  if (quietPolls < 9) return 4;
+  return 8;
+}
+
 class NegotiationScreen extends StatefulWidget {
   const NegotiationScreen({super.key, this.animateBackground = true});
 
@@ -448,7 +469,6 @@ class _NegotiationScreenState extends State<NegotiationScreen>
 
   // Polling fallback (used when WS not available)
   Timer? _pollTimer;
-  Timer? _heartbeatTimer;
 
   // Typing presence. Outgoing events are debounced (one "typing", then
   // silence until the text goes quiet or is sent); the remote indicator
@@ -555,9 +575,11 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         setState(() => _composerFocused = _composerFocus.hasFocus);
       }
     });
-    _heartbeatTimer = Timer.periodic(
-        const Duration(seconds: 60), (_) => ApiService.updateLastSeen());
-    ApiService.updateLastSeen();
+    // No presence heartbeat of its own any more: the app sends one every
+    // 60 seconds while it is in front, whatever the screen (main.dart), and
+    // this one doubled it for as long as a chat was open - and kept going
+    // with the app in the background, so "online" never froze when the
+    // user left.
   }
 
   @override
@@ -657,9 +679,14 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     _connectWebSocket();
     _loadCounterpartyInfo();
     _refreshZenoUnreadCount();
+    // Nothing on screen to keep current while the app is in the background:
+    // the poller and pushes own that time, and resuming refreshes it all
+    // (didChangeAppLifecycleState). These used to carry on behind the
+    // user's back for as long as the chat stayed open.
     _presenceRefreshTimer = Timer.periodic(
         const Duration(seconds: 30), (_) {
-      _loadCounterpartyInfo();
+      if (!_appVisible) return;
+      _refreshCounterpartyPresence();
       _refreshZenoUnreadCount();
       _syncReadState();
     });
@@ -670,14 +697,34 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     // user had already answered, its Decline hanging that call up. Calls
     // now ring through NotificationService.showIncomingCall alone, which
     // knows when the phone is already on one (ActiveCall).
+    //
+    // A conversation that stays quiet is asked about less and less often
+    // (directChatPollTicksBetween): every 4 seconds while it is moving, out
+    // to every 32 once nothing has changed for a while - a socket that can't connect
+    // (no such thread any more, a network that blocks WebSockets) used to
+    // mean the whole thread every 4 seconds for as long as the chat was
+    // open. Each answer is conditional too: an unchanged thread is an empty
+    // 304.
     _pollTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-      if (!_hasThread || !mounted) return;
-      if (!_wsConnected) {
-        _pollNewMessages();
-        // Receipts too: without the socket, nothing else brings them.
-        if (++_pollTicks % 3 == 0) _refreshReceipts();
-      }
+      if (!_hasThread || !mounted || !_appVisible) return;
+      if (_wsConnected) return;
+      if (++_pollWait < directChatPollTicksBetween(_quietPolls)) return;
+      _pollWait = 0;
+      _pollNewMessages();
+      // Receipts too: without the socket, nothing else brings them.
+      if (++_pollTicks % 3 == 0) _refreshReceipts();
     });
+  }
+
+  // Fallback-poll pace (see _startThread).
+  int _quietPolls = 0;
+  int _pollWait = 0;
+
+  /// Something moved in the conversation (a message either way, the app
+  /// back in front): poll at full speed again.
+  void _pollNow() {
+    _quietPolls = 0;
+    _pollWait = 0;
   }
 
   @override
@@ -698,12 +745,19 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       _wsReconnectAttempt = 0;
       _connectWebSocket();
     }
+    _pollNow();
     unawaited(_pollNewMessages());
     unawaited(_syncReadState());
+    // Presence was not refreshed while away.
+    unawaited(_refreshCounterpartyPresence());
   }
 
   Timer? _presenceRefreshTimer;
   Map<String, dynamic>? _counterpartyInfo;
+  /// Whose full profile [_counterpartyInfo] was last fetched from the
+  /// server (not the on-device copy): until then the 30-second refresh
+  /// fetches it whole, after that only their presence.
+  String? _counterpartyProfileFor;
   /// Zeno's messages to this user that they haven't seen in its room - the
   /// badge on the Zeno button. From the server (the Inbox's `zeno_unread`):
   /// it used to be every Zeno message on the thread less a count saved only
@@ -783,6 +837,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     try {
       final info = await ApiService.getUserProfile(counterpartyId);
       if (!mounted) return;
+      _counterpartyProfileFor = counterpartyId;
       setState(() => _counterpartyInfo = info);
       unawaited(CounterpartyProfileCache.save(ApiService.currentUserId,
           CounterpartyProfile.fromLive(counterpartyId, info)));
@@ -790,6 +845,34 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       // Offline or failed: keep the cached identity rather than falling
       // back to a generic "Buyer"/"Seller" label.
     }
+  }
+
+  /// The 30-second refresh of the header's "online" / "last seen" line:
+  /// just those fields, merged into the profile already shown. The whole
+  /// profile is fetched only when there is none yet, or when the server
+  /// has no presence route (older backends).
+  Future<void> _refreshCounterpartyPresence() async {
+    if (!_hasThread) return;
+    final counterpartyId = _counterpartyId;
+    if (counterpartyId == null || _counterpartyProfileFor != counterpartyId) {
+      await _loadCounterpartyInfo();
+      return;
+    }
+    final presence = await ApiService.getUserPresence(counterpartyId);
+    if (!mounted) return;
+    if (presence == null) {
+      await _loadCounterpartyInfo();
+      return;
+    }
+    // The answer is for whoever this chat shows now, not a thread since
+    // left (a seller switching buyers).
+    if (presence['id'] != null && presence['id'] != counterpartyId) return;
+    if (_counterpartyId != counterpartyId) return;
+    setState(() => _counterpartyInfo = {
+          ...?_counterpartyInfo,
+          for (final key in const ['is_online', 'last_seen', 'last_seen_label'])
+            if (presence.containsKey(key)) key: presence[key],
+        });
   }
 
   bool get _counterpartyOnline => (_counterpartyInfo?['is_online'] as bool?) ?? false;
@@ -1511,8 +1594,14 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         listingId: _listing?.id,
         storeId: _storeId,
         buyerId: _role == 'seller' ? _buyerId : null,
+        conditional: true,
       );
       if (!mounted) return;
+      if (ApiService.lastHistoryNotModified) {
+        // The thread is exactly as last fetched: nothing to merge.
+        _quietPolls++;
+        return;
+      }
       var changed = false;
       var inbound = false;
       for (final m in history) {
@@ -1525,7 +1614,11 @@ class _NegotiationScreenState extends State<NegotiationScreen>
           changed = true;
         }
       }
-      if (!changed) return;
+      if (!changed) {
+        _quietPolls++;
+        return;
+      }
+      _pollNow();
       setState(() {});
       _scrollDown();
       unawaited(_cacheMessages());
@@ -1588,6 +1681,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     _msgCtrl.clear();
     _scrollDown();
     unawaited(_cacheMessages());
+    // A reply is likely soon: the fallback poll (if the socket is down)
+    // stops idling.
+    _pollNow();
     _enqueue(() => _deliverText(clientId, text,
         replyToMessageId: reply?.id.isEmpty == true ? null : reply?.id));
   }
@@ -2034,7 +2130,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       }
       final dir  = await getTemporaryDirectory();
       final path = '${dir.path}/broka_voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
-      await _recorder.start(const RecordConfig(encoder: AudioEncoder.aacLc), path: path);
+      await _recorder.start(voiceNoteConfig, path: path);
       // Left the chat while the recorder started: dispose() has already
       // queued the recorder's cancel, which runs after this start.
       if (!mounted) return;
@@ -2723,7 +2819,6 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     _composerFocus.dispose();
     _scrollCtrl.dispose();
     _pollTimer?.cancel();
-    _heartbeatTimer?.cancel();
     _presenceRefreshTimer?.cancel();
     // Not awaited, so a recorder that throws would otherwise surface as an
     // unhandled error.
@@ -3798,7 +3893,9 @@ ImageProvider? _chatImageProvider(String url,
       return FileImage(File(url.replaceFirst('file://', '')));
     }
     if (url.isEmpty) return null;
-    return NetworkImage(url);
+    // From the disk cache (BrokaImage.provider): a NetworkImage was fetched
+    // again every time the chat was opened.
+    return BrokaImage.provider(url) ?? NetworkImage(url);
   } catch (_) {
     return null;
   }

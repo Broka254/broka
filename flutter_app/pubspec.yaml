@@ -26,6 +26,10 @@ dependencies:
   # more, and shipping a second, unused speech engine means a second set of
   # microphone permissions and platform plugins for code that never runs.
   cached_network_image: ^3.3.1
+  # Already in the lockfile through cached_network_image; direct because
+  # BROKA configures its own image and map-tile stores
+  # (lib/core/cache/image_cache_managers.dart).
+  flutter_cache_manager: ^3.4.1
   provider: ^6.1.2
   flutter_map: ^6.1.0
   latlong2: ^0.9.1

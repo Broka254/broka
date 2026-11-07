@@ -11,6 +11,13 @@
     so the dashboard need not download every listing to add them up. Own
     figures only.
   * JSON is gzipped for clients that ask; images under /media/ are not.
+  * The direct-chat histories (listing and store threads) carry an ETag
+    too: the chat's fallback poll, every few seconds while its socket is
+    down, gets an empty 304 for a conversation that hasn't moved. An edit or
+    an unsend changes an old row, and changes the tag.
+  * GET /auth/user/{id}/presence is the chat header's 30-second refresh:
+    online or not and when last seen, without the whole profile (and the
+    inline photo some accounts still have).
 """
 import uuid
 from datetime import datetime, timedelta
@@ -22,6 +29,7 @@ from httpx import ASGITransport, AsyncClient
 from api.database import (
     AsyncSessionLocal, Listing, ListingStatus, NegotiationMessage, User, init_db, reset_engine,
 )
+from api.models.store import Store
 from api.routers.negotiate import inbox_etag
 from api.security import create_access_token
 from main import app
@@ -203,3 +211,109 @@ def test_images_are_not_gzipped():
     from api.core.compression import _UNCOMPRESSED_PREFIXES
     assert any("/media/i/img/x/thumb.webp".startswith(p) for p in _UNCOMPRESSED_PREFIXES)
     assert any("/admin/alerts/stream".startswith(p) for p in _UNCOMPRESSED_PREFIXES)
+
+
+# ── Chat history ETag ────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_an_unchanged_chat_history_is_a_304(client):
+    listing_id, seller, buyer = await _thread()
+    url = f"/negotiate/{listing_id}/history"
+    first = await client.get(url, headers=_auth(buyer))
+    assert first.status_code == 200
+    etag = first.headers["etag"]
+    assert etag.startswith('W/"')
+    assert [m["content"] for m in first.json()] == ["hi"]
+
+    again = await client.get(url, headers={**_auth(buyer), "If-None-Match": etag})
+    assert again.status_code == 304
+    assert again.content == b""
+    assert again.headers["etag"] == etag
+
+    await _message(listing_id, seller, buyer, "seller", "yes, still here")
+    changed = await client.get(url, headers={**_auth(buyer), "If-None-Match": etag})
+    assert changed.status_code == 200
+    assert changed.headers["etag"] != etag
+    assert [m["content"] for m in changed.json()] == ["hi", "yes, still here"]
+
+
+@pytest.mark.asyncio
+async def test_an_edited_message_changes_the_history_tag(client):
+    listing_id, seller, buyer = await _thread()
+    url = f"/negotiate/{listing_id}/history"
+    first = await client.get(url, params={"buyer_id": buyer}, headers=_auth(seller))
+    etag = first.headers["etag"]
+    async with AsyncSessionLocal() as db:
+        row = (await db.execute(
+            NegotiationMessage.__table__.select().where(
+                NegotiationMessage.listing_id == listing_id))).first()
+        await db.execute(
+            NegotiationMessage.__table__.update()
+            .where(NegotiationMessage.id == row.id)
+            .values(content="hi, is it available?", edited_at=datetime.utcnow()))
+        await db.commit()
+    r = await client.get(url, params={"buyer_id": buyer},
+                         headers={**_auth(seller), "If-None-Match": etag})
+    assert r.status_code == 200
+    assert r.json()[0]["content"] == "hi, is it available?"
+
+
+@pytest.mark.asyncio
+async def test_without_if_none_match_the_history_is_sent_as_before(client):
+    listing_id, _, buyer = await _thread()
+    r = await client.get(f"/negotiate/{listing_id}/history", headers=_auth(buyer))
+    assert r.status_code == 200
+    assert r.json()[0]["role"] == "buyer"
+    stale = await client.get(f"/negotiate/{listing_id}/history",
+                             headers={**_auth(buyer), "If-None-Match": 'W/"old"'})
+    assert stale.status_code == 200 and stale.json() == r.json()
+
+
+@pytest.mark.asyncio
+async def test_a_store_thread_history_is_conditional_too(client):
+    owner = await _user("Shop Owner")
+    buyer = await _user("Shop Buyer")
+    async with AsyncSessionLocal() as db:
+        store = Store(owner_id=owner, name="Clanix", slug=f"clanix-{uuid.uuid4().hex[:8]}")
+        db.add(store)
+        await db.flush()
+        db.add(NegotiationMessage(store_id=store.id, listing_id=None, sender_id=buyer,
+                                  role="buyer", content="open today?", buyer_id=buyer,
+                                  via_ai=False))
+        await db.commit()
+        store_id = store.id
+    url = f"/negotiate/store/{store_id}/history"
+    first = await client.get(url, headers=_auth(buyer))
+    assert first.status_code == 200
+    assert [m["content"] for m in first.json()] == ["open today?"]
+    again = await client.get(url, headers={**_auth(buyer), "If-None-Match": first.headers["etag"]})
+    assert again.status_code == 304
+
+
+# ── Presence ─────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_presence_is_the_profile_s_presence_fields_alone(client):
+    viewer = await _user("Viewer")
+    other = await _user("Other")
+    async with AsyncSessionLocal() as db:
+        await db.execute(User.__table__.update().where(User.id == other).values(
+            last_seen=datetime.utcnow(), profile_photo="A" * 5000))
+        await db.commit()
+    r = await client.get(f"/auth/user/{other}/presence", headers=_auth(viewer))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert set(body) == {"id", "last_seen", "is_online", "last_seen_label"}
+    assert body["id"] == other
+    full = (await client.get(f"/auth/user/{other}", headers=_auth(viewer))).json()
+    for key in ("last_seen", "is_online", "last_seen_label"):
+        assert body[key] == full[key]
+    assert body["is_online"] is True
+
+
+@pytest.mark.asyncio
+async def test_presence_needs_a_signed_in_caller_and_a_real_user(client):
+    viewer = await _user("Viewer")
+    assert (await client.get(f"/auth/user/{viewer}/presence")).status_code in (401, 403)
+    missing = await client.get("/auth/user/nobody-here/presence", headers=_auth(viewer))
+    assert missing.status_code == 404
