@@ -1217,6 +1217,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `presentation/store_list_screen.dart` — BROKA — Store discovery (spec §12/§21, Phase 4) A single-column directory: each row shows the shop's picture on the left with its facts bes…
 - `presentation/store_map_screen.dart` — A store on a map: the buyer's point and the shop's approximate point (±1 km, the point the API hands out - never an exact address), on Open…
 - `presentation/store_media_image.dart` — BROKA — Store media image (Phase 6 hardening)
+- `presentation/storefront_launcher.dart`
 - `presentation/widgets/broka_default_logo.dart` — BROKA's own logo, standing in wherever a store has not uploaded one My Store's header and the directory card.
 - `presentation/widgets/distance_filter.dart` — How far still counts as "near you", shared by every store list.
 - `presentation/widgets/menu_store_section.dart` — The Menu's "Online store" section.
@@ -1474,6 +1475,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `store_redesign_test.dart` — Premium storefront redesign: the responsive catalogue, the calmer hero, and the upgraded product card.
 - `store_setup_test.dart` — Online Stores phase 2 on the phone: setting a store up, sharing it, and the owner's dashboard.
 - `storefront_engage_test.dart` — The storefront's second act: talking to the shop and following it, browsing by type of item, and the catalogue card's save heart and stock…
+- `storefront_navigation_test.dart`
 - `storefront_test.dart` — Online Stores phase 3 in the app: the storefront screen, and store links opening it.
 - `stt_fallback_test.dart` — Covers the realtime STT layer below ZenoVoiceController: how each provider fails, how those failures are told apart, and what RealtimeSttMa…
 - `stt_refused_connection_test.dart` — Voice input that said "Connecting…" and never anything else (2026-09-26).
