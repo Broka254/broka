@@ -10,7 +10,6 @@
 //
 // These run against a real local server: no widget binding here, whose
 // HttpOverrides would answer every handshake itself.
-import 'dart:async';
 import 'dart:io';
 
 import 'package:broka/core/network/auction_ws_client.dart';

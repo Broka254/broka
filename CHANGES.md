@@ -1,3 +1,77 @@
+# The app is lighter on mobile data (2026-11-07)
+
+Asked for: make the app as data efficient as possible for people on
+mobile data. What it no longer downloads or sends:
+
+- **Background sweep** (`global_poller_service.dart`). It used to fetch
+  every 7 seconds no matter what. It now backs off after failures (7, 14,
+  28, 56 s). Once push is connected and nothing is changing, it idles to
+  every 14-21 s (35 s with Data saver). A foreground push nudges it back
+  to full speed. Without push it never idles, because the sweep is how a
+  call rings.
+- **Direct chat** (`negotiation_screen.dart`):
+  - The fallback poll (socket down) slows from every 4 s to every 32 s
+    while the thread stays quiet.
+  - The fallback poll is conditional: `/negotiate/{id}/history` and
+    `/negotiate/store/{id}/history` now carry an ETag, and an unchanged
+    thread is an empty 304. Edits and unsends change the tag.
+  - The 30-second header refresh asks the new `GET
+    /auth/user/{id}/presence` instead of the whole profile, which could
+    include an inline base64 photo.
+  - Nothing polls while the app is in the background.
+  - The chat's own heartbeat, which doubled the app-wide one, is gone. So
+    is the Zeno room's. The Zeno room's unread check and the auction's
+    leaderboard refresh pause in the background.
+- **Inbox**: no retry timer of its own while the poller runs. Otherwise it
+  backs off (15, 30, 60 s).
+- **Pictures**:
+  - BROKA's own disk store keeps 1,500 images for 60 days
+    (`image_cache_managers.dart`). The default store kept 200, so Home
+    thumbnails were downloaded again within one session.
+  - The product page shows the 960 px size, not 1600 px.
+  - Trader covers and chat photos go through the disk cache instead of
+    `NetworkImage`.
+  - Inline base64 pictures are decoded once, not on every rebuild.
+- **Map tiles** are kept on disk (`cached_tile_provider.dart`), as
+  OpenStreetMap's tile policy asks.
+- **Uploads**:
+  - JPEGs over 400 KB are re-encoded to at most 1600 px, quality 82, off
+    the UI thread (`upload_shrink.dart`). That is the most the server
+    keeps.
+  - Gallery picks are capped at 1600 px instead of 2048.
+  - Voice notes are mono AAC at 32 kbit/s, 22.05 kHz, instead of the
+    record package's 128 kbit/s stereo.
+- **Data saver** (Settings > Mobile data, kept on the phone): the product
+  page reuses the card's thumbnail, which is already downloaded, and the
+  sweep idles longer.
+
+Fixed along the way:
+
+- The deal and auction sockets reset their retry count at the start of
+  every attempt. Their backoff never grew, so an unreachable server was
+  retried every second. The deal socket's 10-retry limit was never hit.
+- `ApiClient` wrapped the zone's `InstrumentedClient` in another one, so
+  every request was counted twice. `ApiClient.delete` had no timeout.
+- Zeno's voice cache evicted the oldest-fetched part instead of the least
+  recently used one.
+- `product_screen_test`'s Visit Store test still expected the in-app
+  route after cc29983 moved the button to the store's website (main's CI
+  was red on it).
+
+Tests: `backend/tests/test_data_saving.py` (history ETag for listing and
+store threads, edits, presence fields and auth), Flutter
+`mobile_data_test.dart`, `ws_backoff_test.dart` (against a local server),
+and updated `product_screen_test.dart`, `photo_capture_test.dart` and
+`negotiation_screens_test.dart` (voice-note encoding). Full backend suite
+on SQLite and PostgreSQL, and all Flutter tests, pass in CI.
+
+Not done, worth doing next:
+
+- Live speech-to-text still streams raw 16 kHz PCM (about 256 kbit/s).
+  Deepgram accepts Opus, but the record plugin streams PCM only.
+- Zeno's voice clips are cached in memory, not on disk.
+- Map tiles still come from OpenStreetMap's public servers.
+
 # Store conversations live in the Inbox (2026-11-02)
 
 "Message Store" borrowed the store's first listing as its chat thread, so
