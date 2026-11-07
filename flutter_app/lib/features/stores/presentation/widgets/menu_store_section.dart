@@ -16,9 +16,13 @@
 //    on to the store - it never opens the store setup for an account that
 //    isn't a seller yet.
 //
-// Loads itself, so the Menu can refresh it by giving it a new key.
+// Loads itself, so the Menu can refresh it by giving it a new key (with
+// forceRefresh, for a pull). Otherwise it shows the store saved on the
+// phone at once and asks the server only when that copy is out of date -
+// past CachePolicies.storeSummary, or changed in the app (DataChanges).
 import 'package:flutter/material.dart';
 
+import '../../../../core/cache/data_changes.dart';
 import '../../../../core/utils/result.dart';
 import '../../../../main.dart' show BrokaColors;
 import '../../../launch_offers/data/launch_offers_repository.dart';
@@ -28,6 +32,7 @@ import '../../../../screens/start_selling_screen.dart';
 import '../../../../widgets/broka_image.dart';
 import '../../../../widgets/gradient_button.dart';
 import '../../../../widgets/menu_tiles.dart';
+import '../../../../widgets/stale_data_banner.dart';
 import '../../data/repositories/stores_repository.dart';
 import '../../data/store_share.dart';
 import '../../../categories/domain/category_visual.dart';
@@ -36,7 +41,16 @@ import '../setup/store_setup_controller.dart';
 import '../store_entry.dart';
 
 class MenuStoreSection extends StatefulWidget {
-  const MenuStoreSection({super.key, this.repository, this.share, this.businessReady});
+  const MenuStoreSection({
+    super.key,
+    this.repository,
+    this.share,
+    this.businessReady,
+    this.forceRefresh = false,
+  });
+
+  /// Ask the server even if the saved copy is current - a pull-to-refresh.
+  final bool forceRefresh;
 
   final StoresRepository? repository;
   final StoreShare? share;
@@ -60,12 +74,24 @@ class _MenuStoreSectionState extends State<MenuStoreSection> {
   bool _hasDraft = false;
   LaunchOffer? _storeOffer;
 
+  /// Something (saved or fetched) is on screen: a failed refresh keeps it
+  /// and says so, instead of replacing it with an error.
+  bool _shownAny = false;
+  bool _stale = false;
+  DateTime? _fetchedAt;
+  int _seq = 0;
+
   @override
   void initState() {
     super.initState();
-    _load();
+    _load(force: widget.forceRefresh);
     _loadOffer();
   }
+
+  (int, int) _revisions() => (
+        DataChanges.instance.revision(DataDomain.store).value,
+        DataChanges.instance.revision(DataDomain.listings).value,
+      );
 
   Future<void> _loadOffer() async {
     final result = await launchOffersRepository.offers();
@@ -76,34 +102,67 @@ class _MenuStoreSectionState extends State<MenuStoreSection> {
     );
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    final result = await _repo.getMyStore();
+  Future<void> _load({bool force = false}) async {
+    final seq = ++_seq;
+    final saved = force ? null : await _repo.savedMyStore();
     final hasDraft = await StoreSetupController.hasDraft();
-    if (!mounted) return;
-    switch (result) {
-      case Failure(:final message):
+    if (!mounted || seq != _seq) return;
+    if (saved != null) {
+      setState(() {
+        _store = saved.store;
+        _fetchedAt = saved.fetchedAt;
+        _hasDraft = hasDraft;
+        _loading = false;
+        _error = null;
+        _shownAny = true;
+      });
+    }
+    if (saved == null || !saved.fresh) {
+      if (!_shownAny) {
         setState(() {
-          _error = message;
-          _loading = false;
+          _loading = true;
+          _error = null;
         });
-        return;
-      case Success(:final data):
-        setState(() {
-          _store = data;
-          _hasDraft = hasDraft;
-          _loading = false;
-        });
+      }
+      final result = await _repo.getMyStore();
+      if (!mounted || seq != _seq) return;
+      switch (result) {
+        case Failure(:final message):
+          setState(() {
+            _loading = false;
+            if (_shownAny) {
+              _stale = true;
+            } else {
+              _error = message;
+            }
+          });
+          return;
+        case Success(:final data):
+          setState(() {
+            _store = data;
+            _fetchedAt = DateTime.now();
+            _hasDraft = hasDraft;
+            _loading = false;
+            _error = null;
+            _stale = false;
+            _shownAny = true;
+          });
+      }
     }
     final store = _store;
     if (store == null) return;
     // After the card is up: the numbers are a detail, not a reason to keep
     // the whole section on a spinner.
+    if (!force) {
+      final savedStats = await _repo.savedStats(store.id);
+      if (!mounted || seq != _seq) return;
+      if (savedStats != null) {
+        setState(() => _stats = savedStats.stats);
+        if (savedStats.fresh) return;
+      }
+    }
     final stats = await _repo.getStats(store.id, days: 7);
-    if (!mounted) return;
+    if (!mounted || seq != _seq) return;
     if (stats case Success(:final data)) setState(() => _stats = data);
   }
 
@@ -118,8 +177,11 @@ class _MenuStoreSectionState extends State<MenuStoreSection> {
   }
 
   Future<void> _manage() async {
+    final before = _revisions();
     await Navigator.pushNamed(context, '/store-manage');
-    if (mounted) _load();
+    // Reloaded only when something changed in there; the saved copy was
+    // marked out of date by the change itself.
+    if (mounted && _revisions() != before) _load();
   }
 
   void _preview(Store store) =>
@@ -158,7 +220,7 @@ class _MenuStoreSectionState extends State<MenuStoreSection> {
         storeOffer: _storeOffer,
       );
     }
-    return _StoreCard(
+    final card = _StoreCard(
       store: store,
       stats: _stats,
       onManage: _manage,
@@ -166,6 +228,16 @@ class _MenuStoreSectionState extends State<MenuStoreSection> {
       onShare: () => _share(store, ShareDestination.more),
       onCopyLink: () => _share(store, ShareDestination.copy),
     );
+    if (!_stale) return card;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      StaleDataBanner(
+        what: 'store',
+        fetchedAt: _fetchedAt,
+        margin: const EdgeInsets.only(bottom: 8),
+        onRetry: () => _load(force: true),
+      ),
+      card,
+    ]);
   }
 }
 

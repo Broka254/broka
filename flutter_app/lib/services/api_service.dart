@@ -13,6 +13,7 @@ import '../models/models.dart';
 // model because it is part of that contract, not a transport concern.
 import '../features/auctions/domain/models/auction.dart' show BidRejection;
 import '../core/network/api_client.dart';
+import '../core/cache/screen_cache.dart';
 import '../core/legal/legal_documents.dart';
 import 'last_screen_tracker.dart';
 import 'sell_draft_store.dart';
@@ -124,6 +125,14 @@ class ApiService {
   }
 
   static Future<void> clearSession() async {
+    // The signed-out account's cached screens (Menu, dashboard, store,
+    // Home's feed) go with it: the next person to sign in on this phone
+    // must never see them, not even for the instant before a refresh.
+    final signedOutId = currentUserId;
+    _inboxEtag = null;
+    _inboxEtagUid = null;
+    _inboxLastBody = null;
+    await ScreenCache.instance.clearAccount(signedOutId);
     _token                = null;
     currentUserId         = null;
     currentUserName       = null;
@@ -722,12 +731,37 @@ class ApiService {
 
   // ── Inbox ──────────────────────────────────────────────────────────────────
 
-  static Future<List<Map<String, dynamic>>> getInbox() async {
+  // The last inbox the server sent in full, with its ETag, for the poller's
+  // conditional requests. In memory only and for one account: a 304 is
+  // answered from this, never from another account's copy.
+  static String? _inboxEtag;
+  static String? _inboxEtagUid;
+  static List<Map<String, dynamic>>? _inboxLastBody;
+
+  /// True when the last getInbox() was answered 304 Not Modified - the
+  /// list it returned is the previous one, unchanged.
+  static bool lastInboxNotModified = false;
+
+  /// [conditional]: send the last ETag, so an unchanged inbox comes back as
+  /// an empty 304 instead of the whole list. GlobalPollerService asks every
+  /// 7 seconds and most of those answers are identical; the Inbox screen
+  /// asks unconditionally, since it shows "5m ago" texts the ETag ignores.
+  /// A server that sends no ETag (older backends) is asked in full as before.
+  static Future<List<Map<String, dynamic>>> getInbox({bool conditional = false}) async {
     final uid = currentUserId;
     if (uid == null) return [];
+    lastInboxNotModified = false;
+    Map<String, String> inboxHeaders() {
+      final etag = _inboxEtag;
+      return {
+        ..._headers,
+        if (conditional && etag != null && _inboxEtagUid == uid && _inboxLastBody != null)
+          'If-None-Match': etag,
+      };
+    }
     var response = await http.get(
       Uri.parse('$baseUrl/negotiate/inbox/$uid'),
-      headers: _headers,
+      headers: inboxHeaders(),
     ).timeout(const Duration(seconds: 20));
     // FIX (2026-08-13): same expired-token gap as checkIncomingCall above.
     // GlobalPollerService's every-~7s poll drives BOTH new-message and
@@ -736,12 +770,28 @@ class ApiService {
     if (response.statusCode == 401 && await _tryRelogin()) {
       response = await http.get(
         Uri.parse('$baseUrl/negotiate/inbox/$uid'),
-        headers: _headers,
+        headers: inboxHeaders(),
       ).timeout(const Duration(seconds: 20));
+    }
+    final last = _inboxLastBody;
+    if (response.statusCode == 304 && last != null && _inboxEtagUid == uid) {
+      lastInboxNotModified = true;
+      return [for (final t in last) Map<String, dynamic>.from(t)];
     }
     if (response.statusCode == 200) {
       final List data = jsonDecode(response.body);
-      return data.cast<Map<String, dynamic>>();
+      final threads = data.cast<Map<String, dynamic>>();
+      final etag = response.headers['etag'];
+      if (etag != null && etag.isNotEmpty) {
+        _inboxEtag = etag;
+        _inboxEtagUid = uid;
+        _inboxLastBody = [for (final t in threads) Map<String, dynamic>.from(t)];
+      } else {
+        _inboxEtag = null;
+        _inboxEtagUid = null;
+        _inboxLastBody = null;
+      }
+      return threads;
     }
     // Any non-200 (transient 5xx from a cold-starting server, an expired
     // token, a proxy error page, etc.) must THROW rather than return [] -
@@ -814,6 +864,49 @@ class ApiService {
         .timeout(const Duration(seconds: 30));
     final List data = jsonDecode(response.body);
     return data.map((e) => Listing.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  /// A seller's listings as the server sent them - for a screen that keeps
+  /// a copy on the phone (the Seller Dashboard). Throws on anything but 200,
+  /// so a failure is never saved as an empty catalogue.
+  static Future<List<Map<String, dynamic>>> getSellerListingMaps(
+    String sellerId, {
+    int limit = 20,
+    int offset = 0,
+  }) async {
+    final uri = Uri.parse('$baseUrl/listings/').replace(queryParameters: {
+      'seller_id': sellerId,
+      'limit': limit.toString(),
+      'offset': offset.toString(),
+    });
+    final response = await http.get(uri, headers: _headers)
+        .timeout(const Duration(seconds: 30));
+    if (response.statusCode != 200) {
+      throw Exception('Failed to load listings (${response.statusCode})');
+    }
+    final List data = jsonDecode(response.body);
+    return data.cast<Map<String, dynamic>>();
+  }
+
+  /// The Seller Dashboard's totals - products, active, featured, views -
+  /// counted by the server over the same listings GET /listings/?seller_id
+  /// returns, so the dashboard need not download every listing to add them
+  /// up. Null when the server has no such endpoint (older backends) or
+  /// answers something else: the caller falls back to counting what it
+  /// loaded.
+  static Future<Map<String, dynamic>?> getSellerSummary(String sellerId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/listings/seller/$sellerId/summary'),
+        headers: _headers,
+      ).timeout(const Duration(seconds: 15));
+      if (response.statusCode != 200) return null;
+      final data = jsonDecode(response.body);
+      if (data is Map<String, dynamic> && data['total_listings'] is num) return data;
+      return null;
+    } catch (_) {
+      return null;
+    }
   }
 
   static Future<Listing> getListing(String listingId) async {

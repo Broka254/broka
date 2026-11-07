@@ -4,7 +4,9 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+import '../../../../core/cache/screen_cache.dart';
 import '../../../../core/network/api_client.dart';
+import '../../../../services/api_service.dart';
 import '../../../../core/utils/result.dart';
 import '../../../listings/domain/models/listing.dart';
 import '../../domain/models/store.dart';
@@ -105,10 +107,44 @@ class StoresRepository {
 
   /// Success(null) - not a Failure - when the signed-in user has no store
   /// yet, which is the normal state for most accounts.
+  CacheKey _myStoreKey() => CacheKey.forUser(CacheFeature.storeSummary, ApiService.currentUserId);
+  CacheKey _statsKey(String storeId, int days) => CacheKey.forUser(
+      CacheFeature.storeStats, ApiService.currentUserId, {'store': storeId, 'days': days});
+
+  /// Fetches the caller's store (null: none yet) and saves it on the phone
+  /// for [savedMyStore].
   Future<Result<Store?>> getMyStore() => _guard(() async {
-        final data = await _client.get('/stores/mine');
+        final data = await ScreenCache.instance.fetch(_myStoreKey(), () => _client.get('/stores/mine'),
+            persist: (d) => d is Map<String, dynamic> ? stripLargeInlineMedia(d) : d);
         return data == null ? null : Store.fromJson(data as Map<String, dynamic>);
       });
+
+  /// The caller's store as last fetched on this phone - `store` null when
+  /// they had none - without asking the server. Null: nothing saved.
+  Future<({Store? store, DateTime fetchedAt, bool fresh})?> savedMyStore() async {
+    final e = await ScreenCache.instance.read(_myStoreKey(), CachePolicies.storeSummary);
+    if (e == null) return null;
+    final data = e.data;
+    try {
+      final store = data is Map ? Store.fromJson(Map<String, dynamic>.from(data)) : null;
+      if (data != null && store == null) return null;
+      return (store: store, fetchedAt: e.fetchedAt, fresh: e.isFresh);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// The saved week of visits and shares for [storeId].
+  Future<({StoreStats stats, bool fresh})?> savedStats(String storeId, {int days = 7}) async {
+    final e = await ScreenCache.instance.read(_statsKey(storeId, days), CachePolicies.storeStats);
+    final data = e?.data;
+    if (e == null || data is! Map) return null;
+    try {
+      return (stats: StoreStats.fromJson(Map<String, dynamic>.from(data)), fresh: e.isFresh);
+    } catch (_) {
+      return null;
+    }
+  }
 
   Future<Result<Store>> updateStore(String storeId, Map<String, dynamic> payload) =>
       _guard(() async => Store.fromJson(await _client.patch('/stores/$storeId', payload)));
@@ -270,8 +306,10 @@ class StoresRepository {
       StoreOwnerProfile.fromJson(await _client.get('/auth/me') as Map<String, dynamic>));
 
   Future<Result<StoreStats>> getStats(String storeId, {int days = 7}) => _guard(() async =>
-      StoreStats.fromJson(await _client.get('/stores/$storeId/stats',
-          queryParams: {'days': days.toString()}) as Map<String, dynamic>));
+      StoreStats.fromJson(await ScreenCache.instance.fetch(
+          _statsKey(storeId, days),
+          () => _client.get('/stores/$storeId/stats', queryParams: {'days': days.toString()}))
+          as Map<String, dynamic>));
 
   /// The owner's billing screen: their rate card and plan state, and - with
   /// [listings] - that size's priced periods. Owner only.

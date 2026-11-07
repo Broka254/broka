@@ -52,6 +52,13 @@ class ListingsRepository {
     Map<String, dynamic>? attributes,
     int limit = 20,
     int offset = 0,
+    // The page as the server sent it, for a caller that keeps a copy on the
+    // phone (Home's ListingFeedCache) - BrokaListing has no toJson.
+    void Function(List<Map<String, dynamic>> raw)? onRaw,
+    // Cards without the legacy inline images ProductCard never draws (GET
+    // /listings/?lean=true). Only for callers that render ProductCard; a
+    // backend without the parameter ignores it.
+    bool lean = false,
   }) async {
     try {
       final params = _buildParams(
@@ -62,8 +69,11 @@ class ListingsRepository {
         search: search, location: location, sort: sort, attributes: attributes,
         limit: limit, offset: offset, withTotal: false,
       );
+      if (lean) params['lean'] = 'true';
       final data = await _client.get('/listings/', queryParams: params) as List;
-      return Success(data.map((e) => BrokaListing.fromJson(e)).toList());
+      final listings = data.map((e) => BrokaListing.fromJson(e)).toList();
+      onRaw?.call(data.cast<Map<String, dynamic>>());
+      return Success(listings);
     } on ApiException catch (e) {
       return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {

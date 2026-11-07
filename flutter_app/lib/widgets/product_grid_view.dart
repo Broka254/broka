@@ -29,6 +29,8 @@
 //     this state through [ProductGridController].
 //   - empty/skeleton states: returned as slivers rather than boxes, since a
 //     CustomScrollView can only accept slivers.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'product_card.dart';
 
@@ -52,7 +54,63 @@ class ProductGridController {
 
   /// Refetches from page 0. Completes when the first page has landed, so it
   /// can be returned straight from `RefreshIndicator.onRefresh`.
+  ///
+  /// What is on screen stays there until the new page arrives, and stays
+  /// if it fails (the grid says so with a SnackBar, or [ProductGridView.
+  /// onRefreshFailed]).
   Future<void> refresh() async => _state?.reload() ?? Future<void>.value();
+
+  /// A background refresh nobody asked for (the saved copy got old, or a
+  /// listing changed): fetches page 0 and, when the user has scrolled past
+  /// it, merges it into what is shown instead of cutting the feed back to
+  /// one page under their thumb. Silent on failure. True when it landed.
+  Future<bool> softRefresh() async => await _state?.softReload() ?? false;
+
+  /// Takes items off the grid without a refetch - a listing just deleted.
+  void removeWhere(bool Function(dynamic item) test) => _state?.removeItems(test);
+
+  /// When page 0 was last fetched (or the saved copy was), or null before
+  /// anything has loaded.
+  DateTime? get firstPageFetchedAt => _state?._firstPageAt;
+
+  /// True when what is shown came from the saved copy and no fetch has
+  /// confirmed it since.
+  bool get showingSavedCopy => _state?._fromCache ?? false;
+}
+
+/// The grid's saved state, as [ProductGridCache] hands it back.
+class ProductGridSnapshot {
+  const ProductGridSnapshot({
+    required this.items,
+    required this.page,
+    required this.hasMore,
+    required this.fetchedAt,
+    required this.fresh,
+  });
+
+  final List<dynamic> items;
+
+  /// Pages these items make up - the next fetch asks for this page.
+  final int page;
+  final bool hasMore;
+
+  /// When page 0 of this copy was fetched.
+  final DateTime fetchedAt;
+
+  /// Still within its freshness time: shown without asking the server.
+  final bool fresh;
+}
+
+/// Somewhere to keep what the grid showed, so the next time it is built -
+/// after the app was closed, or with a filter used before - it shows that
+/// at once, offline included, and refreshes in the background only when
+/// the copy is old. The caller owns the key (filters, account) and the
+/// encoding.
+abstract class ProductGridCache {
+  Future<ProductGridSnapshot?> read();
+
+  /// Saves what is on screen. [fetchedAt] is when page 0 was fetched.
+  Future<void> write(List<dynamic> items, {required int page, required bool hasMore, required DateTime fetchedAt});
 }
 
 class ProductGridView extends StatefulWidget {
@@ -94,6 +152,22 @@ class ProductGridView extends StatefulWidget {
   /// products a taller photo.
   final double? itemImageShare;
 
+  /// See [ProductGridCache]. Null (every caller but Home): nothing is kept.
+  final ProductGridCache? cache;
+
+  /// An item's identity. With it, a background refresh merges its page into
+  /// what is shown, a later page never repeats an item already on screen,
+  /// and [ProductGridController.removeWhere] has something to match.
+  final Object? Function(dynamic item)? itemId;
+
+  /// Each background refresh's outcome ([ProductGridController.softRefresh],
+  /// and the one a stale saved copy starts by itself): true when it landed.
+  final ValueChanged<bool>? onSoftRefreshResult;
+
+  /// A pull-to-refresh failed while items stayed on screen. Null: the grid
+  /// shows a SnackBar saying the listings shown are the ones it had.
+  final void Function(Object error)? onRefreshFailed;
+
   /// Opt into the responsive store-catalogue layout. False (the default)
   /// keeps the exact historical behaviour: a fixed two-column grid on every
   /// screen, so every existing marketplace caller is unaffected.
@@ -128,6 +202,10 @@ class ProductGridView extends StatefulWidget {
     this.adaptToItemCount = false,
     this.singleItemMaxWidth = 560,
     this.maxCrossAxisCount = 4,
+    this.cache,
+    this.itemId,
+    this.onRefreshFailed,
+    this.onSoftRefreshResult,
   });
 
   @override
@@ -151,6 +229,17 @@ class _ProductGridViewState extends State<ProductGridView> {
   // exist before they can survive it.
   Object? _error;
 
+  /// Reading the saved copy, before anything is on screen: shown as the
+  /// skeleton, like a first load.
+  bool _restoring = false;
+
+  /// What is shown came from [ProductGridView.cache] and no fetch has
+  /// confirmed it yet.
+  bool _fromCache = false;
+
+  /// When page 0 of what is shown was fetched.
+  DateTime? _firstPageAt;
+
   @override
   void initState() {
     super.initState();
@@ -158,7 +247,42 @@ class _ProductGridViewState extends State<ProductGridView> {
     if (!widget.sliver) {
       _scrollController = ScrollController()..addListener(_onScroll);
     }
-    _loadPage(reset: true);
+    if (widget.cache != null) {
+      _restoring = true;
+      _pending = _restoreThenLoad();
+    } else {
+      _loadPage(reset: true);
+    }
+  }
+
+  /// Shows the saved copy, if there is one, and fetches only when it is
+  /// old. With no copy (or an unreadable one) this is a plain first load.
+  Future<void> _restoreThenLoad() async {
+    ProductGridSnapshot? snap;
+    try {
+      snap = await widget.cache!.read();
+    } catch (_) {
+      snap = null;
+    }
+    if (!mounted) return;
+    _pending = null;
+    final saved = snap;
+    if (saved == null || saved.items.isEmpty || _items.isNotEmpty) {
+      setState(() => _restoring = false);
+      await _loadPage(reset: true);
+      return;
+    }
+    setState(() {
+      _restoring = false;
+      _items
+        ..clear()
+        ..addAll(saved.items);
+      _page = saved.page;
+      _hasMore = saved.hasMore;
+      _firstPageAt = saved.fetchedAt;
+      _fromCache = true;
+    });
+    if (!saved.fresh) await softReload();
   }
 
   @override
@@ -192,7 +316,7 @@ class _ProductGridViewState extends State<ProductGridView> {
   /// inside build() is illegal.
   void _maybeLoadMore(int index) {
     if (!widget.sliver) return; // box mode keeps its own scroll listener
-    if (_isLoading || !_hasMore || _error != null) return;
+    if (_isLoading || _restoring || !_hasMore || _error != null) return;
     if (index < _items.length - 4) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _loadPage();
@@ -209,48 +333,145 @@ class _ProductGridViewState extends State<ProductGridView> {
     final pending = _pending;
     if (pending != null) await pending;
     if (!mounted) return;
-    return _loadPage(reset: true);
+    final hadItems = _items.isNotEmpty;
+    final ok = await _loadPage(reset: true);
+    if (ok || !hadItems || !mounted) return;
+    final error = _lastRefreshError ?? 'offline';
+    final report = widget.onRefreshFailed;
+    if (report != null) {
+      report(error);
+    } else {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(const SnackBar(
+        content: Text("Couldn't refresh. Showing the listings you already had."),
+      ));
+    }
   }
+
+  /// See [ProductGridController.softRefresh].
+  Future<bool> softReload() async {
+    // Page 0 already on its way (the refresh a stale saved copy starts, or
+    // another caller's): that answer is this one's, not a second request.
+    final running = _pendingLoad;
+    if (running != null && _pendingIsReset) return running;
+    final pending = _pending;
+    if (pending != null) await pending;
+    if (!mounted) return false;
+    final ok = await _loadPage(reset: true, merge: true);
+    if (mounted) widget.onSoftRefreshResult?.call(ok);
+    return ok;
+  }
+
+  /// See [ProductGridController.removeWhere].
+  void removeItems(bool Function(dynamic item) test) {
+    if (!mounted) return;
+    final before = _items.length;
+    setState(() => _items.removeWhere(test));
+    if (_items.length != before) _persist();
+  }
+
+  Object? _lastRefreshError;
+
+  void _persist() {
+    final cache = widget.cache;
+    final at = _firstPageAt;
+    if (cache == null || at == null) return;
+    unawaited(cache
+        .write(List<dynamic>.of(_items), page: _page, hasMore: _hasMore, fetchedAt: at)
+        .catchError((_) {}));
+  }
+
+  Object? _idOf(dynamic item) => widget.itemId?.call(item);
 
   /// The fetch currently in flight, so [reload] can await it. Cleared in
   /// _runLoad's finally, including on the !mounted path.
   Future<void>? _pending;
 
-  Future<void> _loadPage({bool reset = false}) {
-    if (_isLoading) return _pending ?? Future<void>.value();
+  /// True when the page landed.
+  Future<bool> _loadPage({bool reset = false, bool merge = false}) {
+    // Already loading: that load's answer is this one's.
+    if (_isLoading) return _pendingLoad ?? Future<bool>.value(false);
     // _runLoad marks _isLoading before its first await, so by the time this
     // returns the two are consistent.
-    return _pending = _runLoad(reset: reset);
+    final run = _runLoad(reset: reset, merge: merge);
+    _pending = run;
+    _pendingLoad = run;
+    _pendingIsReset = reset;
+    return run;
   }
 
-  Future<void> _runLoad({bool reset = false}) async {
+  bool _pendingIsReset = false;
+
+  Future<bool>? _pendingLoad;
+
+  // A reset no longer empties the grid before fetching. It used to clear
+  // the list first, so every refresh - and, on Home, every return from the
+  // Inbox or the Menu, which remounted this grid - flashed the skeleton, and
+  // on a weak connection left an empty feed where the listings had been.
+  // Now the items stay until page 0 arrives and replace them, and stay if
+  // it fails.
+  Future<bool> _runLoad({bool reset = false, bool merge = false}) async {
     setState(() {
       _isLoading = true;
       _error = null;
-      if (reset) {
-        _page = 0;
-        _items.clear();
-        _hasMore = true;
-      }
     });
+    final page = reset ? 0 : _page;
     try {
-      final results = await widget.fetchPage(_page);
-      if (!mounted) return;
+      final results = await widget.fetchPage(page);
+      if (!mounted) return false;
       setState(() {
-        _items.addAll(results);
-        _hasMore = results.isNotEmpty;
-        _page += 1;
+        if (reset) {
+          _firstPageAt = DateTime.now();
+          _fromCache = false;
+          final deep = merge && widget.itemId != null && _page > 1 && _items.isNotEmpty;
+          if (deep) {
+            // Scrolled past page 0: put the fresh page 0 on top and keep the
+            // rest, minus anything page 0 now holds. Pagination carries on
+            // from where it was.
+            final fresh = {for (final r in results) _idOf(r)};
+            final rest = _items.where((i) => !fresh.contains(_idOf(i))).toList();
+            _items
+              ..clear()
+              ..addAll(results)
+              ..addAll(rest);
+          } else {
+            _items
+              ..clear()
+              ..addAll(results);
+            _page = 1;
+            _hasMore = results.isNotEmpty;
+          }
+        } else {
+          // Never the same item twice: a listing posted since page 0 was
+          // fetched pushes everything down one, so page N repeats the last
+          // item of page N-1.
+          if (widget.itemId != null) {
+            final shown = {for (final i in _items) _idOf(i)};
+            _items.addAll(results.where((r) => !shown.contains(_idOf(r))));
+          } else {
+            _items.addAll(results);
+          }
+          _hasMore = results.isNotEmpty;
+          _page += 1;
+        }
         _isLoading = false;
       });
+      _persist();
+      return true;
     } catch (e) {
+      _lastRefreshError = e;
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _error = e;
+          // A failed refresh over items already on screen is not an error
+          // state: the items stay, and reload() says it failed. Only an
+          // empty grid or a failed next page shows the retry.
+          if (!(reset && _items.isNotEmpty)) _error = e;
         });
       }
+      return false;
     } finally {
       _pending = null;
+      _pendingLoad = null;
     }
   }
 
@@ -401,7 +622,7 @@ class _ProductGridViewState extends State<ProductGridView> {
   // nested Scrollable anywhere in this subtree (brief §3).
 
   Widget _buildSliver(BuildContext context) {
-    if (_items.isEmpty && _isLoading) {
+    if (_items.isEmpty && (_isLoading || _restoring)) {
       final columns = _crossAxisCount(context, 0);
       return SliverPadding(
         padding: widget.padding,
@@ -499,7 +720,7 @@ class _ProductGridViewState extends State<ProductGridView> {
   // ── Box mode (every pre-existing caller) ─────────────────────────────────
 
   Widget _buildBox(BuildContext context) {
-    if (_items.isEmpty && _isLoading) {
+    if (_items.isEmpty && (_isLoading || _restoring)) {
       return GridView.builder(
         padding: widget.padding,
         gridDelegate: _gridDelegate(context, _crossAxisCount(context, 0)),
@@ -515,7 +736,7 @@ class _ProductGridViewState extends State<ProductGridView> {
     }
     if (_items.isEmpty) return _emptyState(context);
     return RefreshIndicator(
-      onRefresh: () => _loadPage(reset: true),
+      onRefresh: reload,
       child: GridView.builder(
         controller: _scrollController,
         padding: widget.padding,

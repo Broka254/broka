@@ -391,6 +391,73 @@ void main() {
       await withClient(() => GlobalPollerService.instance.catchUp());
       expect(shown, hasLength(1));
     });
+
+    test('an unchanged inbox is a 304: the sweep re-downloads nothing and announces nothing twice',
+        () async {
+      // Data-saving pass: the poller asks every 7 seconds and nearly every
+      // answer is the list it already has. It sends the last ETag; the
+      // server answers 304 with no body, and every check runs on the list
+      // it already holds - so unread counts, receipts and notifications
+      // are exactly what a full answer would have given.
+      final inboxRequests = <http.Request>[];
+      var inbox = [thread('e-1')];
+      var etag = 'W/"one"';
+      route = (req) {
+        if (req.url.path.startsWith('/negotiate/inbox/')) {
+          inboxRequests.add(req);
+          if (req.headers['If-None-Match'] == etag) {
+            return http.Response('', 304, headers: {'etag': etag});
+          }
+          return http.Response(jsonEncode(inbox), 200,
+              headers: {'content-type': 'application/json', 'etag': etag});
+        }
+        return _json({'has_call': false});
+      };
+      await withClient(() => GlobalPollerService.instance.catchUp());
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(inboxRequests.single.headers.containsKey('If-None-Match'), isFalse);
+      expect(GlobalPollerService.instance.unreadTotal.value, 1);
+      expect(shown, hasLength(1));
+      expect(GlobalPollerService.instance.inbox.value?.changed, isTrue);
+
+      await withClient(() => GlobalPollerService.instance.catchUp());
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(inboxRequests.last.headers['If-None-Match'], 'W/"one"');
+      expect(ApiService.lastInboxNotModified, isTrue);
+      expect(GlobalPollerService.instance.unreadTotal.value, 1,
+          reason: 'a 304 is the same inbox, not an empty one');
+      expect(shown, hasLength(1), reason: 'nothing new was announced');
+      expect(deliveredPosts(), hasLength(1), reason: 'no second receipt for the same message');
+      expect(GlobalPollerService.instance.inbox.value?.changed, isFalse);
+
+      // A new message changes the tag: the full list comes back and is announced.
+      inbox = [thread('e-2')];
+      etag = 'W/"two"';
+      await withClient(() => GlobalPollerService.instance.catchUp());
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(ApiService.lastInboxNotModified, isFalse);
+      expect(shown, hasLength(2));
+      expect(GlobalPollerService.instance.inbox.value?.changed, isTrue);
+      GlobalPollerService.instance.stop();
+    });
+
+    test('an inbox tag is never sent for another account', () async {
+      final inboxRequests = <http.Request>[];
+      route = (req) {
+        if (req.url.path.startsWith('/negotiate/inbox/')) {
+          inboxRequests.add(req);
+          return http.Response(jsonEncode([thread('a-1')]), 200,
+              headers: {'content-type': 'application/json', 'etag': 'W/"seller-1"'});
+        }
+        return _json({'has_call': false});
+      };
+      await withClient(() => GlobalPollerService.instance.catchUp());
+      ApiService.currentUserId = 'someone-else';
+      await withClient(() => GlobalPollerService.instance.catchUp());
+      expect(inboxRequests.last.url.path, '/negotiate/inbox/someone-else');
+      expect(inboxRequests.last.headers.containsKey('If-None-Match'), isFalse);
+      GlobalPollerService.instance.stop();
+    });
   });
 
   group('the sweep', () {

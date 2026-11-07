@@ -4,6 +4,10 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
+import 'core/navigation/app_route_observer.dart';
+import 'core/network/instrumented_client.dart';
 import 'core/state/marketplace_state.dart';
 import 'core/network/api_client.dart';
 import 'features/communications/presentation/announcement_detail_screen.dart';
@@ -138,7 +142,14 @@ void _returnToSignIn() {
   ));
 }
 
-void main() async {
+// ApiService's requests are top-level http calls; running the app inside
+// runWithClient sends them through InstrumentedClient too, so they are
+// counted (NetworkStats) and a successful change marks the cached screens it
+// affects out of date (DataChanges) - the same as ApiClient's. IOClient, not
+// http.Client(): inside the zone, Client() would call this factory again.
+void main() => http.runWithClient(_main, () => InstrumentedClient(IOClient()));
+
+Future<void> _main() async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
@@ -719,7 +730,7 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
       navigatorKey: navigatorKey,
       // Zeno's session lives above the Navigator, so it stays with the user
       // from screen to screen (features/zeno_assistant/zeno_session.dart).
-      navigatorObservers: [_zeno.routes],
+      navigatorObservers: [_zeno.routes, appRouteObserver],
       builder: (context, child) => ZenoSessionHost(session: _zeno, child: child ?? const SizedBox.shrink()),
       debugShowCheckedModeBanner: false,
       title: 'BROKA',

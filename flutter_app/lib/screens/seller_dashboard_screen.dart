@@ -47,6 +47,8 @@ import '../features/listings/presentation/change_price.dart';
 import '../features/listings/presentation/replace_photos.dart';
 import '../features/stores/presentation/store_entry.dart';
 import '../features/stores/presentation/widgets/menu_store_section.dart';
+import '../features/seller_dashboard/data/seller_dashboard_repository.dart';
+import '../widgets/stale_data_banner.dart';
 
 class SellerDashboardScreen extends StatefulWidget {
   const SellerDashboardScreen({super.key, this.animateBackground = true});
@@ -114,8 +116,9 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
     _tabs.animation?.addListener(() {
       if (mounted) setState(() {});
     });
+    // One launch-offers request, from _load. initState asked as well, so
+    // every open sent the same request twice.
     _load();
-    _loadOffers();
   }
 
   @override
@@ -132,8 +135,8 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   /// failure): the dashboard must never depend on the promo loading.
   LaunchOffers? _offers;
 
-  Future<void> _loadOffers() async {
-    final result = await launchOffersRepository.offers();
+  Future<void> _loadOffers({bool force = false}) async {
+    final result = await launchOffersRepository.offers(forceRefresh: force);
     if (!mounted) return;
     result.fold(
       onSuccess: (offers) => setState(() => _offers = offers),
@@ -141,29 +144,161 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
     );
   }
 
-  Future<void> _load() async {
-    _loadOffers();
-    if (mounted) setState(() { _loading = true; _dealsTabLoaded = false; _feeReload++; });
+  final SellerDashboardRepository _repo = const SellerDashboardRepository();
+
+  /// The server's totals (SellerDashboardRepository.summary), or null where
+  /// it has none - the figures are then counted over the loaded listings.
+  Map<String, dynamic>? _summary;
+
+  /// More of the seller's listings than are loaded.
+  bool _hasMoreListings = false;
+  bool _loadingMore = false;
+
+  /// A refresh failed and the figures shown are the saved ones.
+  bool _stale = false;
+  DateTime? _shownAt;
+
+  /// Overlapping loads (the header's refresh during the first one) must
+  /// not let the older answer land last.
+  int _loadSeq = 0;
+
+  /// A pull, the header's refresh, or a change made from here (a price, the
+  /// photos, a fee paid): always asks the server.
+  Future<void> _refresh() => _load(force: true);
+
+  /// Shows what was saved at once, then asks the server for what is out of
+  /// date - or for everything, when [force]d.
+  Future<void> _load({bool force = false}) async {
+    final seq = ++_loadSeq;
+    _loadOffers(force: force);
+    final uid = ApiService.currentUserId;
+    if (mounted) {
+      setState(() {
+        _dealsTabLoaded = false;
+        _feeReload++;
+        _loading = _profile == null && _listings.isEmpty;
+      });
+    }
+    if (uid == null) { if (mounted) setState(() => _loading = false); return; }
+
+    SavedDashboard saved = const SavedDashboard();
+    if (!force) {
+      saved = await _repo.saved(uid);
+      if (!mounted || seq != _loadSeq) return;
+      if (!saved.isEmpty) {
+        final savedListings = saved.listings;
+        setState(() {
+          final p = saved.profile?.data;
+          if (p is Map) _profile = Map<String, dynamic>.from(p);
+          if (savedListings != null) {
+            _listings = _parseListings(SellerDashboardRepository.savedItems(savedListings));
+            _hasMoreListings = saved.listingsHaveMore;
+          }
+          final sum = saved.summary?.data;
+          if (sum is Map) _summary = Map<String, dynamic>.from(sum);
+          _shownAt = saved.oldest;
+          _loading = false;
+        });
+      }
+      final rev = saved.revenue?.data;
+      if (rev is Map) _applyRevenue(Map<String, dynamic>.from(rev));
+      final met = saved.metrics?.data;
+      if (met is Map) setState(() => _metrics = Map<String, dynamic>.from(met));
+    }
+
+    // Revenue and metrics are their own requests, each on its own clock.
+    if (force || !(saved.revenue?.isFresh ?? false)) _loadRevenue();
+    if (force || !(saved.metrics?.isFresh ?? false)) _loadMetrics();
+
+    if (!force && saved.coreFresh) {
+      if (_stale) setState(() => _stale = false);
+      // Statuses are never saved - they are fetched live, as before.
+      await _loadStatuses(_listings.take(_overviewPreload).toList());
+      if (_tabs.index == 2) _ensureDealsLoaded();
+      return;
+    }
     try {
-      final uid = ApiService.currentUserId;
-      if (uid == null) { if (mounted) setState(() => _loading = false); return; }
-      final profile  = await ApiService.getUserProfile(uid);
-      // 50 was presented as the seller's whole catalogue: _pipeListed is
-      // _listings.length and _totalViews sums these rows, so a seller with
-      // more than 50 products silently saw a truncated business. Raised,
-      // and _catalogueTruncated below says so if the new ceiling is hit too
-      // rather than quietly under-reporting again.
-      final listings = await ApiService.getListings(sellerId: uid, limit: _catalogueLimit);
-      if (!mounted) return;
-      setState(() { _profile = profile; _listings = listings; _loading = false; });
-      _loadRevenue();
-      _loadMetrics();
+      final results = await Future.wait<Object?>([
+        _repo.profile(uid),
+        _repo.listings(uid),
+        _repo.summary(uid),
+      ]);
+      if (!mounted || seq != _loadSeq) return;
+      final profile = results[0] as Map<String, dynamic>;
+      final rows = results[1] as List<Map<String, dynamic>>;
+      final listings = _parseListings(rows);
+      setState(() {
+        _profile = profile;
+        _listings = listings;
+        _hasMoreListings = rows.length >= SellerDashboardRepository.pageSize;
+        _summary = results[2] as Map<String, dynamic>?;
+        _loading = false;
+        _stale = false;
+        _shownAt = DateTime.now();
+      });
       await _loadStatuses(listings.take(_overviewPreload).toList());
       // If the user sat on the Deals tab while this was loading, the tab
       // listener already fired against an empty _listings and there is no
       // second event coming. Catch up now.
       if (_tabs.index == 2) _ensureDealsLoaded();
-    } catch (_) { if (mounted) setState(() => _loading = false); }
+    } catch (_) {
+      if (!mounted || seq != _loadSeq) return;
+      // What was saved stays on screen, marked as saved.
+      setState(() {
+        _loading = false;
+        _stale = _profile != null || _listings.isNotEmpty;
+      });
+    }
+  }
+
+  Future<void> _refreshSummary() async {
+    final uid = ApiService.currentUserId;
+    if (uid == null) return;
+    final summary = await _repo.summary(uid);
+    if (mounted) setState(() => _summary = summary);
+  }
+
+  List<Listing> _parseListings(List<Map<String, dynamic>> rows) {
+    final out = <Listing>[];
+    for (final j in rows) {
+      out.add(Listing.fromJson(j));
+    }
+    return out;
+  }
+
+  /// The next page of listings, as the Products tab reaches the end of
+  /// what is loaded.
+  Future<void> _loadMoreListings() async {
+    if (_loadingMore || !_hasMoreListings) return;
+    final uid = ApiService.currentUserId;
+    if (uid == null) return;
+    setState(() => _loadingMore = true);
+    try {
+      final rows = await _repo.listings(uid, offset: _listings.length);
+      if (!mounted) return;
+      final shown = {for (final l in _listings) l.id};
+      final more = _parseListings(rows).where((l) => !shown.contains(l.id)).toList();
+      setState(() {
+        _listings = [..._listings, ...more];
+        _hasMoreListings = rows.length >= SellerDashboardRepository.pageSize &&
+            _listings.length < SellerDashboardRepository.maxListings;
+        _loadingMore = false;
+      });
+      if (_dealsTabLoaded) await _loadStatuses(more);
+    } catch (_) {
+      if (mounted) setState(() => _loadingMore = false);
+    }
+  }
+
+  /// Every listing, up to the ceiling - only for the Deals tab, which has
+  /// to look at each one's deal.
+  Future<void> _loadAllListings() async {
+    var guard = 0;
+    while (mounted && _hasMoreListings && guard++ < 20) {
+      final before = _listings.length;
+      await _loadMoreListings();
+      if (_listings.length == before) break;
+    }
   }
 
   Map<String, dynamic>? _metrics;
@@ -176,7 +311,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
     if (uid == null) return;
     if (mounted) setState(() => _metricsLoading = true);
     try {
-      final m = await ApiService.getSellerMetrics(uid, days: 90);
+      final m = await _repo.metrics(uid);
       if (mounted) setState(() { _metrics = m; _metricsLoading = false; });
     } catch (_) {
       // Non-fatal: the rest of the dashboard is independent of this call,
@@ -202,12 +337,15 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
     ];
   }
 
-  /// Ceiling on listings fetched for this screen.
-  static const _catalogueLimit = 200;
+  // _catalogueLimit (200) went with the whole-catalogue download: listings
+  // now load a page at a time (SellerDashboardRepository.pageSize), and the
+  // totals come from the server's summary rather than from adding up rows.
 
-  /// True when the seller may have more products than we loaded, so totals
-  /// derived from _listings are floors rather than facts.
-  bool get _catalogueTruncated => _listings.length >= _catalogueLimit;
+  int? _summaryInt(String key) => (_summary?[key] as num?)?.toInt();
+
+  /// Products, counted by the server when it can; otherwise over the
+  /// listings loaded (a floor while more remain).
+  int get _productCount => _summaryInt('total_listings') ?? _listings.length;
 
   /// How many listings get their deal/boost status fetched up front.
   /// Enough to fill the Overview funnel above the fold without opening
@@ -236,6 +374,9 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
     if (_dealsTabLoaded || _dealsLoading || _listings.isEmpty) return;
     _dealsLoading = true;
     try {
+      // The one place every listing is needed: each one's deal.
+      await _loadAllListings();
+      if (!mounted) return;
       await _loadStatuses(_listings);
       _dealsTabLoaded = true;
     } finally {
@@ -374,10 +515,12 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   /// empty - a key the API does not return, so that branch evaluated to 0
   /// for everyone and was indistinguishable from the sum of no listings.
   /// Dropped rather than left as a read that looks like a data source.
-  int    get _totalViews   => _listings.fold(0, (s, l) => s + l.views);
+  int    get _totalViews   => _summaryInt('total_views') ?? _listings.fold(0, (s, l) => s + l.views);
   bool   get _isVerified   => _profile?['is_verified'] as bool? ?? false;
-  int    get _activeCount  => _listings.where((l) => l.status.toLowerCase() == 'active').length;
-  int    get _featuredCount => _listings.where((l) => l.isFeatured).length;
+  int    get _activeCount  =>
+      _summaryInt('active_listings') ?? _listings.where((l) => l.status.toLowerCase() == 'active').length;
+  int    get _featuredCount =>
+      _summaryInt('featured_listings') ?? _listings.where((l) => l.isFeatured).length;
 
 
   // ── Performance trends (Design Journal Vol.8 §3.2-§3.4) ───────────────────
@@ -654,7 +797,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   // was nothing on screen to say the number was provisional.
   int get _pipeListed => _listings.length;
   int get _statusKnown => _listings.where((l) => _dealStatusMap.containsKey(l.id)).length;
-  bool get _pipeIsPartial => _statusKnown < _listings.length;
+  bool get _pipeIsPartial => _statusKnown < _listings.length || _hasMoreListings;
   int get _pipeNeg    => _listings.where((l) {
     final raw = ((_dealStatusMap[l.id]?['deal_status'] ?? _dealStatusMap[l.id]?['status'] ?? '') as Object)
         .toString().toLowerCase();
@@ -689,20 +832,33 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   Future<void> _loadRevenue() async {
     final uid = ApiService.currentUserId;
     if (uid == null) { if (mounted) setState(() => _revenueLoading = false); return; }
-    if (mounted) setState(() => _revenueLoading = true);
+    // A saved chart stays up while the new one loads.
+    if (mounted && _revenueWeekReal == null) setState(() => _revenueLoading = true);
     try {
-      final week = await ApiService.getSellerRevenue(uid, period: 'week');
-      final month = await ApiService.getSellerRevenue(uid, period: 'month');
+      final both = await _repo.revenue(uid);
       if (!mounted) return;
+      _applyRevenue(both);
+    } catch (_) {
+      if (mounted) setState(() => _revenueLoading = false);
+    }
+  }
+
+  /// {week, month} as SellerDashboardRepository.revenue returns them.
+  void _applyRevenue(Map<String, dynamic> both) {
+    try {
+      final week = Map<String, dynamic>.from(both['week'] as Map);
+      final month = Map<String, dynamic>.from(both['month'] as Map);
+      final w = (week['values'] as List).map((v) => (v as num).toDouble()).toList();
+      final m = (month['values'] as List).map((v) => (v as num).toDouble()).toList();
       setState(() {
-        _revenueWeekReal  = (week['values'] as List).map((v) => (v as num).toDouble()).toList();
-        _revenueMonthReal = (month['values'] as List).map((v) => (v as num).toDouble()).toList();
+        _revenueWeekReal  = w;
+        _revenueMonthReal = m;
         _revenueHasRealData =
             (week['has_real_data'] as bool? ?? false) || (month['has_real_data'] as bool? ?? false);
         _revenueLoading = false;
       });
     } catch (_) {
-      if (mounted) setState(() => _revenueLoading = false);
+      setState(() => _revenueLoading = false);
     }
   }
 
@@ -833,7 +989,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
           tooltip: 'My Store',
         ),
         const SizedBox(width: 8),
-        BrokaHeaderButton(icon: Icons.refresh_rounded, onTap: _load, tooltip: 'Refresh'),
+        BrokaHeaderButton(icon: Icons.refresh_rounded, onTap: _refresh, tooltip: 'Refresh'),
       ]),
     );
   }
@@ -954,6 +1110,13 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
           onPostListing: () => Navigator.pushNamed(context, '/sell'),
           onOpenStore: () => StoreEntry.open(context),
         ),
+      // Offline, or the server failed: the figures below are the saved ones.
+      if (_stale)
+        StaleDataBanner(
+          what: 'dashboard figures',
+          fetchedAt: _shownAt,
+          onRetry: _refresh,
+        ),
       // A listing buyers can't see is the thing costing sales right now.
       AwaitingPaymentPanel(reloadSignal: _feeReload),
       _buildCommandHeader(),
@@ -983,7 +1146,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
     // both had one, so the gesture worked on two tabs out of three and did
     // nothing on the one carrying the numbers most worth re-checking.
     return RefreshIndicator(
-      onRefresh: _load,
+      onRefresh: _refresh,
       color: BrokaColors.gold,
       backgroundColor: BrokaColors.bgCard,
       child: SingleChildScrollView(
@@ -1019,6 +1182,8 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         MenuStoreSection(
           key: ValueKey('dashboard-store-$_feeReload'),
           businessReady: businessReady,
+          // The first build reads the saved store; a refresh asks.
+          forceRefresh: _feeReload > 1,
         ),
       ]),
     );
@@ -1092,7 +1257,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
             ]),
           ])),
           Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            Text('${_listings.length}', style: const TextStyle(
+            Text('$_productCount', style: const TextStyle(
                 color: BrokaColors.gold, fontSize: 34, fontWeight: FontWeight.w900,
                 height: 1.0, fontFamily: 'monospace')),
             const Text('PRODUCTS', style: TextStyle(
@@ -1249,10 +1414,10 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
       Row(children: [
         Expanded(child: _radialCard(
           label: 'FEATURED', value: '$_featuredCount',
-          progress: _listings.isEmpty
-              ? 0.0 : (_featuredCount / _listings.length).clamp(0.0, 1.0),
+          progress: _productCount == 0
+              ? 0.0 : (_featuredCount / _productCount).clamp(0.0, 1.0),
           color: BrokaColors.gold,
-          sub: 'of ${_listings.length} products', up: _featuredCount > 0)),
+          sub: 'of $_productCount products', up: _featuredCount > 0)),
         const SizedBox(width: 10),
         // Deal completion rate in the slot response rate used to occupy.
         // It is a real, computed figure (domains/trust/completion_rate.py)
@@ -2172,12 +2337,25 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
       ]));
     }
     return RefreshIndicator(
-      onRefresh: _load,
+      onRefresh: _refresh,
       color: BrokaColors.gold,
       child: ListView.builder(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 48),
-        itemCount: _listings.length + 1,
+        // One more row while there are more listings: reaching it loads the
+        // next page.
+        itemCount: _listings.length + 1 + (_hasMoreListings ? 1 : 0),
         itemBuilder: (_, i) {
+          if (i > _listings.length) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _loadMoreListings();
+            });
+            return const Padding(
+              key: Key('dashboard-load-more'),
+              padding: EdgeInsets.all(16),
+              child: Center(child: SizedBox(width: 20, height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: BrokaColors.gold))),
+            );
+          }
           if (i == 0) {
             return FadeSlideIn(
               index: 0,
@@ -2204,7 +2382,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
     padding: const EdgeInsets.only(bottom: 16),
     child: Row(children: [
       Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('${_listings.length} PRODUCT${_listings.length == 1 ? "" : "S"}',
+        Text('$_productCount PRODUCT${_productCount == 1 ? "" : "S"}',
             style: const TextStyle(color: BrokaColors.textMid, fontSize: 10,
                 fontWeight: FontWeight.w700, letterSpacing: 1.4)),
         const SizedBox(height: 2),
@@ -2527,7 +2705,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
     HapticFeedback.selectionClick();
     final changed = await replaceListingPhotos(context,
         repo: listingsRepository, listing: l);
-    if (changed && mounted) await _load();
+    if (changed && mounted) await _refresh();
   }
 
   /// Pay/renew this listing's time from its time-left row or banner.
@@ -2536,7 +2714,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
     final paid = await Navigator.of(context).push<bool>(MaterialPageRoute(
       builder: (_) => ListingFeeScreen(listingId: l.id, listingName: l.name),
     ));
-    if (paid == true && mounted) await _load();
+    if (paid == true && mounted) await _refresh();
   }
 
   /// The server's rules decide (change_price.dart); a change reloads the
@@ -2545,7 +2723,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
     HapticFeedback.selectionClick();
     final changed = await changeListingPrice(context,
         repo: listingsRepository, listingId: l.id, name: l.name, currentPrice: l.price);
-    if (changed && mounted) await _load();
+    if (changed && mounted) await _refresh();
   }
 
   /// Asks first, then takes the listing off BROKA. The backend refuses while
@@ -2591,6 +2769,9 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
           _dealStatusMap.remove(l.id);
           _boostStatusMap.remove(l.id);
         });
+        // The server's totals counted it; ask for them again rather than
+        // show one product too many.
+        _refreshSummary();
         messenger.showSnackBar(SnackBar(
           content: Text('"${l.name}" deleted'),
           behavior: SnackBarBehavior.floating,

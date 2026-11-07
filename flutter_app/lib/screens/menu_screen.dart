@@ -20,6 +20,7 @@ import 'package:flutter/material.dart';
 
 import 'package:provider/provider.dart';
 
+import '../core/cache/data_changes.dart';
 import '../core/utils/result.dart';
 import '../features/account/data/repositories/account_repository.dart';
 import '../features/launch_offers/data/launch_offers_repository.dart';
@@ -38,6 +39,7 @@ import '../widgets/broka_image.dart';
 import '../widgets/collapsing_screen_header.dart';
 import '../widgets/constellation_background.dart';
 import '../widgets/menu_tiles.dart';
+import '../widgets/stale_data_banner.dart';
 
 class MenuScreen extends StatefulWidget {
   const MenuScreen({super.key, this.repository, this.animateBackground = true});
@@ -67,6 +69,15 @@ class _MenuScreenState extends State<MenuScreen> {
   /// Bumped to remount the store section, which loads itself.
   int _storeNonce = 0;
 
+  /// When the account shown was fetched, and whether a refresh of it
+  /// failed - the Menu then says the profile is the saved one.
+  DateTime? _accountFetchedAt;
+  bool _stale = false;
+
+  /// Overlapping loads (a pull during the first one) must not let the
+  /// older answer land last.
+  int _loadSeq = 0;
+
   /// Whether BROKA takes deal payments itself (GET /pricing/safe-payment).
   /// "Payment receipts" lists M-Pesa receipts of BROKA's own escrow, which
   /// nobody can make while payments are paused - so it shows only while
@@ -78,13 +89,14 @@ class _MenuScreenState extends State<MenuScreen> {
     super.initState();
     _load();
     _loadOffers();
+    // Already a session-long cache (SafePaymentRepository._cached).
     safePaymentRepository.fetch().then((info) {
       if (mounted && info != null && info.inAppPayments) setState(() => _inAppPayments = true);
     });
   }
 
-  Future<void> _loadOffers() async {
-    final result = await launchOffersRepository.offers();
+  Future<void> _loadOffers({bool force = false}) async {
+    final result = await launchOffersRepository.offers(forceRefresh: force);
     if (!mounted) return;
     result.fold(
       onSuccess: (offers) => setState(() => _listingOffer = offers.listingFree),
@@ -92,38 +104,90 @@ class _MenuScreenState extends State<MenuScreen> {
     );
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = _account == null;
-      _error = null;
-    });
-    final result = await _repo.getMe();
-    if (!mounted) return;
-    switch (result) {
-      case Failure(:final message):
-        setState(() {
-          _error = message;
-          _loading = false;
-        });
-      case Success(:final data):
-        setState(() {
-          _account = data;
-          _loading = false;
-        });
-        final count = await _repo.activeListingCount(data.id);
-        if (!mounted) return;
-        if (count case Success(:final data)) setState(() => _listingCount = data);
+  /// Shows the saved account at once, then asks the server only for what
+  /// is out of date (or everything, on a pull: [force]).
+  ///
+  /// Every Menu open used to fetch /auth/me and the listing count, and
+  /// every return from any screen opened here fetched them again. Now a
+  /// copy younger than CachePolicies.menuAccount is shown without a
+  /// request, and a change made in the app marks it out of date
+  /// (DataChanges) so the Menu still reflects it at once.
+  Future<void> _load({bool force = false}) async {
+    final seq = ++_loadSeq;
+    final saved = await _repo.savedMe();
+    final uid = ApiService.currentUserId ?? saved?.account.id ?? _account?.id;
+    final savedCount = uid == null ? null : await _repo.savedActiveListingCount(uid);
+    if (!mounted || seq != _loadSeq) return;
+    final shownAt = _accountFetchedAt;
+    if (saved != null && (_account == null || shownAt == null || saved.fetchedAt.isAfter(shownAt))) {
+      setState(() {
+        _account = saved.account;
+        _accountFetchedAt = saved.fetchedAt;
+        _loading = false;
+      });
     }
+    if (savedCount != null && _listingCount == null) {
+      setState(() => _listingCount = savedCount.count);
+    }
+    final needAccount = force || saved == null || !saved.fresh;
+    final needCount = force || savedCount == null || !savedCount.fresh;
+    if (!needAccount && !needCount) return;
+
+    if (needAccount) {
+      setState(() {
+        _loading = _account == null;
+        _error = null;
+      });
+      final result = await _repo.getMe();
+      if (!mounted || seq != _loadSeq) return;
+      switch (result) {
+        case Failure(:final message):
+          setState(() {
+            _error = message;
+            _loading = false;
+            // The saved profile stays; the Menu says it is the saved one.
+            _stale = _account != null;
+          });
+          return;
+        case Success(:final data):
+          setState(() {
+            _account = data;
+            _accountFetchedAt = DateTime.now();
+            _loading = false;
+            _stale = false;
+          });
+      }
+    }
+    final id = _account?.id;
+    if (!needCount || id == null) return;
+    final count = await _repo.activeListingCount(id);
+    if (!mounted || seq != _loadSeq) return;
+    if (count case Success(:final data)) setState(() => _listingCount = data);
   }
 
   Future<void> _refresh() async {
     setState(() => _storeNonce++);
-    await _load();
+    _loadOffers(force: true);
+    await _load(force: true);
   }
 
+  (int, int, int) _revisions() => (
+        DataChanges.instance.revision(DataDomain.account).value,
+        DataChanges.instance.revision(DataDomain.listings).value,
+        DataChanges.instance.revision(DataDomain.store).value,
+      );
+
+  /// Opens [route] and, on return, reloads only if something it shows was
+  /// changed meanwhile - Profile edited, a listing posted, a store opened.
+  /// Returning from Terms or Help reloads nothing.
   Future<void> _open(String route) async {
+    final before = _revisions();
     await Navigator.pushNamed(context, route);
-    if (mounted) _load();
+    if (!mounted) return;
+    final after = _revisions();
+    if (after == before) return;
+    _load();
+    if (after.$2 != before.$2 || after.$3 != before.$3) _loadOffers();
   }
 
   /// The announcements centre is authenticated: guests are asked first
@@ -135,7 +199,6 @@ class _MenuScreenState extends State<MenuScreen> {
     if (!mounted || !authed) return;
     await Navigator.pushNamed(context, '/announcements');
     if (!mounted) return;
-    _load();
     try {
       await Provider.of<AnnouncementsState>(context, listen: false)
           .refreshUnreadCount();
@@ -219,6 +282,13 @@ class _MenuScreenState extends State<MenuScreen> {
     final account = _account;
     final isSeller = account?.isSeller ?? ApiService.currentUserAccountType == 'buyer_seller';
     return [
+      if (_stale && account != null)
+        StaleDataBanner(
+          what: 'profile',
+          fetchedAt: _accountFetchedAt,
+          margin: const EdgeInsets.only(bottom: 10),
+          onRetry: () => _load(force: true),
+        ),
       _profileCard(),
       if (isSeller) ...[
         const SizedBox(height: 14),
@@ -264,6 +334,8 @@ class _MenuScreenState extends State<MenuScreen> {
       MenuStoreSection(
         key: ValueKey('store-$_storeNonce'),
         businessReady: account?.canOpenStore,
+        // Remounted by a pull: that asks the server, past the saved copy.
+        forceRefresh: _storeNonce > 0,
       ),
       const MenuSectionLabel('Account'),
       MenuGroup(children: [

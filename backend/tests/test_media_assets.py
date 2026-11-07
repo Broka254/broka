@@ -367,6 +367,40 @@ class TestListings:
         assert card["cover"]["kind"] == "showcase"
 
     @pytest.mark.asyncio
+    async def test_lean_cards_leave_out_legacy_images_the_card_never_draws(self, client):
+        """GET /listings/?lean=true (data-saving pass): a card with a stored
+        cover still carried a legacy inline showcase, and every card its
+        seller's legacy base64 selfie whatever its size. Lean drops both;
+        without it the card is exactly what older builds always got."""
+        seller, headers = await _user()
+        photo = await _upload(client, headers)
+        r = await client.post("/listings/", headers=headers, json=_listing_body(photo_ids=[photo["id"]]))
+        assert r.status_code == 201, r.text
+        listing_id = r.json()["id"]
+        showcase = "data:image/jpeg;base64," + base64.b64encode(_jpeg((60, 60))).decode()
+        selfie = base64.b64encode(b"\xff\xd8" + b"x" * 120_000).decode()
+        async with AsyncSessionLocal() as db:
+            row = (await db.execute(select(Listing).where(Listing.id == listing_id))).scalar_one()
+            row.showcase_image_url = showcase
+            user = (await db.execute(select(User).where(User.id == seller.id))).scalar_one()
+            user.profile_photo = selfie
+            await db.commit()
+
+        full = await _card(client, listing_id, seller.id)
+        assert full["cover"]["thumb"] == photo["thumb"]
+        assert full["showcase_image_url"] == showcase
+        assert full["seller_profile_photo"] == selfie
+
+        r = await client.get("/listings/", params={"seller_id": seller.id, "limit": 50, "lean": "true"})
+        assert r.status_code == 200
+        lean = next(item for item in r.json() if item["id"] == listing_id)
+        assert lean["cover"]["thumb"] == photo["thumb"]     # what the card draws
+        assert lean["showcase_image_url"] is None
+        assert lean["verified_photos"] is None
+        assert lean["seller_profile_photo"] is None
+        assert len(r.content) < len(json.dumps(full)) // 2
+
+    @pytest.mark.asyncio
     async def test_a_legacy_listing_sends_only_its_first_photo_until_converted(self, client):
         from api.domains.media.backfill import run_backfill_pass
         seller, headers = await _user()

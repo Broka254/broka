@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 
 from api.database import dispose_engine, init_db
 from api.core.body_limit import BodySizeLimitMiddleware
+from api.core.compression import JsonCompressionMiddleware
 from api.core.config import settings, validate_startup
 from api.core.workers import worker
 from api.security import validate_secret_key
@@ -188,6 +189,11 @@ app.add_middleware(
     # hide non-simple response headers unless they are explicitly exposed.
     expose_headers=["X-Total-Count", "X-Request-ID"],
 )
+
+# ── Response compression ──────────────────────────────────────────────────────
+# gzip for JSON a client asks to have compressed (every app build does);
+# images under /media/ are left as they are. See api/core/compression.py.
+app.add_middleware(JsonCompressionMiddleware)
 
 # ── Request body size ─────────────────────────────────────────────────────────
 # Added last, so it runs first: an oversized body is refused before any
