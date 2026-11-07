@@ -148,7 +148,8 @@ class ScreenCache {
   ScreenCache({CacheStore? store, bool memory = true, DateTime Function()? clock})
       : _store = store ?? const NullCacheStore(),
         _memoryEnabled = memory,
-        _clock = clock ?? DateTime.now;
+        _clock = clock ?? DateTime.now,
+        _off = (store == null || store is NullCacheStore) && !memory;
 
   /// The app's cache. Off under `flutter test` unless a test installs one.
   static ScreenCache instance = _default();
@@ -184,6 +185,13 @@ class ScreenCache {
 
   final CacheStore _store;
   final bool _memoryEnabled;
+
+  /// Keeps nothing at all (the default under `flutter test`): every read
+  /// misses and every fetch is its own request, with no state carried from
+  /// one call to the next. A shared in-flight request or invalidation load
+  /// left over from a previous test would otherwise never complete in the
+  /// next one's clock.
+  final bool _off;
   final DateTime Function() _clock;
 
   DateTime now() => _clock();
@@ -208,7 +216,7 @@ class ScreenCache {
   static const _metaAccount = '_meta';
   static const _invalidationsName = 'invalidations';
 
-  Future<void> _ensureInvalidations() => _invalidationsLoaded ??= () async {
+  Future<void> _ensureInvalidations() => _off ? Future<void>.value() : _invalidationsLoaded ??= () async {
         final raw = await _store.read(_metaAccount, _invalidationsName);
         if (raw == null) return;
         try {
@@ -255,6 +263,7 @@ class ScreenCache {
   /// The saved copy, from memory or storage. Null when there is none, or it
   /// is past [CachePolicy.keepFor].
   Future<CacheEntry?> read(CacheKey key, CachePolicy policy) async {
+    if (_off) return null;
     await _ensureInvalidations();
     final mem = _memory[key.value];
     if (mem != null) {
@@ -316,6 +325,7 @@ class ScreenCache {
   /// images, say); the caller still gets the answer as it came.
   Future<Object?> fetch(CacheKey key, Future<Object?> Function() load,
       {Object? Function(Object? data)? persist}) {
+    if (_off) return load();
     final k = key.value;
     final running = _inflight[k];
     if (running != null) {
@@ -348,7 +358,7 @@ class ScreenCache {
       _invalidated[f] = at;
       changed = true;
     }
-    if (!changed) return;
+    if (!changed || _off) return;
     unawaited(_store.write(_metaAccount, _invalidationsName, jsonEncode({
       for (final e in _invalidated.entries) e.key.name: e.value.millisecondsSinceEpoch,
     })));

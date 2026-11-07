@@ -259,9 +259,13 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   }
 
   List<Listing> _parseListings(List<Map<String, dynamic>> rows) {
+    // A row this build can't read is skipped, not allowed to fail the
+    // profile and totals loaded beside it.
     final out = <Listing>[];
     for (final j in rows) {
-      out.add(Listing.fromJson(j));
+      try {
+        out.add(Listing.fromJson(j));
+      } catch (_) {}
     }
     return out;
   }
@@ -640,7 +644,10 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   /// which is worse than phrasing it badly. Every card cites a number the
   /// seller can check.
   Widget _buildAdvicePanel() {
-    final advice = _metrics?['advice'] as Map<String, dynamic>?;
+    // Read as a Map only when it is one: a malformed answer hides the
+    // panel instead of failing the whole Overview's build.
+    final rawAdvice = _metrics?['advice'];
+    final advice = rawAdvice is Map ? Map<String, dynamic>.from(rawAdvice) : null;
     if (advice == null) return const SizedBox.shrink();
     final pos = (advice['positives'] as List?) ?? const [];
     final neg = (advice['negatives'] as List?) ?? const [];

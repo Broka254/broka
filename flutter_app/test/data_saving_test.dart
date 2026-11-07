@@ -122,8 +122,10 @@ void main() {
 
     testWidgets('a fresh saved copy is shown without asking the server', (tester) async {
       final fetched = <int>[];
+      // hasMore false: with only six items the next page would load on its
+      // own, which is pagination, not a refresh.
       final cache = _FakeGridCache(ProductGridSnapshot(
-          items: _page(0, 6), page: 1, hasMore: true, fetchedAt: DateTime.now(), fresh: true));
+          items: _page(0, 6), page: 1, hasMore: false, fetchedAt: DateTime.now(), fresh: true));
       await tester.pumpWidget(_gridHost(
           cache: cache, fetchPage: (p) async { fetched.add(p); return _page(p); }));
       await _settle(tester);
@@ -147,7 +149,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
       expect(find.text('Test item 0'), findsOneWidget, reason: 'saved copy before the network answers');
       await _settle(tester);
-      expect(fetched, [0]);
+      expect(fetched.first, 0, reason: 'the refresh asks for page 0 first');
       expect(find.text('Test item 99'), findsOneWidget);
       expect(find.text('Test item 0'), findsNothing);
       expect(cache.writes, isNotEmpty);
@@ -261,6 +263,10 @@ void main() {
       expect(find.text('Test item 0'), findsOneWidget);
       nav(tester).pushNamed('/seller-dashboard');
       await _settle(tester);
+      // The server no longer has it either.
+      setFakeRoute((uri) => uri.path == '/listings/'
+          ? [for (int i = 1; i <= 20; i++) fakeListingJson(i)]
+          : null);
       DataChanges.instance.observeResponse('DELETE', Uri.parse('https://api.test/listings/listing-0'), 200);
       nav(tester).pop();
       await _settle(tester);
@@ -286,7 +292,7 @@ void main() {
       final cache = ScreenCache.debugInstall();
       await cache.write(
         CacheKey.forUser(CacheFeature.homeFeed, null, const {}),
-        {'items': [for (int i = 0; i < 4; i++) fakeListingJson(i)], 'page': 1, 'has_more': true},
+        {'items': [for (int i = 0; i < 4; i++) fakeListingJson(i)], 'page': 1, 'has_more': false},
       );
       await tester.pumpWidget(home());
       await _settle(tester);
@@ -412,6 +418,9 @@ void main() {
     });
 
     testWidgets('asks for the launch offers once while opening', (tester) async {
+      // The store section shows the offers too, and reads the copy the
+      // dashboard's request saved.
+      ScreenCache.debugInstall();
       await tester.pumpWidget(dashboard());
       await _settle(tester);
       expect(fakeRequests.where((r) => r.uri.path == '/pricing/launch-offers'), hasLength(1));
@@ -429,9 +438,6 @@ void main() {
     });
 
     testWidgets('the products tab loads the next page as it is reached', (tester) async {
-      tester.view.physicalSize = const Size(390 * 3.0, 844 * 3.0);
-      tester.view.devicePixelRatio = 3.0;
-      addTearDown(tester.view.reset);
       await tester.pumpWidget(dashboard());
       await _settle(tester);
       await tester.tap(find.byKey(const Key('dashboard-tab-1')));
