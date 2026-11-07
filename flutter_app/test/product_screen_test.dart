@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:broka/core/network/data_saver.dart';
+import 'package:broka/features/stores/presentation/storefront_launcher.dart';
 import 'package:broka/main.dart' show BrokaColors, ZoneGlowText;
 import 'package:broka/models/listing.dart';
 import 'package:broka/models/listing_photo.dart';
@@ -423,9 +424,19 @@ void main() {
       expect(find.byKey(const Key('product-add-to-cart')), findsNothing);
       expect(find.text('Add to cart'), findsNothing);
 
+      // The store's own website, by its slug - not the generic in-app store
+      // screen (storefront_launcher.dart, 2026-11-07). This still expected
+      // the '/store-view' route after that change.
+      Uri? website;
+      storeUrlLauncherOverride = (uri, mode) async {
+        website = uri;
+        return true;
+      };
+      addTearDown(() => storeUrlLauncherOverride = null);
       await tester.tap(find.byKey(const Key('product-visit-store')));
       await tester.pumpAndSettle();
-      expect(opened, contains('/store-view'));
+      expect(website, Uri.parse('https://www.broka.co.ke/store/clanix'));
+      expect(opened, isNot(contains('/store-view')));
     });
 
     testWidgets('a personal listing or an auction has no Visit Store', (tester) async {

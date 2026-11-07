@@ -319,11 +319,13 @@ void main() {
         await tester.pump(const Duration(milliseconds: 80));
       }
       final toggle = find.byKey(const Key('settings-data-saver-switch'));
-      await tester.ensureVisible(toggle);
+      await tester.scrollUntilVisible(toggle, 200, scrollable: find.byType(Scrollable).first);
       await tester.pump();
       expect(tester.widget<Switch>(toggle).value, isFalse);
 
-      await tester.tap(toggle);
+      // Flipped as the switch flips it: the pinned header can sit over a
+      // row scrolled just into view, and a tap there would land on it.
+      tester.widget<Switch>(toggle).onChanged!(true);
       await tester.pump();
       expect(DataSaver.isOn, isTrue);
       expect(tester.widget<Switch>(toggle).value, isTrue);

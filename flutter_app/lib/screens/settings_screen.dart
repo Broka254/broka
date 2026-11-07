@@ -269,23 +269,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
         ]),
-        const MenuSectionLabel('Mobile data'),
-        MenuGroup(children: [
-          MenuTile(
-            icon: Icons.data_usage_rounded,
-            tint: BrokaColors.neonGreen,
-            title: 'Data saver',
-            subtitle: 'Smaller product photos and fewer background checks - for a small data bundle',
-            trailing: ValueListenableBuilder<bool>(
-              valueListenable: DataSaver.enabled,
-              builder: (_, on, __) => _switch(
-                key: const Key('settings-data-saver-switch'),
-                value: on,
-                onChanged: DataSaver.setEnabled,
-              ),
-            ),
-          ),
-        ]),
         const MenuSectionLabel('Notifications & sound'),
         MenuGroup(children: [
           if (_delivery?.notificationsAllowed == false)
@@ -324,6 +307,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   : const MenuPill('OFF', color: BrokaColors.gold),
               onTap: _delivery!.backgroundAllowed ? null : _allowBackground,
             ),
+        ]),
+        const MenuSectionLabel('Mobile data'),
+        MenuGroup(children: [
+          MenuTile(
+            icon: Icons.data_usage_rounded,
+            tint: BrokaColors.neonGreen,
+            title: 'Data saver',
+            subtitle: 'Smaller product photos and fewer background checks - for a small data bundle',
+            trailing: ValueListenableBuilder<bool>(
+              valueListenable: DataSaver.enabled,
+              builder: (_, on, __) => _switch(
+                key: const Key('settings-data-saver-switch'),
+                value: on,
+                onChanged: DataSaver.setEnabled,
+              ),
+            ),
+          ),
         ]),
         const MenuSectionLabel('Zeno'),
         MenuGroup(children: [
