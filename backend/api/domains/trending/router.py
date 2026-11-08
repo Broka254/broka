@@ -16,6 +16,10 @@ async def get_trending(
     category_id: Optional[str] = None,
     limit: int = 20,
     offset: int = 0,
+    # Cards without the legacy inline images a card never draws, as
+    # GET /listings/?lean=true (ListingService._listing_dict).
+    lean: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
-    return await TrendingService(db).list_trending(limit=limit, offset=offset, category_id=category_id)
+    return await TrendingService(db).list_trending(
+        limit=limit, offset=offset, category_id=category_id, lean=lean)

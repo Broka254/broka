@@ -102,6 +102,10 @@ class ListingsRepository {
     Map<String, dynamic>? attributes,
     int limit = 20,
     int offset = 0,
+    // As getListings: the page as sent, for a caller that saves it, and
+    // cards without the inline images ProductCard never draws.
+    void Function(List<Map<String, dynamic>> raw)? onRaw,
+    bool lean = false,
   }) async {
     try {
       final params = _buildParams(
@@ -112,8 +116,11 @@ class ListingsRepository {
         search: search, location: location, sort: sort, attributes: attributes,
         limit: limit, offset: offset, withTotal: true,
       );
+      if (lean) params['lean'] = 'true';
       final data = await _client.get('/listings/', queryParams: params) as Map<String, dynamic>;
-      final items = (data['items'] as List).map((e) => BrokaListing.fromJson(e)).toList();
+      final raw = (data['items'] as List).cast<Map<String, dynamic>>();
+      final items = raw.map((e) => BrokaListing.fromJson(e)).toList();
+      onRaw?.call(raw);
       return Success(ListingsPage(items: items, total: data['total'] as int));
     } on ApiException catch (e) {
       return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);

@@ -1,3 +1,45 @@
+# Cache-first stores, calls, categories and Trending (2026-11-08)
+
+Asked for: the same data saving Home, the Menu and the Seller Dashboard
+got, on the store dashboard, the call history, the category and
+type-of-item screens, the store directory and Trending. Each now opens on
+what it saved last time and asks the server only when that copy is old
+(`CachePolicies`), keeping it on screen offline:
+
+- **Category Zones and type-of-item screens**: the feed for the filters in
+  use (not searches), with its result count, plus the types of item and
+  the filters (`CategoriesRepository`, 12 h). Cards are asked for lean.
+- **Trending**: saved feed, lean cards (`GET /trending?lean=true`, new).
+- **Store directory**: the unfiltered list and the "near you" rail. An
+  open used to cost three requests (the list, the rail once GPS answered,
+  the list again with distances); a current copy now costs none and an old
+  one skips the first.
+- **Store dashboard** (My Store): the store, the week's visits, the
+  product counts, the first page of products, the store's categories and
+  the insights card all open from their saved copies. The insights card's
+  30-second self-refresh slows to 60 and 120 s while the numbers don't move
+  (120 s with Data saver).
+- **Call history**: the saved calls are drawn at once and the server is
+  always asked, conditionally - `GET /calls/history` now carries an ETag
+  (not counting the "Active 5m ago" text), so an unchanged history is an
+  empty 304. With `lean=true` a stored photo travels as its small URL in
+  `photo_url` instead of base64 (often a megabyte) in every answer.
+- Search results ask for lean cards too.
+
+Fixed along the way:
+
+- Trending turned a failed page into an empty one: "nothing is trending",
+  and the feed ended for good on one dropped connection. It shows Retry.
+- The call history decoded every base64 photo again on every rebuild; it
+  draws through BrokaImage now.
+- The conditional-response helper moved to `api/core/conditional.py`,
+  shared by the chat history and the call history.
+
+Tests: backend `test_call_history.py` (304, last-seen not in the tag, lean
+photo URL, unconverted selfie kept), `test_trending.py` (lean); Flutter
+`cache_first_screens_test.dart`, `store_setup_test.dart` ("My Store,
+reopened"), `discovery_destinations_test.dart` (Trending's Retry).
+
 # The app is lighter on mobile data (2026-11-07)
 
 Asked for: make the app as data efficient as possible for people on

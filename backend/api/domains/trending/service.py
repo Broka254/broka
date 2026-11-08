@@ -23,7 +23,8 @@ class TrendingService:
         self.db = db
 
     async def list_trending(
-        self, limit: int = 20, offset: int = 0, category_id: str | None = None
+        self, limit: int = 20, offset: int = 0, category_id: str | None = None,
+        lean: bool = False,
     ) -> list[dict]:
         cutoff = datetime.utcnow() - timedelta(days=14)
         interest_rows = await self.db.execute(
@@ -84,6 +85,7 @@ class TrendingService:
         return [
             ListingService._listing_dict(
                 l, seller=sellers_by_id.get(l.seller_id), assets=assets, card=True,
+                lean=lean,
             )
             for l in page
         ]

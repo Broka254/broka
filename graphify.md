@@ -164,20 +164,20 @@ Counts: admin 68, optional 6, public 61, token 5, user 182.
 | GET | `/buy-agent-requests/me` | user | `get_my_buy_agent_request` (backend/api/domains/buy_agent/router.py:297) |
 | POST | `/buy-agent-requests/parse` | user | `parse_buy_request` (backend/api/domains/buy_agent/router.py:66) |
 | POST | `/buy-agent-requests/parse-intent` | user | `parse_search_intent` (backend/api/domains/buy_agent/router.py:97) |
-| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:1625) |
-| GET | `/calls/incoming` | user | `get_incoming_call` (backend/api/routers/calls.py:2154) |
-| POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:755) |
-| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:1346) |
-| GET | `/calls/pending/store/{store_id}` | user | `get_store_pending_call` (backend/api/routers/calls.py:2263) |
-| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:2283) |
-| POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:646) |
-| GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:586) |
-| POST | `/calls/unregister-token` | user | `unregister_token` (backend/api/routers/calls.py:735) |
-| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:1749) |
-| POST | `/calls/{room_id}/alerted` | public | `call_alerted` (backend/api/routers/calls.py:995) |
-| POST | `/calls/{room_id}/answer` | public | `call_answered` (backend/api/routers/calls.py:1045) |
-| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:972) |
-| POST | `/calls/{room_id}/turn-credentials` | public | `get_call_turn_credentials` (backend/api/routers/calls.py:624) |
+| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:1626) |
+| GET | `/calls/incoming` | user | `get_incoming_call` (backend/api/routers/calls.py:2182) |
+| POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:756) |
+| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:1347) |
+| GET | `/calls/pending/store/{store_id}` | user | `get_store_pending_call` (backend/api/routers/calls.py:2291) |
+| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:2311) |
+| POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:647) |
+| GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:587) |
+| POST | `/calls/unregister-token` | user | `unregister_token` (backend/api/routers/calls.py:736) |
+| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:1777) |
+| POST | `/calls/{room_id}/alerted` | public | `call_alerted` (backend/api/routers/calls.py:996) |
+| POST | `/calls/{room_id}/answer` | public | `call_answered` (backend/api/routers/calls.py:1046) |
+| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:973) |
+| POST | `/calls/{room_id}/turn-credentials` | public | `get_call_turn_credentials` (backend/api/routers/calls.py:625) |
 | GET | `/categories` | public | `list_categories` (backend/api/domains/categories/router.py:14) |
 | GET | `/categories/tree` | public | `category_tree` (backend/api/domains/categories/router.py:21) |
 | GET | `/categories/{category_id}/filters` | public | `list_filters` (backend/api/domains/categories/router.py:31) |
@@ -265,20 +265,20 @@ Counts: admin 68, optional 6, public 61, token 5, user 182.
 | POST | `/mpesa/query` | user | `query_payment_status` (backend/api/routers/mpesa.py:348) |
 | GET | `/mpesa/status/{deal_id}` | user | `get_deal_payment_status` (backend/api/routers/mpesa.py:792) |
 | POST | `/mpesa/stk-push` | user | `initiate_stk_push` (backend/api/routers/mpesa.py:154) |
-| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:5664) |
+| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:5650) |
 | POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1880) |
 | POST | `/negotiate/chat` | user | `broker_chat` (backend/api/domains/ai_broker/router.py:44) **shadowed: never reached** |
-| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:5561) |
+| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:5547) |
 | POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3725) |
 | POST | `/negotiate/dispute-analysis` | user | `dispute_analysis` (backend/api/domains/ai_broker/router.py:85) |
-| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:5000) |
+| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:4986) |
 | POST | `/negotiate/message` | user | `send_message` (backend/api/routers/negotiate.py:1956) |
 | PATCH | `/negotiate/message/{message_id}` | user | `edit_message` (backend/api/routers/negotiate.py:3950) |
 | DELETE | `/negotiate/message/{message_id}` | user | `unsend_message` (backend/api/routers/negotiate.py:4002) |
 | POST | `/negotiate/price-recommend` | user | `price_recommend` (backend/api/domains/ai_broker/router.py:69) |
 | POST | `/negotiate/scam-check` | user | `scam_check` (backend/api/domains/ai_broker/router.py:60) |
 | POST | `/negotiate/shopping-advisor` | user | `shopping_advisor` (backend/api/domains/ai_broker/router.py:104) |
-| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:5628) |
+| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:5614) |
 | POST | `/negotiate/store/{store_id}/direct-message` | user | `store_direct_message` (backend/api/routers/negotiate.py:4753) |
 | GET | `/negotiate/store/{store_id}/history` | user | `get_store_history` (backend/api/routers/negotiate.py:4777) |
 | POST | `/negotiate/store/{store_id}/mark-delivered` | user | `mark_store_delivered` (backend/api/routers/negotiate.py:4883) |
@@ -597,6 +597,7 @@ Counts: admin 68, optional 6, public 61, token 5, user 182.
 - `client_ip.py` — The address a request really came from.
 - `cloudflare_turn_client.py` — BROKA - Cloudflare Realtime TURN Client
 - `compression.py` — Response compression for the API's JSON.
+- `conditional.py` — Conditional GETs: an ETag on a JSON answer, and an empty 304 for a caller that already holds it.
 - `config.py` — BROKA v3.0 - Centralised Configuration • All env vars read here — no os.getenv scattered across routers • Startup validation added for SECR…
 - `cost_ledger.py` — Platform cost ledger — record what BROKA spends, honestly.
 - `deal_hub.py` — BROKA v3.0 - Deal Status WebSocket Hub
@@ -1408,6 +1409,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `broka_image_fallback_test.dart` — A photo's small file going missing no longer blanks the photo (2026-10-19).
 - `broka_tts_parts_test.dart`
 - `buy_agent_ui_test.dart` — The Buying Agent's screen after the motion pass (2026-09-26): what it shows while it works, and the weak spots that pass found in the scree…
+- `cache_first_screens_test.dart` — The screens the first data-saving passes left out (2026-11-08), kept on the phone the way Home, the Menu and the Seller Dashboard already w…
 - `call_answer_ring_and_video_test.dart` — Answering a call, its ring, and turning a voice call into video (2026-10-09).
 - `call_history_screen_test.dart` — Calls (2026-10-02): every call with a buyer or seller, newest first, on Home's visual system.
 - `category_visual_test.dart` — Covers the one thing this whole category pass is about: the UI's category visuals are resolved by NAME from a single registry, and that reg…
@@ -1593,7 +1595,7 @@ Modules:
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `BUSINESS_MODEL_REVIEW.md` — BROKA's business model without the commission
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — The app is lighter on mobile data (2026-11-07)
+- `CHANGES.md` — Cache-first stores, calls, categories and Trending (2026-11-08)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)

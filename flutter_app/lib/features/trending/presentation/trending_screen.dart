@@ -10,10 +10,19 @@
 // one CustomScrollView with a collapsing pinned header, the grid in sliver
 // mode, a 16px content edge and pull-to-refresh. The data layer is untouched -
 // same repository call, same pagination, same routes.
+//
+// Mobile-data pass (2026-11-08): kept on the phone like Home - opened from
+// the saved copy, fetched again only past CachePolicies.trendingFeed - and
+// asked for lean cards. A failed page is an error with a Retry now: it used
+// to come back as an empty page, which read "nothing is trending" and
+// ended the feed for good on one dropped connection.
 import 'package:flutter/material.dart';
 
 import '../../../main.dart';
+import '../../../core/cache/screen_cache.dart';
 import '../../../core/utils/result.dart';
+import '../../../services/api_service.dart';
+import '../../listings/data/listing_feed_cache.dart';
 import '../../../widgets/collapsing_screen_header.dart';
 import '../../../widgets/constellation_background.dart';
 import '../../../widgets/product_grid_view.dart';
@@ -35,6 +44,9 @@ class _TrendingScreenState extends State<TrendingScreen> {
   final _scrollController = ScrollController();
   final _gridController = ProductGridController();
 
+  /// The saved feed's listings as the server sent them (ListingFeedCache).
+  final Map<String, Map<String, dynamic>> _rawListings = {};
+
   @override
   void dispose() {
     _scrollController.dispose();
@@ -42,11 +54,24 @@ class _TrendingScreenState extends State<TrendingScreen> {
   }
 
   Future<List<dynamic>> _fetchPage(int page) async {
-    final result = await trendingRepository.getTrending(page: page);
-    return result.fold<List<BrokaListing>>(
-      onSuccess: (data) => data,
-      onFailure: (_, __) => <BrokaListing>[],
+    final result = await trendingRepository.getTrending(
+      page: page,
+      lean: true,
+      onRaw: (raw) {
+        for (final j in raw) {
+          final id = j['id'];
+          if (id is String) _rawListings[id] = j;
+        }
+      },
     );
+    switch (result) {
+      case Success(:final data):
+        return data;
+      case Failure(:final message):
+        // ProductGridView shows a thrown error with Retry, and keeps the
+        // listings already on screen.
+        throw TrendingFeedFailure(message);
+    }
   }
 
   @override
@@ -96,6 +121,13 @@ class _TrendingScreenState extends State<TrendingScreen> {
                     controller: _gridController,
                     padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
                     fetchPage: _fetchPage,
+                    cache: ListingFeedCache(
+                      key: CacheKey.forUser(
+                          CacheFeature.trendingFeed, ApiService.currentUserId),
+                      raw: _rawListings,
+                      policy: CachePolicies.trendingFeed,
+                    ),
+                    itemId: (item) => (item as BrokaListing).id,
                     onTapItem: (item) => Navigator.pushNamed(
                       context,
                       '/product',
@@ -119,4 +151,13 @@ class _TrendingScreenState extends State<TrendingScreen> {
       ),
     );
   }
+}
+
+/// Why a page of Trending failed, for ProductGridView's retry state.
+class TrendingFeedFailure implements Exception {
+  const TrendingFeedFailure(this.message);
+  final String message;
+
+  @override
+  String toString() => message;
 }

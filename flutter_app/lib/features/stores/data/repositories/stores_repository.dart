@@ -1,5 +1,6 @@
 // BROKA — Stores Repository
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
@@ -79,6 +80,8 @@ class StoresRepository {
     double? lng,
     double? maxDistanceKm,
     bool nearestFirst = false,
+    // The page as sent, for the directory's saved copy (saveDirectory).
+    void Function(List<Map<String, dynamic>> raw)? onRaw,
   }) =>
       _guard(() async {
         final data = await _client.get('/stores', queryParams: {
@@ -93,7 +96,48 @@ class StoresRepository {
           if (maxDistanceKm != null) 'max_distance_km': maxDistanceKm.toString(),
           if (nearestFirst) 'nearest_first': 'true',
         }) as List;
-        return data.map((e) => Store.fromJson(e as Map<String, dynamic>)).toList();
+        final raw = data.cast<Map<String, dynamic>>();
+        final stores = raw.map(Store.fromJson).toList();
+        onRaw?.call(raw);
+        return stores;
+      });
+
+  CacheKey _directoryKey() =>
+      CacheKey.forUser(CacheFeature.storeDirectory, ApiService.currentUserId);
+
+  /// The directory as it last opened with no search or filter - its stores
+  /// and the "near you" rail - without asking the server. Null: nothing
+  /// saved (or past CachePolicies.storeDirectory's keepFor).
+  Future<({List<Store> stores, List<Store> nearby, DateTime fetchedAt, bool fresh})?>
+      savedDirectory() async {
+    final e = await ScreenCache.instance.read(_directoryKey(), CachePolicies.storeDirectory);
+    final data = e?.data;
+    if (e == null || data is! Map) return null;
+    List<Store> parse(Object? list) {
+      if (list is! List) return const [];
+      final out = <Store>[];
+      for (final j in list) {
+        if (j is! Map) continue;
+        try {
+          out.add(Store.fromJson(Map<String, dynamic>.from(j)));
+        } catch (_) {
+          // One shop the model can't read is skipped, not the whole copy.
+        }
+      }
+      return out;
+    }
+
+    final stores = parse(data['stores']);
+    if (stores.isEmpty) return null;
+    return (stores: stores, nearby: parse(data['nearby']), fetchedAt: e.fetchedAt, fresh: e.isFresh);
+  }
+
+  /// Saves the unfiltered directory, as [listStores] sent it ([stores] and
+  /// [nearby] are its onRaw pages), less large inline pictures.
+  Future<void> saveDirectory(List<Map<String, dynamic>> stores, List<Map<String, dynamic>> nearby) =>
+      ScreenCache.instance.write(_directoryKey(), {
+        'stores': [for (final s in stores) stripLargeInlineMedia(s)],
+        'nearby': [for (final s in nearby) stripLargeInlineMedia(s)],
       });
 
   Future<Result<Store>> createStore(Map<String, dynamic> payload) =>
@@ -208,39 +252,137 @@ class StoresRepository {
     int offset = 0,
   }) =>
       _guard(() async {
-        final data = await _client.get('/stores/$storeId/manage/listings', queryParams: {
+        Future<Object?> load() => _client.get('/stores/$storeId/manage/listings', queryParams: {
           'limit': limit.toString(),
           'offset': offset.toString(),
           if (state != null) 'state': state.value,
           if (search != null && search.trim().isNotEmpty) 'search': search.trim(),
           if (category != null && category.isNotEmpty) 'category': category,
           if (sort != 'newest') 'sort': sort,
-        }) as Map<String, dynamic>;
-        return StoreProductsPage(
-          items: [
-            for (final e in data['items'] as List? ?? const [])
-              StoreProduct.fromJson(e as Map<String, dynamic>),
-          ],
-          counts: StoreProductCounts.fromJson(
-              (data['counts'] as Map?)?.cast<String, dynamic>() ?? const {}),
-        );
+        });
+        // A first page without a search is saved (savedOwnerProducts); a
+        // later page or a search is asked for as before.
+        final key = (offset == 0 && (search == null || search.trim().isEmpty))
+            ? _ownerProductsKey(storeId, state: state, category: category, sort: sort, limit: limit)
+            : null;
+        final data = (key == null
+            ? await load()
+            : await ScreenCache.instance.fetch(key, load,
+                persist: (d) => d is Map<String, dynamic> ? stripLargeInlineMedia(d) : d))
+            as Map<String, dynamic>;
+        return _productsPage(data);
       });
+
+  static StoreProductsPage _productsPage(Map<String, dynamic> data) => StoreProductsPage(
+        items: [
+          for (final e in data['items'] as List? ?? const [])
+            StoreProduct.fromJson(Map<String, dynamic>.from(e as Map)),
+        ],
+        counts: StoreProductCounts.fromJson(
+            (data['counts'] as Map?)?.cast<String, dynamic>() ?? const {}),
+      );
+
+  CacheKey _ownerProductsKey(String storeId,
+          {StoreProductState? state, String? category, String sort = 'newest', int limit = 20}) =>
+      CacheKey.forUser(CacheFeature.storeProducts, ApiService.currentUserId, {
+        'store': storeId,
+        'state': state?.value,
+        'category': (category == null || category.isEmpty) ? null : category,
+        'sort': sort,
+        'limit': limit,
+      });
+
+  /// The first page of the owner's products (no search) as last fetched on
+  /// this phone, without asking the server - the store dashboard's
+  /// Products tab and the Overview's counts open from it.
+  Future<({StoreProductsPage page, bool fresh})?> savedOwnerProducts(
+    String storeId, {
+    StoreProductState? state,
+    String? category,
+    String sort = 'newest',
+    int limit = 20,
+  }) async {
+    final e = await ScreenCache.instance.read(
+        _ownerProductsKey(storeId, state: state, category: category, sort: sort, limit: limit),
+        CachePolicies.storeProducts);
+    final data = e?.data;
+    if (e == null || data is! Map) return null;
+    try {
+      return (page: _productsPage(Map<String, dynamic>.from(data)), fresh: e.isFresh);
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// The store dashboard in one request: rating, rank, period KPIs, daily
   /// series, sources, top products and advice (GET /stores/{id}/insights).
   /// Owner only - the server refuses any other caller, so a failure here is
   /// either offline or not the owner.
+  ///
+  /// Saved on the phone (savedInsights), so the dashboard opens on the last
+  /// numbers instead of a spinner and a request.
   Future<Result<StoreInsights>> getInsights(String storeId, {int days = 7}) =>
-      _guard(() async => StoreInsights.fromJson(await _client.get(
-            '/stores/$storeId/insights',
-            queryParams: {'days': days.toString()},
-          ) as Map<String, dynamic>));
-
-  /// The categories the store has products in, biggest first.
-  Future<Result<List<StoreCategoryCount>>> getStoreCategories(String storeId) =>
       _guard(() async {
-        final data = await _client.get('/stores/$storeId/categories') as List;
-        return data.map((e) => StoreCategoryCount.fromJson(e as Map<String, dynamic>)).toList();
+        final key = _insightsKey(storeId, days);
+        final data = await ScreenCache.instance.fetch(key, () => _client.get(
+              '/stores/$storeId/insights',
+              queryParams: {'days': days.toString()},
+            ));
+        final encoded = jsonEncode(data);
+        _insightsUnchanged[key.value] = _lastInsights[key.value] == encoded;
+        _lastInsights[key.value] = encoded;
+        return StoreInsights.fromJson(data as Map<String, dynamic>);
+      });
+
+  // The last insights answer per store and period this session, to tell
+  // the performance card whether its refresh brought anything new.
+  final Map<String, String> _lastInsights = {};
+  final Map<String, bool> _insightsUnchanged = {};
+
+  /// True when the last [getInsights] for this store and period answered
+  /// exactly what the one before it did. The card's self-refresh slows
+  /// down while nothing is happening (StorePerformanceSection).
+  bool insightsUnchanged(String storeId, {int days = 7}) =>
+      _insightsUnchanged[_insightsKey(storeId, days).value] ?? false;
+
+  CacheKey _insightsKey(String storeId, int days) => CacheKey.forUser(
+      CacheFeature.storeInsights, ApiService.currentUserId, {'store': storeId, 'days': days});
+
+  /// The dashboard's numbers as last fetched on this phone.
+  Future<({StoreInsights insights, bool fresh})?> savedInsights(String storeId, {int days = 7}) async {
+    final e = await ScreenCache.instance.read(_insightsKey(storeId, days), CachePolicies.storeInsights);
+    final data = e?.data;
+    if (e == null || data is! Map) return null;
+    try {
+      return (insights: StoreInsights.fromJson(Map<String, dynamic>.from(data)), fresh: e.isFresh);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  CacheKey _categoriesKey(String storeId) => CacheKey.forUser(
+      CacheFeature.storeProducts, ApiService.currentUserId, {'store': storeId, 'categories': 1});
+
+  /// The categories the store has products in, biggest first. From the
+  /// saved copy while it is current, unless [forceRefresh].
+  Future<Result<List<StoreCategoryCount>>> getStoreCategories(String storeId,
+          {bool forceRefresh = false}) =>
+      _guard(() async {
+        List<StoreCategoryCount> parse(Object? data) => [
+              for (final e in data as List)
+                StoreCategoryCount.fromJson(Map<String, dynamic>.from(e as Map)),
+            ];
+        final key = _categoriesKey(storeId);
+        if (!forceRefresh) {
+          final saved = await ScreenCache.instance.read(key, CachePolicies.storeProducts);
+          if (saved != null && saved.isFresh && saved.data is List) {
+            try {
+              return parse(saved.data);
+            } catch (_) {}
+          }
+        }
+        return parse(await ScreenCache.instance
+            .fetch(key, () => _client.get('/stores/$storeId/categories')));
       });
 
   /// A store's buyer reviews and the owner's published standing. Public:

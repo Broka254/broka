@@ -86,13 +86,37 @@ class _MyStoreScreenState extends State<MyStoreScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
+    unawaited(_open());
   }
 
   @override
   void dispose() {
     _productFilter.dispose();
     super.dispose();
+  }
+
+  /// Opens on the store as last fetched on this phone (the Menu's store
+  /// card saves it too), asking the server only when that copy is past
+  /// CachePolicies.storeSummary or a change marked it out of date. Every
+  /// open of the dashboard used to cost GET /stores/mine behind a
+  /// full-screen spinner, offline included.
+  Future<void> _open() async {
+    final saved = await _repo.savedMyStore();
+    if (!mounted) return;
+    if (saved == null) return _load();
+    final hasDraft = await StoreSetupController.hasDraft();
+    if (!mounted) return;
+    setState(() {
+      _store = saved.store;
+      _hasDraft = hasDraft;
+      _loading = false;
+      _error = null;
+    });
+    if (saved.fresh) return;
+    final result = await _repo.getMyStore();
+    if (!mounted) return;
+    // A failed refresh keeps the saved store on screen.
+    if (result case Success(:final data)) setState(() => _store = data);
   }
 
   Future<void> _load() async {
@@ -644,8 +668,8 @@ class _OverviewTabState extends State<_OverviewTab> {
   @override
   void initState() {
     super.initState();
-    _loadStats();
-    _loadCounts();
+    unawaited(_openStats());
+    unawaited(_openCounts());
   }
 
   @override
@@ -654,6 +678,22 @@ class _OverviewTabState extends State<_OverviewTab> {
     // A new store object means something changed - a product added, paid
     // for or taken out, or the store edited.
     if (!identical(old.store, widget.store)) _loadCounts();
+  }
+
+  /// The saved counts first; the server only when they are old.
+  Future<void> _openCounts() async {
+    final saved = await widget.repo.savedOwnerProducts(widget.store.id, limit: 1);
+    if (!mounted) return;
+    if (saved != null) setState(() => _counts = saved.page.counts);
+    if (saved == null || !saved.fresh) await _loadCounts();
+  }
+
+  /// The saved week of visits first; the server only when it is old.
+  Future<void> _openStats() async {
+    final saved = await widget.repo.savedStats(widget.store.id);
+    if (!mounted) return;
+    if (saved != null) setState(() => _stats = saved.stats);
+    if (saved == null || !saved.fresh) await _loadStats();
   }
 
   Future<void> _loadCounts() async {
@@ -1548,7 +1588,38 @@ class _ProductsTabState extends State<_ProductsTab> {
     super.initState();
     widget.filter.addListener(_reload);
     _loadCategories();
-    _loadMore();
+    unawaited(_openFirstPage());
+  }
+
+  /// The first page as last fetched on this phone, shown at once; fetched
+  /// again only when it is old. Opening the tab used to cost a page of
+  /// products every time.
+  Future<void> _openFirstPage() async {
+    final generation = _generation;
+    final saved = await widget.repo.savedOwnerProducts(widget.store.id,
+        state: _state, category: _category, sort: _sort, limit: _pageSize);
+    if (!mounted || generation != _generation || _items.isNotEmpty) return;
+    if (saved == null) return _loadMore();
+    setState(() {
+      _items.addAll(saved.page.items);
+      _hasMore = saved.page.items.length == _pageSize;
+      _counts = saved.page.counts;
+    });
+    if (saved.fresh) return;
+    // Refresh the first page in place: the same request a pull makes,
+    // without blanking what is shown while it travels.
+    final result = await widget.repo.getOwnerProducts(widget.store.id,
+        state: _state, category: _category, sort: _sort, limit: _pageSize);
+    if (!mounted || generation != _generation) return;
+    if (result case Success(:final data)) {
+      setState(() {
+        _items
+          ..clear()
+          ..addAll(data.items);
+        _hasMore = data.items.length == _pageSize;
+        _counts = data.counts;
+      });
+    }
   }
 
   Future<void> _loadCategories() async {

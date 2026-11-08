@@ -6,19 +6,34 @@ enum CallDirection { incoming, outgoing }
 
 /// The other person on a call. Sent once per person, not once per call.
 class CallPeer {
-  const CallPeer({required this.id, required this.name, this.photo, this.isOnline = false});
+  const CallPeer({
+    required this.id,
+    required this.name,
+    this.photo,
+    this.photoUrl,
+    this.isOnline = false,
+  });
 
   final String id;
   final String name;
 
-  /// Inline base64, like every profile photo in the app.
+  /// Inline base64 - an account whose photo was never stored as an image.
   final String? photo;
+
+  /// The photo's small URL, when it is stored as an image (lean answers):
+  /// a few KB from the disk cache instead of a base64 selfie, often a
+  /// megabyte, in every answer.
+  final String? photoUrl;
   final bool isOnline;
+
+  /// What the avatar draws: the URL when there is one.
+  String? get picture => (photoUrl != null && photoUrl!.isNotEmpty) ? photoUrl : photo;
 
   factory CallPeer.fromJson(String id, Map<String, dynamic> j) => CallPeer(
         id: id,
         name: (j['name'] as String?)?.trim() ?? '',
         photo: j['photo'] as String?,
+        photoUrl: j['photo_url'] as String?,
         isOnline: j['is_online'] as bool? ?? false,
       );
 }

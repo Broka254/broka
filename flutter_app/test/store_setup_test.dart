@@ -8,6 +8,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:broka/core/cache/screen_cache.dart';
 import 'package:broka/core/network/api_client.dart';
 import 'package:broka/features/categories/domain/category_visual.dart';
 import 'package:broka/features/listings/data/repositories/listings_repository.dart';
@@ -1480,6 +1481,76 @@ void main() {
       ]))));
       expect(find.text('Step 3 of 12'), findsOneWidget);
       expect(find.text('3'), findsOneWidget);   // the current dot of the 9-step flow
+    });
+  });
+
+  // Mobile-data pass (2026-11-08): the dashboard asked for the store, its
+  // week, its counts and its insights again on every open, behind a
+  // full-screen spinner. Reopened while its copy is current, it asks for
+  // none of them.
+  group('My Store, reopened', () {
+    tearDown(ScreenCache.debugReset);
+
+    testWidgets('opens on the saved store and numbers without asking again', (tester) async {
+      ScreenCache.debugInstall();
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 2.75;
+      addTearDown(tester.view.reset);
+      final backend = FakeBackend({
+        'GET /stores/mine': (_) => _json(_storeJson()),
+        'GET /stores/s1/stats': (_) => _json(_stats()),
+        'GET /stores/s1/insights': (_) => _json(_insights()),
+        'GET /stores/s1/manage/listings': (r) => _manage(r, []),
+      });
+      Widget screen() => MaterialApp(
+          home: MyStoreScreen(key: UniqueKey(), repository: backend.repo,
+              listings: ListingsRepository(client: backend.client), animateBackground: false));
+
+      await tester.pumpWidget(screen());
+      await tester.pumpAndSettle();
+      expect(find.text('Your store is open'), findsOneWidget);
+      int asked(String path) =>
+          backend.requests.where((r) => r.method == 'GET' && r.url.path == path).length;
+      expect(asked('/stores/mine'), 1);
+      expect(asked('/stores/s1/insights'), 1);
+
+      await tester.pumpWidget(const SizedBox());
+      backend.requests.clear();
+      await tester.pumpWidget(screen());
+      await tester.pump();
+      expect(find.byType(CircularProgressIndicator), findsNothing,
+          reason: 'the saved store, not a spinner');
+      await tester.pumpAndSettle();
+      expect(find.text('Your store is open'), findsOneWidget);
+      for (final path in [
+        '/stores/mine', '/stores/s1/stats', '/stores/s1/insights', '/stores/s1/manage/listings',
+      ]) {
+        expect(asked(path), 0, reason: '$path was asked again');
+      }
+    });
+
+    testWidgets('an old copy is shown, then refreshed', (tester) async {
+      var now = DateTime.now();
+      ScreenCache.debugInstall(clock: () => now);
+      final backend = FakeBackend({
+        'GET /stores/mine': (_) => _json(_storeJson()),
+        'GET /stores/s1/stats': (_) => _json(_stats()),
+        'GET /stores/s1/insights': (_) => _json(_insights()),
+        'GET /stores/s1/manage/listings': (r) => _manage(r, []),
+      });
+      Widget screen() => MaterialApp(
+          home: MyStoreScreen(key: UniqueKey(), repository: backend.repo,
+              listings: ListingsRepository(client: backend.client), animateBackground: false));
+      await tester.pumpWidget(screen());
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(const SizedBox());
+
+      now = now.add(const Duration(minutes: 20));
+      backend.requests.clear();
+      await tester.pumpWidget(screen());
+      await tester.pumpAndSettle();
+      expect(find.text('Your store is open'), findsOneWidget);
+      expect(backend.requests.where((r) => r.url.path == '/stores/mine'), hasLength(1));
     });
   });
 }

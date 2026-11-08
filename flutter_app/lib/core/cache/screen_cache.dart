@@ -42,6 +42,13 @@ enum CacheFeature {
   dashboardSummary,
   dashboardRevenue,
   dashboardMetrics,
+  categoryFeed,
+  categoryInfo,
+  trendingFeed,
+  storeDirectory,
+  storeInsights,
+  storeProducts,
+  callHistory,
 }
 
 /// How long an entry counts as current, and how long it is kept at all.
@@ -88,6 +95,35 @@ class CachePolicies {
 
   /// Daily history, recomputed by the backend's sweep; ten minutes is plenty.
   static const dashboardMetrics = CachePolicy(freshFor: Duration(minutes: 10), keepFor: Duration(days: 7));
+
+  /// A category or type-of-item feed (Electronics, Phones...): new listings
+  /// arrive all day, as on Home, and these were fetched afresh on every open.
+  static const categoryFeed = CachePolicy(freshFor: Duration(minutes: 3), keepFor: Duration(days: 3));
+
+  /// A category's types of item and its filters: seeded by BROKA, like the
+  /// category list itself.
+  static const categoryInfo = CachePolicy(freshFor: Duration(hours: 12), keepFor: Duration(days: 30));
+
+  /// Ranked on views and interest over days; a few minutes late is nothing.
+  static const trendingFeed = CachePolicy(freshFor: Duration(minutes: 5), keepFor: Duration(days: 3));
+
+  /// The store directory as it opens (no search or filter). Shops open and
+  /// close over days, not minutes.
+  static const storeDirectory = CachePolicy(freshFor: Duration(minutes: 10), keepFor: Duration(days: 7));
+
+  /// The store dashboard's numbers. The card refreshes itself while it is
+  /// on screen, so this only decides whether opening it costs a request.
+  static const storeInsights = CachePolicy(freshFor: Duration(minutes: 2), keepFor: Duration(days: 7));
+
+  /// The owner's own products and counts. Changed in the app, these are
+  /// marked out of date (DataChanges); the time limit catches the rest - a
+  /// buyer's deal moving a product along.
+  static const storeProducts = CachePolicy(freshFor: Duration(minutes: 3), keepFor: Duration(days: 7));
+
+  /// Always asked again on open - a missed call must show - but
+  /// conditionally (an unchanged history is an empty 304), and the saved
+  /// copy is drawn first so the screen is never blank on a slow network.
+  static const callHistory = CachePolicy(freshFor: Duration.zero, keepFor: Duration(days: 14));
 }
 
 /// Where an entry lives: whose it is, what it is, and for which parameters.

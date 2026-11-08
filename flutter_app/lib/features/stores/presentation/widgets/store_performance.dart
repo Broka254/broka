@@ -17,9 +17,16 @@
 //   * the live-visitor count is a real count of distinct visitors in the
 //     last five minutes (backend stats.live_visitors) - the same window the
 //     chat header calls "online";
-//   * the card refreshes itself every 30 s while the app is in front, so
-//     the figure moves without a pull. It stops when the app is
-//     backgrounded rather than polling a screen nobody is looking at.
+//   * the card refreshes itself while the app is in front, so the figure
+//     moves without a pull: every 30 s while the numbers are moving, slowing
+//     to every 60 and then 120 s while they are not (and every 120 s with
+//     Data saver), back to 30 s as soon as one changes. It stops when the
+//     app is backgrounded rather than polling a screen nobody is looking at.
+//     Each refresh is the whole insights payload - daily series, top
+//     products, advice - so a quiet afternoon on the dashboard used to cost
+//     120 of them an hour.
+//   * it opens on the numbers saved from the last visit (savedInsights),
+//     asking the server at once only when those are old.
 //
 // A dash, never a zero, for a value that has not loaded: a zero on this
 // screen means "nobody came", which is a very different message from "still
@@ -29,6 +36,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../../../main.dart';
+import '../../../../core/network/data_saver.dart';
 import '../../../../core/utils/result.dart';
 import '../../../../models/seller_standing.dart';
 import '../../../../widgets/axis_line_chart.dart';
@@ -36,8 +44,19 @@ import '../../../../widgets/factor_trend_chart.dart';
 import '../../data/repositories/stores_repository.dart';
 import '../../domain/models/store_insights.dart';
 
-/// How often the card refreshes itself while the app is in front.
+/// How often the card refreshes itself while the app is in front, at its
+/// quickest: the timer ticks this often and a tick refreshes only once
+/// [storeInsightsTicksBetween] ticks have passed.
 const _pollEvery = Duration(seconds: 30);
+
+/// Ticks of 30 s between two self-refreshes, after [quiet] refreshes in a
+/// row brought nothing new: 30, 60, then 120 s. Data saver: 120 s always.
+int storeInsightsTicksBetween(int quiet, {required bool dataSaver}) {
+  if (dataSaver) return 4;
+  if (quiet < 2) return 1;
+  if (quiet < 4) return 2;
+  return 4;
+}
 
 class StorePerformanceSection extends StatefulWidget {
   const StorePerformanceSection({
@@ -75,11 +94,29 @@ class _StorePerformanceSectionState extends State<StorePerformanceSection> {
   bool _changingPeriod = false;
   Timer? _timer;
 
+  /// Self-refreshes in a row that brought nothing new, and ticks since
+  /// the last one.
+  int _quiet = 0;
+  int _ticks = 0;
+
   @override
   void initState() {
     super.initState();
-    _load();
+    unawaited(_open());
     if (widget.animate) _startPolling();
+  }
+
+  /// The saved numbers first; the server at once only when they are old.
+  Future<void> _open() async {
+    final saved = await widget.repo.savedInsights(widget.storeId, days: _days);
+    if (!mounted) return;
+    if (saved != null && _data == null) {
+      setState(() {
+        _data = saved.insights;
+        _loading = false;
+      });
+    }
+    if (saved == null || !saved.fresh) await _load(silent: saved != null);
   }
 
   @override
@@ -102,16 +139,23 @@ class _StorePerformanceSectionState extends State<StorePerformanceSection> {
       // dashboard is battery spent on nothing.
       if (!mounted) return;
       if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
-      _load(silent: true);
+      if (++_ticks < storeInsightsTicksBetween(_quiet, dataSaver: DataSaver.isOn)) return;
+      _ticks = 0;
+      _load(silent: true, poll: true);
     });
   }
 
-  Future<void> _load({bool silent = false}) async {
+  Future<void> _load({bool silent = false, bool poll = false}) async {
     if (!silent && mounted) setState(() => _loading = _data == null);
     final result = await widget.repo.getInsights(widget.storeId, days: _days);
     if (!mounted) return;
     switch (result) {
       case Success(:final data):
+        // Only the self-refresh slows down; a pull, a period change or a
+        // change elsewhere on the screen puts it back to full speed.
+        _quiet = poll && widget.repo.insightsUnchanged(widget.storeId, days: _days)
+            ? _quiet + 1
+            : 0;
         setState(() {
           _data = data;
           _error = null;

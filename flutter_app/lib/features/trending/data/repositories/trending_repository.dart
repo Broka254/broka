@@ -12,15 +12,23 @@ class TrendingRepository {
     String? categoryId,
     int limit = 20,
     int page = 0,
+    // The page as sent, for the Trending screen's saved copy.
+    void Function(List<Map<String, dynamic>> raw)? onRaw,
+    // Cards without the legacy inline images ProductCard never draws.
+    bool lean = false,
   }) async {
     try {
       final params = <String, String>{
         'limit': limit.toString(),
         'offset': (page * limit).toString(),
         if (categoryId != null) 'category_id': categoryId,
+        if (lean) 'lean': 'true',
       };
       final res = await _client.get('/trending', queryParams: params);
-      return Success((res as List).map((e) => BrokaListing.fromJson(e)).toList());
+      final raw = (res as List).cast<Map<String, dynamic>>();
+      final items = raw.map((e) => BrokaListing.fromJson(e)).toList();
+      onRaw?.call(raw);
+      return Success(items);
     } on ApiException catch (e) {
       return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {

@@ -6,12 +6,12 @@
 // the shared collapsing header, and cards like Home's. A call opens its
 // chat; the button at its end calls back.
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
 import '../../../core/utils/result.dart';
 import '../../../main.dart';
+import '../../../widgets/broka_image.dart';
 import '../../../widgets/chat_parts.dart' show kChatGradient;
 import '../../../widgets/collapsing_screen_header.dart';
 import '../../../widgets/constellation_background.dart';
@@ -45,7 +45,23 @@ class _CallHistoryScreenState extends State<CallHistoryScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
+    unawaited(_open());
+  }
+
+  /// The saved calls at once - not a spinner over a blank screen on a slow
+  /// network - then the server, which answers an unchanged history with
+  /// an empty 304 (CallHistoryRepository).
+  Future<void> _open() async {
+    final saved = await _repo.saved();
+    if (!mounted) return;
+    if (saved != null && _calls.isEmpty) {
+      setState(() {
+        _calls.addAll(saved.calls);
+        _nextBefore = saved.nextBefore;
+        _loading = false;
+      });
+    }
+    await _load();
   }
 
   Future<void> _load() async {
@@ -470,16 +486,13 @@ class _Avatar extends StatelessWidget {
     final initial = name.isEmpty ? '?' : name[0].toUpperCase();
     final initials = Center(child: Text(initial, style: const TextStyle(
         color: Colors.white, fontWeight: FontWeight.w700, fontSize: 17)));
-    Widget face = initials;
-    final photo = peer.photo;
-    if (photo != null && photo.isNotEmpty) {
-      try {
-        face = Image.memory(base64Decode(photo), fit: BoxFit.cover,
-            gaplessPlayback: true, errorBuilder: (_, __, ___) => initials);
-      } catch (_) {
-        // Malformed base64: decode throws before errorBuilder can help.
-      }
-    }
+    // A stored photo's URL (from the disk cache) or a legacy base64 one,
+    // decoded once rather than on every rebuild: BrokaImage handles both,
+    // and anything unreadable falls back to the initial.
+    final photo = peer.picture;
+    final Widget face = photo == null || photo.isEmpty
+        ? initials
+        : BrokaImage(photo, fit: BoxFit.cover, placeholder: initials);
     return Stack(children: [
       Container(
         width: 46, height: 46,

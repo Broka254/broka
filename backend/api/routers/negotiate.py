@@ -4961,19 +4961,11 @@ def inbox_etag(threads: list) -> str:
     return 'W/"' + hashlib.sha256(body.encode("utf-8")).hexdigest()[:32] + '"'
 
 
-def _etag_matches(if_none_match: Optional[str], etag: str) -> bool:
-    if not if_none_match:
-        return False
-    def bare(tag: str) -> str:
-        tag = tag.strip()
-        return tag[2:] if tag.startswith("W/") else tag
-    return any(bare(t) == bare(etag) for t in if_none_match.split(",")) or if_none_match.strip() == "*"
-
-
-def body_etag(payload) -> str:
-    """A weak validator for a JSON body: the same data, the same tag."""
-    body = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
-    return 'W/"' + hashlib.sha256(body.encode("utf-8")).hexdigest()[:32] + '"'
+# Shared with the call history (api/core/conditional.py). The names stay
+# here for the code and tests that import them from this module.
+from api.core.conditional import (  # noqa: E402
+    body_etag, conditional_json as _conditional_json, etag_matches as _etag_matches,
+)
 
 
 def conditional_json(request: Request, items) -> Response:
@@ -4985,15 +4977,9 @@ def conditional_json(request: Request, items) -> Response:
     weak mobile connection - and nearly every answer is the one it already
     has, a conversation's worth of bytes each time. Edits and unsends change
     old rows, so a "messages since" cursor would miss them; a tag over the
-    whole answer cannot. A client that sends no If-None-Match gets the same
-    body as before, plus the header.
+    whole answer cannot.
     """
-    payload = jsonable_encoder(items)
-    etag = body_etag(payload)
-    headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
-    if _etag_matches(request.headers.get("if-none-match"), etag):
-        return Response(status_code=304, headers=headers)
-    return JSONResponse(content=payload, headers=headers)
+    return _conditional_json(request, items)
 
 
 @router.get("/inbox/{user_id}")
