@@ -116,11 +116,48 @@ class _StoreListScreenState extends State<StoreListScreen> {
   double? _maxDistanceKm;
   _StoreOrder _order = _StoreOrder.recommended;
 
+  // What the unfiltered directory and the rail were last fetched as, for
+  // the saved copy (StoresRepository.saveDirectory).
+  List<Map<String, dynamic>> _rawStores = const [];
+  List<Map<String, dynamic>> _rawNearby = const [];
+
   @override
   void initState() {
     super.initState();
-    _load();
-    _loadNearby();
+    unawaited(_start());
+  }
+
+  /// Opens on the saved directory when there is one (mobile-data pass,
+  /// 2026-11-08). Every open used to cost three requests: the list without
+  /// a location, the "near you" rail once the GPS answered, and the list
+  /// again with distances. Now a current copy costs none, and an old one
+  /// skips the first, location-less list - the saved stores are on screen
+  /// while the GPS answers.
+  Future<void> _start() async {
+    final saved = await _repo.savedDirectory();
+    if (!mounted) return;
+    if (saved != null && _stores.isEmpty) {
+      setState(() {
+        _stores
+          ..clear()
+          ..addAll(saved.stores);
+        _nearby
+          ..clear()
+          ..addAll(saved.nearby.take(5));
+        _loading = false;
+      });
+    }
+    if (saved == null) unawaited(_load());
+    await _loadNearby(fetch: !(saved?.fresh ?? false), listShown: saved == null);
+  }
+
+  /// The directory as it opens: no search, no filter, recommended order.
+  /// Only this view is saved - a search is rarely asked twice.
+  bool get _defaultView => !_filtersActive && _order == _StoreOrder.recommended;
+
+  void _saveDirectory() {
+    if (_rawStores.isEmpty) return;
+    unawaited(_repo.saveDirectory(_rawStores, _rawNearby).catchError((_) {}));
   }
 
   void _onSearchChanged(String value) {
@@ -140,7 +177,10 @@ class _StoreListScreenState extends State<StoreListScreen> {
     });
     final query = _searchCtrl.text.trim();
     final hasFix = _userLat != null && _userLng != null;
+    final defaultView = _defaultView;
+    List<Map<String, dynamic>>? raw;
     final result = await _repo.listStores(
+        onRaw: (r) => raw = r,
         search: query.isEmpty ? null : query,
         category: _category,
         county: _county,
@@ -151,16 +191,34 @@ class _StoreListScreenState extends State<StoreListScreen> {
         nearestFirst: hasFix && _order == _StoreOrder.nearest);
     if (!mounted) return;
     result.fold(
-      onSuccess: (data) => setState(() {
-        _stores
-          ..clear()
-          ..addAll(data);
-        _loading = false;
-      }),
-      onFailure: (msg, __) => setState(() {
-        _error = msg;
-        _loading = false;
-      }),
+      onSuccess: (data) {
+        setState(() {
+          _stores
+            ..clear()
+            ..addAll(data);
+          _loading = false;
+        });
+        if (defaultView && raw != null) {
+          _rawStores = raw!;
+          _saveDirectory();
+        }
+      },
+      onFailure: (msg, __) {
+        // The saved directory is on screen: an old list of shops beats an
+        // error page. A filtered view that failed must not pass the
+        // unfiltered list off as its answer, so that one still says so.
+        if (defaultView && _stores.isNotEmpty) {
+          setState(() => _loading = false);
+          ScaffoldMessenger.maybeOf(context)?.showSnackBar(const SnackBar(
+            content: Text("Couldn't refresh. Showing the stores you already had."),
+          ));
+          return;
+        }
+        setState(() {
+          _error = msg;
+          _loading = false;
+        });
+      },
     );
   }
 
@@ -266,7 +324,11 @@ class _StoreListScreenState extends State<StoreListScreen> {
   /// 'Stores near you' for the general directory: live GPS first, the
   /// saved session point as fallback - never a stale zero. A missing fix
   /// leaves the section hidden, not a 0 km list.
-  Future<void> _loadNearby() async {
+  /// [fetch] false: a current saved copy is on screen, so only the GPS fix
+  /// is taken (for the distance filter and "Nearest"), and nothing is asked
+  /// of the server. [listShown] false: the main list was not fetched yet
+  /// (a saved one is showing) - without a fix it is fetched now.
+  Future<void> _loadNearby({bool fetch = true, bool listShown = true}) async {
     // Live GPS only. The saved session point (ApiService.currentUserLat/Lng)
     // is the signup fix and can be tens of km stale - near you from a stale
     // point is worse than no near you at all.
@@ -298,12 +360,18 @@ class _StoreListScreenState extends State<StoreListScreen> {
       } catch (_) {}
     }
     if (!mounted) return;
-    if (lat == null || lng == null) return;
+    if (lat == null || lng == null) {
+      if (fetch && !listShown) await _load();
+      return;
+    }
     setState(() {
       _userLat = lat;
       _userLng = lng;
     });
+    if (!fetch) return;
+    List<Map<String, dynamic>>? raw;
     final result = await _repo.listStores(
+        onRaw: (r) => raw = r,
         lat: lat,
         lng: lng,
         maxDistanceKm: Store.nearRadiusKm,
@@ -311,11 +379,14 @@ class _StoreListScreenState extends State<StoreListScreen> {
         limit: 10);
     if (!mounted) return;
     result.fold(
-      onSuccess: (data) => setState(() {
-        _nearby
-          ..clear()
-          ..addAll(data.take(5));
-      }),
+      onSuccess: (data) {
+        setState(() {
+          _nearby
+            ..clear()
+            ..addAll(data.take(5));
+        });
+        if (raw != null) _rawNearby = raw!.take(5).toList();
+      },
       onFailure: (_, __) {},
     );
     // Refresh distances on the main list once the fix is known.

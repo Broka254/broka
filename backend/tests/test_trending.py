@@ -159,3 +159,31 @@ class TestTrending:
         assert lid in [i["id"] for i in (await client.get("/trending?limit=100")).json()]
         assert (await client.delete(f"/listings/{lid}", headers=h)).status_code in (200, 204)
         assert lid not in [i["id"] for i in (await client.get("/trending?limit=100")).json()]
+
+    @pytest.mark.asyncio
+    async def test_lean_trending_cards_leave_out_what_a_card_never_draws(self, client, seller_token):
+        # Mobile-data pass (2026-11-08): the Trending screen asks lean, like
+        # Home. A legacy listing with both an inline showcase and an inline
+        # photo is drawn from its showcase; the photo is dead weight.
+        h = {"Authorization": f"Bearer {seller_token}"}
+        made = await client.post("/listings/", json={
+            "description": "Well kept, works perfectly - selling because I upgraded.",
+            "name": "Lean Trending Lamp", "category": "furniture", "price": 3000,
+            "lat": -1.286, "lng": 36.817,
+        }, headers=h)
+        lid = made.json()["id"]
+        async with AsyncSessionLocal() as db:
+            listing = (await db.execute(select(Listing).where(Listing.id == lid))).scalar_one()
+            listing.views = 900
+            listing.showcase_image_url = "data:image/png;base64,c2hvd2Nhc2U="
+            listing.verified_photos = "cGhvdG8x"
+            await db.commit()
+
+        def card(rows):
+            return next(i for i in rows if i["id"] == lid)
+
+        full = card((await client.get("/trending", params={"limit": 100})).json())
+        assert full["verified_photos"] == "cGhvdG8x", "older builds: unchanged"
+        lean = card((await client.get("/trending", params={"limit": 100, "lean": "true"})).json())
+        assert lean["showcase_image_url"] == "data:image/png;base64,c2hvd2Nhc2U="
+        assert lean["verified_photos"] is None

@@ -122,6 +122,26 @@ class ApiClient {
     return _handleResponse(response);
   }
 
+  /// A GET that sends [etag] as If-None-Match. An unchanged answer comes
+  /// back as an empty 304 - `notModified` true and no `data` - so the caller
+  /// shows the copy it already holds; otherwise the body as [get] returns
+  /// it, with the server's new ETag (null from a server that sends none).
+  /// Errors throw ApiException as [get] does.
+  Future<({bool notModified, dynamic data, String? etag})> getConditional(
+    String path, {
+    Map<String, String>? queryParams,
+    String? etag,
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    final uri = Uri.parse('$_baseUrl$path').replace(queryParameters: queryParams);
+    final response = await _send(() => _http
+        .get(uri, headers: {..._headers, if (etag != null && etag.isNotEmpty) 'If-None-Match': etag})
+        .timeout(timeout));
+    final tag = response.headers['etag'];
+    if (response.statusCode == 304) return (notModified: true, data: null, etag: tag ?? etag);
+    return (notModified: false, data: _handleResponse(response), etag: tag);
+  }
+
   /// [headers] are sent as well as the auth headers - an
   /// X-Idempotency-Key, say.
   Future<dynamic> post(

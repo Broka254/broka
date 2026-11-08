@@ -217,3 +217,81 @@ async def test_bad_paging_input_is_refused(client):
 async def test_signed_out_is_refused(client):
     r = await client.get("/calls/history")
     assert r.status_code in (401, 403)
+
+
+# ── Mobile data (2026-11-08) ─────────────────────────────────────────────────
+# The app opens the call history from the Inbox, often, and the answer is
+# nearly always the one it already has: it now revalidates with the last
+# ETag and gets an empty 304. Lean answers send a stored photo as its small
+# URL instead of the base64 selfie, once per open.
+
+@pytest.mark.asyncio
+async def test_an_unchanged_call_history_is_a_304_and_a_new_call_is_not(client):
+    listing_id, seller, (buyer,) = await _people()
+    await _log(client, listing_id, buyer, seller, seller, "completed", duration=30)
+    first = await client.get("/calls/history", headers=_auth(seller))
+    assert first.status_code == 200
+    etag = first.headers["etag"]
+    again = await client.get("/calls/history", headers={**_auth(seller), "If-None-Match": etag})
+    assert again.status_code == 304
+    assert again.content == b""
+
+    await _log(client, listing_id, buyer, seller, seller, "missed")
+    changed = await client.get("/calls/history", headers={**_auth(seller), "If-None-Match": etag})
+    assert changed.status_code == 200
+    assert len(changed.json()["calls"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_the_call_history_tag_ignores_the_last_seen_clock(client):
+    listing_id, seller, (buyer,) = await _people()
+    await _log(client, listing_id, buyer, seller, seller, "completed", duration=5)
+    async with AsyncSessionLocal() as db:
+        await db.execute(User.__table__.update().where(User.id == buyer)
+                         .values(last_seen=datetime.utcnow() - timedelta(hours=3)))
+        await db.commit()
+    first = await client.get("/calls/history", headers=_auth(seller))
+    async with AsyncSessionLocal() as db:
+        await db.execute(User.__table__.update().where(User.id == buyer)
+                         .values(last_seen=datetime.utcnow() - timedelta(hours=5)))
+        await db.commit()
+    again = await client.get("/calls/history",
+                             headers={**_auth(seller), "If-None-Match": first.headers["etag"]})
+    assert again.status_code == 304, "only the 'Active 3h ago' text moved"
+
+
+@pytest.mark.asyncio
+async def test_lean_sends_a_stored_photo_as_its_url_and_older_builds_get_base64(client):
+    import json as _json
+    from api.models.media import MediaAsset
+    listing_id, seller, (buyer,) = await _people()
+    await _log(client, listing_id, buyer, seller, buyer, "completed", duration=5)
+    asset_id = str(uuid.uuid4())
+    async with AsyncSessionLocal() as db:
+        db.add(MediaAsset(
+            id=asset_id, owner_id=seller, purpose="avatar", storage="db", width=480,
+            height=480, sha256="x", variants=_json.dumps({
+                "thumb": {"key": f"img/{asset_id}/thumb.webp", "w": 480, "h": 480},
+            })))
+        await db.execute(User.__table__.update().where(User.id == seller)
+                         .values(profile_photo_id=asset_id))
+        await db.commit()
+
+    lean = (await client.get("/calls/history", headers=_auth(buyer),
+                             params={"lean": "true"})).json()["people"][seller]
+    assert lean["photo"] is None
+    assert lean["photo_url"].endswith(f"{asset_id}/thumb.webp")
+
+    full = (await client.get("/calls/history", headers=_auth(buyer))).json()["people"][seller]
+    assert full["photo"] == "c2VsbGVy"
+    assert "photo_url" not in full
+
+
+@pytest.mark.asyncio
+async def test_lean_keeps_an_unconverted_selfie(client):
+    listing_id, seller, (buyer,) = await _people()
+    await _log(client, listing_id, buyer, seller, buyer, "completed", duration=5)
+    person = (await client.get("/calls/history", headers=_auth(buyer),
+                               params={"lean": "true"})).json()["people"][seller]
+    assert person["photo"] == "c2VsbGVy"
+    assert person["photo_url"] is None

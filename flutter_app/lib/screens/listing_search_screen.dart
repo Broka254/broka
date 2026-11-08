@@ -208,6 +208,9 @@ class _ListingSearchScreenState extends State<ListingSearchScreen> {
       lng: ApiService.currentUserLng,
       limit: 20,
       offset: page * 20,
+      // Only ProductCards draw these results: no legacy inline images
+      // a card never shows.
+      lean: true,
     );
     switch (result) {
       case Success(:final data):

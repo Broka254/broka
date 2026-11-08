@@ -30,7 +30,7 @@ import logging
 import secrets
 from typing import Dict, Optional
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import or_, select
@@ -41,6 +41,7 @@ from api.security import get_current_user, create_call_token, decode_call_token
 import httpx
 
 from api.core.client_ip import client_ip as resolve_client_ip
+from api.core.conditional import conditional_json
 from api.domains.media.service import avatar_url
 from api.core.timeutil import parse_iso_to_naive_utc
 from api.core.config import settings
@@ -1623,8 +1624,10 @@ CALL_HISTORY_MAX_LIMIT = 100
 
 @router.get("/history")
 async def get_call_history(
+    request: Request,
     limit:  int           = Query(default=50, ge=1, le=CALL_HISTORY_MAX_LIMIT),
     before: Optional[str] = Query(default=None),
+    lean:   bool          = Query(default=False),
     db:      AsyncSession = Depends(get_db),
     current: dict         = Depends(get_current_user),
 ):
@@ -1646,6 +1649,16 @@ async def get_call_history(
     with the same buyer would otherwise carry it fifty times.
 
     `before` pages backwards: pass the previous page's `next_before`.
+
+    lean (app builds that draw `photo_url`): a person whose photo is stored
+    as an image asset gets its small URL in `photo_url` and no inline
+    `photo` - the base64 selfie is often a megabyte, sent again on every
+    open of the screen. Without lean the answer is as it always was.
+
+    Conditional (mobile-data pass): the answer carries an ETag and a
+    matching If-None-Match gets an empty 304. The tag leaves out
+    `last_seen` ("Active 5m ago"), which follows the clock: with it the tag
+    changed every minute whether or not anyone had called.
     """
     uid = current["id"]
     from api.models.store import Store
@@ -1727,20 +1740,35 @@ async def get_call_history(
     if people_ids:
         from api.core.presence import online_status
         users = (await db.execute(select(User).where(User.id.in_(people_ids)))).scalars().all()
+        avatars: dict = {}
+        if lean:
+            from api.domains.media.service import asset_urls, load_assets
+            assets = await load_assets(db, [u.profile_photo_id for u in users if u.profile_photo_id])
+            for u in users:
+                urls = asset_urls(assets.get(u.profile_photo_id)) if u.profile_photo_id else None
+                if urls and urls.get("thumb"):
+                    avatars[u.id] = urls["thumb"]
         for u in users:
             is_on, last_seen = online_status(u.last_seen)
-            people[u.id] = {
+            person = {
                 "name":      u.name,
-                "photo":     u.profile_photo,
+                "photo":     None if u.id in avatars else u.profile_photo,
                 "is_online": is_on,
                 "last_seen": last_seen,
             }
+            if lean:
+                person["photo_url"] = avatars.get(u.id)
+            people[u.id] = person
 
-    return {
+    body = {
         "calls":       calls,
         "people":      people,
         "next_before": calls[-1]["created_at"] if more and calls else None,
     }
+    tag = {**body, "people": {
+        pid: {k: v for k, v in p.items() if k != "last_seen"} for pid, p in people.items()
+    }}
+    return conditional_json(request, body, tag_over=tag)
 
 
 # ── WebSocket relay ────────────────────────────────────────────────────────────

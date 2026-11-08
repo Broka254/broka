@@ -15,17 +15,25 @@
 // choices instead (title deed, grade), and one with neither has no row. The
 // brand a seller typed is filed under these same spellings by the server, so
 // "Samsung" finds "samsung galaxy a54" too.
+//
+// Kept on the phone like Home and the Zones (2026-11-08): the feed for the
+// brand and filters in use (no search) opens from the saved copy and is
+// fetched again only past CachePolicies.categoryFeed, and the type's
+// filters come from the saved copy while it is current.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../core/cache/screen_cache.dart';
 import '../../../core/utils/result.dart';
 import '../../../main.dart';
+import '../../../services/api_service.dart';
 import '../../../widgets/artwork_hero_header.dart';
 import '../../../widgets/broka_search_field.dart';
 import '../../../widgets/collapsing_screen_header.dart';
 import '../../../widgets/constellation_background.dart';
 import '../../../widgets/product_grid_view.dart';
+import '../../listings/data/listing_feed_cache.dart';
 import '../../listings/data/repositories/listings_repository.dart';
 import '../../listings/domain/models/listing.dart';
 import '../data/repositories/categories_repository.dart';
@@ -81,6 +89,12 @@ class _SubcategoryScreenState extends State<SubcategoryScreen> {
   final _scrollController = ScrollController();
   final _gridController = ProductGridController();
 
+  /// The saved feed's listings as the server sent them (ListingFeedCache).
+  final Map<String, Map<String, dynamic>> _rawListings = {};
+
+  /// The feed's count, saved with it.
+  final _total = ValueNotifier<int?>(null);
+
   Category get _sub => widget.subcategory;
   bool get _narrow => MediaQuery.sizeOf(context).width < 360;
 
@@ -96,7 +110,13 @@ class _SubcategoryScreenState extends State<SubcategoryScreen> {
   @override
   void initState() {
     super.initState();
+    _total.addListener(_onSavedTotal);
     _loadFields();
+  }
+
+  void _onSavedTotal() {
+    final t = _total.value;
+    if (mounted && t != null && t != _resultCount) setState(() => _resultCount = t);
   }
 
   @override
@@ -104,11 +124,30 @@ class _SubcategoryScreenState extends State<SubcategoryScreen> {
     _searchDebounce?.cancel();
     _searchCtrl.dispose();
     _scrollController.dispose();
+    _total.dispose();
     super.dispose();
   }
 
-  Future<void> _loadFields() async {
-    final result = await categoriesRepository.getFilters(_sub.id);
+  /// The saved feed for what is on screen now; none for a search.
+  ListingFeedCache? _feedCache() {
+    if (_search.isNotEmpty) return null;
+    return ListingFeedCache(
+      key: CacheKey.forUser(CacheFeature.categoryFeed, ApiService.currentUserId, {
+        'subcategory': _sub.id,
+        'sort': _sort,
+        'condition': _appliedFilters['condition'],
+        'min': _appliedFilters['minPrice'],
+        'max': _appliedFilters['maxPrice'],
+        'attributes': _attributes.toString(),
+      }),
+      raw: _rawListings,
+      policy: CachePolicies.categoryFeed,
+      total: _total,
+    );
+  }
+
+  Future<void> _loadFields({bool forceRefresh = false}) async {
+    final result = await categoriesRepository.getFilters(_sub.id, forceRefresh: forceRefresh);
     if (!mounted) return;
     result.fold(
       onSuccess: (data) => setState(() {
@@ -120,7 +159,7 @@ class _SubcategoryScreenState extends State<SubcategoryScreen> {
   }
 
   Future<void> _onRefresh() async {
-    await Future.wait([_gridController.refresh(), _loadFields()]);
+    await Future.wait([_gridController.refresh(), _loadFields(forceRefresh: true)]);
   }
 
   Future<void> _openFilters() async {
@@ -176,11 +215,19 @@ class _SubcategoryScreenState extends State<SubcategoryScreen> {
       attributes: _attributes,
       limit: 20,
       offset: page * 20,
+      lean: true,
+      onRaw: (raw) {
+        for (final j in raw) {
+          final id = j['id'];
+          if (id is String) _rawListings[id] = j;
+        }
+      },
     );
     switch (result) {
       case Success(:final data):
-        if (mounted && feed == _feedKey && _resultCount != data.total) {
-          setState(() => _resultCount = data.total);
+        if (mounted && feed == _feedKey) {
+          if (page == 0) _total.value = data.total;
+          if (_resultCount != data.total) setState(() => _resultCount = data.total);
         }
         return data.items;
       case Failure(:final message):
@@ -253,6 +300,8 @@ class _SubcategoryScreenState extends State<SubcategoryScreen> {
                     controller: _gridController,
                     padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
                     fetchPage: _fetchPage,
+                    cache: _feedCache(),
+                    itemId: (item) => (item as BrokaListing).id,
                     onTapItem: (item) => Navigator.pushNamed(context, '/product',
                         arguments: {'listingId': (item as BrokaListing).id}),
                     onViewStore: (_, storeSlug) =>

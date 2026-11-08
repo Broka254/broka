@@ -6,6 +6,13 @@
 // after the app was closed, after "back to Home" following a long absence,
 // or offline - shows these at once; ProductGridView refreshes them in the
 // background only once they are past CachePolicies.homeFeed.
+//
+// The Category Zones, the type-of-item screens and Trending keep their
+// feeds the same way, each under its own key and policy (2026-11-08): they
+// were the screens people browse most after Home, and every visit fetched
+// page 0 again.
+import 'package:flutter/foundation.dart';
+
 import '../../../core/cache/screen_cache.dart';
 import '../../../widgets/product_grid_view.dart';
 import '../domain/models/listing.dart';
@@ -17,7 +24,14 @@ class ListingFeedCache implements ProductGridCache {
     this.policy = CachePolicies.homeFeed,
     this.pageSize = 20,
     this.maxItems = 60,
+    this.total,
   });
+
+  /// The feed's result count ("128 listings"), for a screen that shows one:
+  /// saved with the items and handed back by [read], so a saved feed opens
+  /// with its count rather than a blank. The screen sets it from each
+  /// page's answer.
+  final ValueNotifier<int?>? total;
 
   final CacheKey key;
 
@@ -52,6 +66,8 @@ class ListingFeedCache implements ProductGridCache {
       }
     }
     if (items.isEmpty) return null;
+    final savedTotal = data['total'];
+    if (total != null && savedTotal is num) total!.value = savedTotal.toInt();
     return ProductGridSnapshot(
       items: items,
       page: (data['page'] as num?)?.toInt() ?? (items.length / pageSize).ceil(),
@@ -81,6 +97,7 @@ class ListingFeedCache implements ProductGridCache {
         'items': kept,
         'page': trimmed ? maxItems ~/ pageSize : page,
         'has_more': trimmed ? true : hasMore,
+        if (total?.value != null) 'total': total!.value,
       },
       fetchedAt: fetchedAt,
     );

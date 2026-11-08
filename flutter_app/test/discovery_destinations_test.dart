@@ -227,15 +227,17 @@ void main() {
     });
 
     testWidgets('a backend failure offers a retry that works', (tester) async {
-      // Trending and the product grid swallow failures into an empty list by
-      // design, so this covers the three that surface an error.
+      // Trending used to swallow a failure into an empty page - "nothing
+      // is trending", and the feed ended for good on one dropped
+      // connection. It surfaces the error with a Retry now (2026-11-08).
       var failing = true;
       setFakeRoute((uri) {
         if (!failing) return null;
         final p = uri.path;
         if (p.startsWith('/auctions') ||
             p.startsWith('/traders') ||
-            p.startsWith('/stores')) {
+            p.startsWith('/stores') ||
+            p.startsWith('/trending')) {
           // A shape the repository cannot parse produces a real Failure.
           return {'detail': 'backend exploded'};
         }
@@ -246,6 +248,7 @@ void main() {
         () => const AuctionHouseScreen(),
         () => const TraderListScreen(),
         () => const StoreListScreen(),
+        () => const TrendingScreen(),
       ]) {
         failing = true;
         await tester.pumpWidget(host(screen()));

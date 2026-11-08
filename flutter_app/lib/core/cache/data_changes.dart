@@ -58,15 +58,19 @@ class DataChanges {
     DataDomain.listings: [
       CacheFeature.homeFeed, CacheFeature.menuListingCount, CacheFeature.dashboardListings,
       CacheFeature.dashboardSummary, CacheFeature.storeSummary, CacheFeature.launchOffers,
+      CacheFeature.categoryFeed, CacheFeature.trendingFeed, CacheFeature.storeProducts,
+      CacheFeature.storeInsights,
     ],
     DataDomain.account: [CacheFeature.menuAccount, CacheFeature.dashboardProfile],
     DataDomain.store: [
       CacheFeature.storeSummary, CacheFeature.storeStats, CacheFeature.launchOffers,
-      CacheFeature.dashboardSummary,
+      CacheFeature.dashboardSummary, CacheFeature.storeDirectory, CacheFeature.storeInsights,
+      CacheFeature.storeProducts,
     ],
     DataDomain.deals: [
       CacheFeature.dashboardRevenue, CacheFeature.dashboardMetrics, CacheFeature.dashboardSummary,
       CacheFeature.dashboardProfile, CacheFeature.dashboardListings, CacheFeature.menuAccount,
+      CacheFeature.storeProducts, CacheFeature.storeInsights,
     ],
   };
 
