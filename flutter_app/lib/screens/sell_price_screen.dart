@@ -14,6 +14,9 @@
 // price and can check what similar live listings on BROKA ask. The price
 // the seller picks there comes back into the field. Without Pro the card
 // opens the plans, saying why: a listing priced right sells faster.
+// Since 2026-11-08 the card is a strip (sell_zeno_boost_card.dart) and the
+// asking price is on screen under it; the hidden price range that shows
+// what Pro would find is in the plans' sheet.
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../core/utils/result.dart';
@@ -116,7 +119,10 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
               'sells faster - Zeno suggests your price and checks it against similar listings on BROKA.',
           upgradeTo: 'pro',
           feature: PremiumFeature.priceChecks,
-          premium: widget.premium);
+          premium: widget.premium,
+          // What Pro shows, with the numbers hidden: the seller sees what
+          // they'd get rather than reading about it.
+          preview: const ZenoLockedRange());
       if (opened && mounted) await _loadPremium();
       return;
     }
@@ -415,20 +421,12 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
           key: const Key('sell-zeno-price'),
           icon: Icons.insights_rounded,
           title: isAuction ? 'Set the right starting bid with Zeno' : 'Price it to sell with Zeno',
-          benefit: 'Listings priced right from the start sell faster. Zeno suggests your price and '
-              'checks what similar listings on BROKA ask.',
-          badge: 'PRO',
+          benefit: 'Listings priced right from the start sell faster.',
+          // No plan's name while plans are off: it is free for everyone.
+          badge: (_premium?.enabled ?? true) ? 'PRO' : null,
           locked: _pricingLocked,
           footnote: _checksLeftText,
-          points: const [
-            'What similar items on BROKA ask right now',
-            'One clear number to ask - and why',
-            "Know if you're overpriced before buyers do",
-          ],
-          // What Pro shows, with the numbers hidden: the seller sees what
-          // they'd get rather than reading about it.
-          preview: _pricingLocked ? const ZenoLockedRange() : null,
-          cta: _pricingLocked ? 'Unlock with Pro' : 'Price it with Zeno',
+          cta: _pricingLocked ? 'Unlock' : 'Price it',
           onTap: _priceWithZeno,
         ),
         SellGap.section,

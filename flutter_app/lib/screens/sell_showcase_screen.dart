@@ -1081,48 +1081,33 @@ class _Tag extends StatelessWidget {
 
 
 /// Why a cover is worth making: what it does for the sale.
+///
+/// One line since 2026-11-08. Its three ticks (about 100 dp) each said
+/// again what the step already does: the looks are the picker above, and
+/// "your item stays as it is" is the note under the gallery button. The
+/// plans' sheet for AI covers makes the full case.
 class _SellsFasterNote extends StatelessWidget {
   const _SellsFasterNote();
-
-  static const _points = [
-    'Made from your own photo - your item stays exactly as it is',
-    'Studio, outdoor or premium looks, ready in about a minute',
-    'Buyers still see your real camera photos on the listing',
-  ];
 
   @override
   Widget build(BuildContext context) => Container(
         key: const Key('showcase-sells-faster'),
-        padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: BrokaColors.neonGreen.withOpacity(0.10),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: BrokaColors.neonGreen.withOpacity(0.45)),
         ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Icon(Icons.trending_up_rounded, color: BrokaColors.neonGreen, size: 20),
-            SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                'Listings with a striking cover get noticed first on Home - more taps, '
-                'more offers, a faster sale.',
-                style: TextStyle(color: BrokaColors.textHigh, fontSize: 12.5, height: 1.45,
-                    fontWeight: FontWeight.w600),
-              ),
+        child: const Row(children: [
+          Icon(Icons.trending_up_rounded, color: BrokaColors.neonGreen, size: 18),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'A striking cover gets noticed first on Home - more taps, a faster sale.',
+              style: TextStyle(color: BrokaColors.textHigh, fontSize: 12.5, height: 1.4,
+                  fontWeight: FontWeight.w600),
             ),
-          ]),
-          const SizedBox(height: 10),
-          for (final point in _points)
-            Padding(
-              padding: const EdgeInsets.only(left: 30, bottom: 6),
-              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Icon(Icons.check_rounded, size: 15, color: BrokaColors.neonGreen),
-                const SizedBox(width: 8),
-                Expanded(child: Text(point,
-                    style: const TextStyle(color: BrokaColors.textHigh, fontSize: 12, height: 1.4))),
-              ]),
-            ),
+          ),
         ]),
       );
 }

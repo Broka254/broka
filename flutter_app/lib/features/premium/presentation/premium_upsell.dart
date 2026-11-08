@@ -12,6 +12,12 @@
 // terms, what else the suggested plan includes, and what it costs a day
 // - the plan's real numbers from GET /pricing/plans, never figures typed
 // into the app.
+//
+// 2026-11-08: and what the seller would get. The sell steps now offer
+// Zeno's help as a strip (sell_zeno_boost_card.dart); the example that
+// used to fill half a step - Zeno's lines beside "phone for sale, call
+// me", the price range with its numbers hidden, the text Zeno would send -
+// is the sheet's [preview], shown here, where the seller weighs it up.
 import 'package:flutter/material.dart';
 
 import '../../../core/network/api_client.dart';
@@ -77,7 +83,8 @@ List<PremiumPlan>? _plansCache;
 /// them - what they have left may have changed, so the caller re-checks.
 ///
 /// [feature] (a PremiumFeature) adds what it does for the sale and what
-/// the suggested plan costs; [premium] is where the plans are read, for
+/// the suggested plan costs; [preview], what it would give the user's own
+/// item, under the message; [premium] is where the plans are read, for
 /// tests.
 Future<bool> showPremiumUpsell(
   BuildContext context, {
@@ -85,6 +92,7 @@ Future<bool> showPremiumUpsell(
   String? upgradeTo,
   String? feature,
   PremiumRepository? premium,
+  Widget? preview,
 }) async {
   final pitch = UpsellPitch.of(feature);
   final open = await showModalBottomSheet<bool>(
@@ -122,6 +130,12 @@ Future<bool> showPremiumUpsell(
               key: const Key('upsell-message'),
               textAlign: TextAlign.center,
               style: const TextStyle(color: BrokaColors.textMid, fontSize: 13.5, height: 1.45)),
+          if (preview != null) ...[
+            const SizedBox(height: 16),
+            // Full width: the examples are left-aligned lines, and a
+            // column centres anything narrower than itself.
+            SizedBox(width: double.infinity, child: preview),
+          ],
           if (pitch != null) ...[
             const SizedBox(height: 18),
             for (final point in pitch.points)

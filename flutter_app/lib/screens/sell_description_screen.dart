@@ -22,6 +22,11 @@
 // 2026-10-08: the card makes its case - an example of Zeno's lines beside
 // the usual "phone for sale, call me", what it does in three ticks, and,
 // for a seller without a plan, that the first one is free (plans.FREE_TRIAL).
+//
+// 2026-11-08: as a strip (sell_zeno_boost_card.dart). The card had grown
+// to about 460 dp and put the description box - the step itself - below
+// the fold. The example now opens with the plans' sheet, where a seller
+// without a plan decides; the box is on screen from the start.
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../core/network/api_client.dart';
@@ -103,7 +108,8 @@ class _SellDescriptionScreenState extends State<SellDescriptionScreen> {
   Future<void> _offerPlans(String message, {String? upgradeTo}) async {
     final opened = await showPremiumUpsell(context,
         message: message, upgradeTo: upgradeTo, feature: PremiumFeature.aiDescriptions,
-        premium: widget.premium);
+        premium: widget.premium,
+        preview: ZenoBeforeAfter(category: _data.category, subcategory: _data.subcategoryName));
     if (opened && mounted) await _loadPremium();
   }
 
@@ -265,24 +271,14 @@ class _SellDescriptionScreenState extends State<SellDescriptionScreen> {
           key: const Key('sell-zeno-describe'),
           icon: Icons.auto_awesome_rounded,
           title: _writing ? 'Zeno is studying your photo…' : 'Let Zeno write it from your photo',
-          benefit: 'Clear, detailed descriptions sell faster - buyers get their answers '
-              'without having to message you first.',
-          badge: 'PREMIUM',
+          benefit: 'Clear, detailed descriptions sell faster.',
+          // No plan's name while plans are off: it is free for everyone.
+          badge: (_premium?.enabled ?? true) ? 'PREMIUM' : null,
           locked: _zenoLocked,
           busy: _writing,
           footnote: _zenoLeftText,
           ribbon: _freeTry ? 'FIRST ONE FREE' : null,
-          points: const [
-            'Reads your photo: brand, model, condition',
-            "Asks you only what the photo can't show",
-            'You check and change every word',
-          ],
-          // An example only while the box is empty: once the seller has
-          // words of their own, the card shouldn't push them down.
-          preview: _descCtrl.text.trim().isEmpty && !_writing
-              ? ZenoBeforeAfter(category: _data.category, subcategory: _data.subcategoryName)
-              : null,
-          cta: _zenoLocked ? 'Unlock descriptions by Zeno' : 'Write it for me',
+          cta: _zenoLocked ? 'Unlock' : (_freeTry ? 'Try free' : 'Write it'),
           onTap: _zenoWrite,
         ),
         SellGap.section,
