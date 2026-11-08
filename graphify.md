@@ -1462,6 +1462,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `safe_payment_test.dart` — Paying safely while BROKA handles no deal payments (backend: GET /pricing/safe-payment).
 - `screen_cache_test.dart` — ScreenCache, DataChanges and the network instrumentation (data-saving pass): the shared cache-first layer Home, the Menu, the store section…
 - `sell_listing_with_zeno_test.dart` — Listing with Zeno, and the sell wizard's way out (2026-10-08).
+- `sell_premium_strip_test.dart` — The sell wizard's premium offers as strips (2026-11-08).
 - `sell_wizard_overhaul_test.dart` — The sell wizard after the 2026-09-25 listing overhaul (LISTING_OVERHAUL.md).
 - `sell_zeno_premium_test.dart` — Zeno's premium help in the sell wizard (2026-10-05), and the case the wizard makes for a plan while a seller is posting.
 - `seller_dashboard_shell_test.dart` — The Seller Dashboard on Home's visual system (2026-09-26): the constellation, the shared header language, and a pill switcher for its three…
@@ -1595,7 +1596,7 @@ Modules:
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `BUSINESS_MODEL_REVIEW.md` — BROKA's business model without the commission
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Cache-first stores, calls, categories and Trending (2026-11-08)
+- `CHANGES.md` — The sell wizard's premium offers are strips, and its steps fit (2026-11-08)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
