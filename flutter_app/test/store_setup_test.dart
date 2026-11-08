@@ -1512,7 +1512,7 @@ void main() {
       int asked(String path) =>
           backend.requests.where((r) => r.method == 'GET' && r.url.path == path).length;
       expect(asked('/stores/mine'), 1);
-      expect(asked('/stores/s1/insights'), 1);
+      expect(asked('/stores/s1/stats'), 1);
 
       await tester.pumpWidget(const SizedBox());
       backend.requests.clear();
