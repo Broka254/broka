@@ -778,7 +778,7 @@ class _StoreListScreenState extends State<StoreListScreen> {
           (_, i) => StoreCard(
             key: Key('$keyPrefix-${stores[i].id}'),
             store: stores[i],
-            onTap: () => visitStoreWebsite(context, stores[i]),
+            onTap: () => openStoreHomeFor(context, stores[i]),
             onDetails: () =>
                 showStoreDetails(context, stores[i], repository: _repo),
             onMap: () => openStoreMap(context, stores[i],

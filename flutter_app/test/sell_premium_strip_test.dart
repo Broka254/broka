@@ -287,7 +287,6 @@ void main() {
         question: 'Hello Wanjiku! So you never miss a sale: if a buyer messages about '
             '"Samsung Galaxy A54" and you\'re not around, may I text your phone?',
         feeRepository: _fees(),
-        premiumRepository: _FakePremium(_me()),
       ));
       final fee = tester.getRect(find.byKey(const Key('sell-fee-teaser')));
       final goLive = tester.getRect(find.byKey(const Key('sell-go-live')));
@@ -297,22 +296,17 @@ void main() {
       expect(find.textContaining('Listing fee KES 84 for 2 months'), findsOneWidget);
     });
 
-    testWidgets('texts are offered as a strip; the text Zeno would send opens with the plans',
+    testWidgets('the availability text is free - no plans strip on Go live',
         (tester) async {
       await _open(tester, SellZenoAlertScreen(
         data: _draft(),
         question: 'Shall I text you?',
         feeRepository: _fees(enabled: false),
-        premiumRepository: _FakePremium(_me()),
       ));
+      expect(find.byKey(const Key('sell-sms-plans')), findsNothing);
       expect(find.byKey(const Key('sell-sms-preview')), findsNothing);
-      expect(_height(tester, 'sell-sms-plans'), lessThan(160));
+      expect(find.textContaining('One text per buyer'), findsOneWidget);
       expect(find.byKey(const Key('sell-fee-teaser')), findsNothing, reason: 'fees are off');
-
-      await _tap(tester, find.byKey(const Key('sell-sms-plans')));
-      expect(find.byKey(const Key('upsell-message')), findsOneWidget);
-      expect(find.byKey(const Key('sell-sms-preview')), findsOneWidget);
-      expect(find.textContaining('a buyer wants your Samsung Galaxy A54'), findsOneWidget);
     });
   });
 }

@@ -72,6 +72,7 @@ Future<void> _pump(
   required bool hasLocation,
   Size size = const Size(390, 844),
   TextScaler textScaler = TextScaler.noScaling,
+  Map<String, WidgetBuilder>? routes,
 }) async {
   tester.view.physicalSize = Size(size.width * 3, size.height * 3);
   tester.view.devicePixelRatio = 3;
@@ -81,6 +82,7 @@ Future<void> _pump(
       data: MediaQuery.of(context).copyWith(textScaler: textScaler),
       child: child!,
     ),
+    routes: routes ?? const {},
     home: StoreListScreen(
       repository: repository,
       locate: hasLocation
@@ -122,6 +124,31 @@ void main() {
     expect(second.top, greaterThan(first.top));
     expect(second.left, closeTo(first.left, 0.5));
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a card opens the app store home, not the website', (tester) async {
+    Object? args;
+    await _pump(
+      tester,
+      repository: StoresRepository(client: _client([])),
+      hasLocation: false,
+      routes: {
+        '/store-view': (context) {
+          args = ModalRoute.of(context)?.settings.arguments;
+          return const Scaffold(body: Text('STORE HOME'));
+        },
+      },
+    );
+
+    final card = find.byKey(const Key('store-card-a')).first;
+    await tester.ensureVisible(card);
+    await tester.pumpAndSettle();
+    await tester.tap(card);
+    await tester.pumpAndSettle();
+
+    expect(find.text('STORE HOME'), findsOneWidget,
+        reason: 'a store card must open the screen the app built for it');
+    expect(args, {'storeId': 'a', 'slug': 'a'});
   });
 
   testWidgets('a 320dp phone still lays one shop per row', (tester) async {

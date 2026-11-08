@@ -7,7 +7,7 @@
 //     by what sellers call the item (maize, boda, plot, mitumba) and shows
 //     Mtumba first in Fashion
 //   * Land can't pass the details step without its size
-//   * the description is required
+//   * the description is optional
 //   * the price says what it's for ("KES 3,500 / bag") and whether it's
 //     fixed; the stock step asks how many and about delivery
 //   * the cover step asks for the chosen look with the uploaded photo's id
@@ -175,8 +175,10 @@ void main() {
       final data = _complete()..resumeStep = SellFlow.showcase;
       expect(SellFlow.resumableStep(data), SellFlow.showcase);
 
+      // Optional (2026-11-08): a short or empty description is still a
+      // finished step, so it never reopens the wizard.
       data.description = 'too short';
-      expect(SellFlow.resumableStep(data), SellFlow.description);
+      expect(SellFlow.resumableStep(data), SellFlow.showcase);
 
       data.verifiedPhotos.clear();
       expect(SellFlow.resumableStep(data), SellFlow.photos);
@@ -523,14 +525,16 @@ void main() {
   });
 
   group('Description step', () {
-    testWidgets('is required', (tester) async {
+    testWidgets('is optional: an empty one goes on to the price', (tester) async {
       final data = SellWizardData()..category = 'Electronics';
       await _open(tester, SellDescriptionScreen(data: data));
-      await tester.enterText(find.byKey(const Key('sell-description-field')), 'Nice phone');
+      expect(find.textContaining('(OPTIONAL)'), findsOneWidget);
       await _tap(tester, find.text('NEXT'));
-      await tester.pump();
-      expect(find.textContaining('at least 20 characters'), findsOneWidget);
-      expect(find.text('10 more characters'), findsOneWidget);
+      await tester.pumpAndSettle();
+      expect(find.byType(SellPriceScreen), findsOneWidget,
+          reason: 'an empty description must not hold the seller on the step');
+      expect(data.description, isEmpty);
+      expect(SellFlow.isComplete(SellFlow.description, data), isTrue);
     });
   });
 
@@ -584,6 +588,33 @@ void main() {
       expect(find.byKey(const Key('sell-delivery-note')), findsOneWidget);
       expect(data.deliveryAvailable, isTrue);
       expect(data.quantity, '100');
+    });
+
+    testWidgets('a big amount is typed, and holding + keeps counting', (tester) async {
+      final data = SellWizardData()..priceUnit = 'bag';
+      await _open(tester, SellStockScreen(data: data));
+      expect(find.byKey(const Key('sell-quantity-hint')), findsOneWidget);
+
+      // Tapping the number selects it, so the first digit replaces it.
+      await tester.tap(find.byKey(const Key('sell-quantity-field')));
+      await tester.pump();
+      final field = tester.widget<TextField>(
+          find.byKey(const Key('sell-quantity-field')));
+      expect(field.controller!.selection.baseOffset, 0);
+      expect(field.controller!.selection.extentOffset, 1);
+
+      await tester.enterText(find.byKey(const Key('sell-quantity-field')), '500');
+      await tester.pump();
+      expect(data.quantity, '500');
+
+      // Holding + counts on its own: 500 is one gesture, not 500 taps.
+      final gesture = await tester
+          .startGesture(tester.getCenter(find.byIcon(Icons.add_rounded)));
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump(const Duration(milliseconds: 450));
+      await gesture.up();
+      await tester.pump();
+      expect(int.parse(data.quantity), greaterThan(502));
     });
 
     testWidgets('land is not asked about delivery', (tester) async {

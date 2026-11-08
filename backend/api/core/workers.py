@@ -1378,25 +1378,18 @@ async def _fire_availability_nudge(session, interest) -> bool:
         seed=interest.id,
     )
 
-    # Texts from Zeno are premium (PRICING.md): each spends one of the
-    # seller's plan's SMS alerts. A seller without one - no plan, or this
-    # month's used - is not texted about this buyer; the in-app notification
-    # still reaches them. Cancelled rather than left due: retrying every
-    # five minutes until a plan appears would text them about a buyer long
-    # gone. Spent last, after quiet hours, so a deferred nudge costs nothing.
-    from api.domains.premium import entitlements
-    if not await entitlements.try_consume(session, seller.id, entitlements.Feature.SMS):
-        interest.nudge_cancelled_at = datetime.utcnow()
-        return False
-
+    # The availability text is free for every seller (2026-11-08). It used
+    # to spend one of the seller's plan's SMS alerts, so a seller without a
+    # plan - often the one away from the app - was the one never told about
+    # a real buyer. `sms_alerts` above is the seller's own opt-out and stays
+    # the only answer that stops this text.
     try:
         sent = bool(await get_sms_provider().send(seller.phone, text))
     except Exception as exc:
         logger.error("[sweep] SMS send raised for interest %s: %s", interest.id, exc)
         sent = False
     if not sent:
-        # Not delivered, so not spent; the next sweep tries again.
-        await entitlements.release(session, seller.id, entitlements.Feature.SMS)
+        # Not delivered; the next sweep tries again.
         return False
 
     # Close the loop with the buyer. The SMS is real and already sent, so

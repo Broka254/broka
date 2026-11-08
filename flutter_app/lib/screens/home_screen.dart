@@ -1863,7 +1863,7 @@ class _HomeScreenState extends State<HomeScreen>
         });
       },
       emptyStateBuilder: (_) => _emptyState(),
-      onViewStore: (_, storeSlug) => visitStoreBySlug(context, storeSlug),
+      onViewStore: (_, storeSlug) => openStoreHome(context, slug: storeSlug),
     );
   }
 

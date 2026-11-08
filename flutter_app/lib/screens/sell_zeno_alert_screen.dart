@@ -20,24 +20,19 @@
 // says the listing is saved and offers to pay now or later (the Seller
 // Dashboard lists it until it is paid).
 //
-// Texts from Zeno are premium (PRICING.md section 4). While plans are on,
-// a seller whose plan has no texts left is told before answering that the
-// alert will come as a notification in BROKA instead - the sweep skips the
-// SMS for them - and where the plans are.
-//
-// 2026-10-08: and why a text is worth paying for. Under the question, a
-// seller without texts sees the text Zeno would send them (the wording of
-// api/core/nudge_templates.py) and that the seller who answers first is the
-// one a buyer deals with; "See plans" opens the plans' case for texts
-// (premium_upsell.dart) rather than dropping them on the plans screen.
+// Texts from Zeno are free for every seller (2026-11-08). The availability
+// nudge used to spend one of the seller's plan's SMS alerts, so the sellers
+// most likely to be away from the app - those without a plan - were the
+// ones never told a buyer had asked. The sweep now texts every seller who
+// opted in (api/core/workers.py); there is no plan card or notification
+// fallback to explain here.
 //
 // 2026-11-08: the step fits. Zeno's 230 dp portrait, the answers and a
 // 250 dp card for texts ran to about twice a 360 x 800 phone's height, and
 // the listing fee - said "before Go live, not sprung after" - came last,
 // under all of it, where few sellers scrolled. Now the portrait is 156 dp,
-// the texts offer is the wizard's premium strip (sell_zeno_boost_card.dart)
-// with the text Zeno would send moved into its plans' sheet, and the fee
-// is said right above GO LIVE.
+// the answers fit without a text offer, and the fee is said right above
+// GO LIVE.
 import 'dart:async';
 import 'dart:math';
 
@@ -50,13 +45,9 @@ import '../features/launch_offers/presentation/launch_offer_widgets.dart';
 import '../features/listing_fee/data/listing_fee_repository.dart';
 import '../features/listing_fee/domain/listing_fee.dart';
 import '../features/listing_fee/presentation/listing_fee_screen.dart';
-import '../features/premium/data/premium_repository.dart';
-import '../features/premium/domain/premium.dart';
-import '../features/premium/presentation/premium_upsell.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../widgets/delivery_nudge.dart';
-import '../widgets/sell_zeno_boost_card.dart';
 import '../services/listing_publisher.dart';
 import '../services/photo_upload_tracker.dart';
 import '../services/sell_draft_store.dart';
@@ -89,12 +80,8 @@ class SellZenoAlertScreen extends StatefulWidget {
   /// For tests: the listing-fee quote and payment.
   final ListingFeeRepository? feeRepository;
 
-  /// For tests: what the seller's plan leaves of texts.
-  final PremiumRepository? premiumRepository;
-
   const SellZenoAlertScreen({
     super.key, required this.data, this.publisher, this.question, this.feeRepository,
-    this.premiumRepository,
   });
   @override
   State<SellZenoAlertScreen> createState() => _SellZenoAlertScreenState();
@@ -120,10 +107,6 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
   // What listing will cost, shown before Go live - null while fees are off
   // or the quote hasn't come (it is a courtesy, not a gate).
   ListingFeeQuote? _fee;
-  // Plans are on and the seller's has no texts left: "yes" would bring a
-  // notification, not an SMS, and the screen says so.
-  bool _smsNeedsPlan = false;
-
   // The listing Go live created but that still waits for its fee: the
   // button now reopens the Listing fee screen instead of publishing again.
   String? _unpaidListingId;
@@ -139,7 +122,6 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
     _celebrate = AnimationController(vsync: this, duration: const Duration(milliseconds: 1800));
     _question = widget.question;
     _loadFee();
-    _loadPlan();
     if (_question == null) {
       ZenoSmsPrompts.next(sellerName: ApiService.currentUserName, itemName: _data.name)
           .then((q) {
@@ -183,27 +165,6 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
     // instead of saying nothing (the old `when data.feesEnabled` guard
     // hid exactly the listings the launch offer had just made free).
     if (r case Success(:final data)) setState(() => _fee = data);
-  }
-
-  Future<void> _loadPlan() async {
-    final r = await (widget.premiumRepository ?? premiumRepository).me();
-    if (!mounted) return;
-    if (r case Success(:final data)) {
-      setState(() => _smsNeedsPlan = !data.canUse(PremiumFeature.sms));
-    }
-  }
-
-  Future<void> _seePlans() async {
-    final opened = await showPremiumUpsell(context,
-        message: 'Texts from Zeno come with BROKA Plus and up.',
-        upgradeTo: 'plus',
-        feature: PremiumFeature.sms,
-        premium: widget.premiumRepository,
-        preview: _SmsPreview(
-          listingName: _data.name,
-          firstName: (ApiService.currentUserName ?? '').trim().split(' ').first,
-        ));
-    if (opened && mounted) _loadPlan();
   }
 
   /// What listing will cost, for a listing that pays: said beside GO LIVE.
@@ -384,9 +345,7 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
               emoji: '📲',
               title: 'Yes, SMS me',
               // Why a text is worth it is the strip's to say, below.
-              subtitle: _smsNeedsPlan
-                  ? 'Texts come with a BROKA plan. Without one, Zeno tells you in BROKA instead.'
-                  : 'One text per buyer, only if you haven\'t replied - never at night.',
+              subtitle: 'One text per buyer, only if you haven\'t replied - never at night.',
               selected: _data.smsAlerts == true,
               accent: BrokaColors.neonGreen,
               onTap: () => _choose(true),
@@ -406,29 +365,6 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
               onTap: () => _choose(false),
             ),
           ),
-          if (_smsNeedsPlan)
-            _AfterQuestion(
-              visible: _questionDone,
-              index: 3,
-              child: Padding(
-                padding: const EdgeInsets.only(top: 18),
-                // Built afresh once it shows, so its sweep of light plays
-                // then - not while it waits, invisible, for Zeno's question.
-                child: KeyedSubtree(
-                  key: ValueKey(_questionDone),
-                  child: SellZenoBoostCard(
-                    key: const Key('sell-sms-plans'),
-                    icon: Icons.sms_rounded,
-                    title: 'Never miss a buyer',
-                    benefit: 'Zeno texts you even with the app closed and no data.',
-                    badge: 'PREMIUM',
-                    locked: true,
-                    cta: 'Get texts',
-                    onTap: _seePlans,
-                  ),
-                ),
-              ),
-            ),
           SellGap.section,
           _summary(),
           if (_unpaidListingId != null) _savedUnpaid()
@@ -856,52 +792,6 @@ class _ConfettiPainter extends CustomPainter {
   bool shouldRepaint(covariant _ConfettiPainter oldDelegate) => oldDelegate.t != t;
 }
 
-
-/// What a text from Zeno looks like (the wording of
-/// api/core/nudge_templates.py), with the seller's name and item in it: in
-/// the plans' sheet the texts strip opens, where a seller without texts
-/// decides. Why one is worth having is the sheet's own case for texts.
-class _SmsPreview extends StatelessWidget {
-  const _SmsPreview({required this.listingName, required this.firstName});
-  final String listingName;
-  final String firstName;
-
-  @override
-  Widget build(BuildContext context) {
-    final who = firstName.isEmpty ? '' : ' $firstName';
-    final what = listingName.trim().isEmpty ? 'item' : listingName.trim();
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const Text('WHAT ZENO WOULD TEXT YOU', style: TextStyle(
-          color: BrokaColors.neonGreen, fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 1.1)),
-      const SizedBox(height: 8),
-      // An SMS bubble, as the phone's own messages app shows one.
-      Container(
-        key: const Key('sell-sms-preview'),
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-        decoration: BoxDecoration(
-          color: const Color(0xFF2A2F3A),
-          borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(4), topRight: Radius.circular(16),
-            bottomLeft: Radius.circular(16), bottomRight: Radius.circular(16)),
-          border: Border.all(color: BrokaColors.border),
-        ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Row(children: [
-            Icon(Icons.sms_rounded, size: 14, color: BrokaColors.neonGreen),
-            SizedBox(width: 6),
-            Text('BROKA', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800)),
-            Spacer(),
-            Text('now', style: TextStyle(color: BrokaColors.textMid, fontSize: 11)),
-          ]),
-          const SizedBox(height: 6),
-          Text('Hi$who. Zeno from BROKA: a buyer wants your $what. Still available at the same '
-              'price? Reply in the BROKA app to continue.',
-              style: const TextStyle(color: Colors.white, fontSize: 13, height: 1.45)),
-        ]),
-      ),
-    ]);
-  }
-}
 
 /// A free listing that is not the launch offer (a free place / founding):
 /// still say it is free, so "no fee teaser" never reads as a missing price.

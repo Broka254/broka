@@ -27,6 +27,8 @@ class _SellStockScreenState extends State<SellStockScreen> {
   late final TextEditingController _qtyCtrl;
   late final TextEditingController _noteCtrl;
   Timer? _debounce;
+  // Repeats while a +/- is held (see _startHold).
+  Timer? _hold;
   String? _error;
 
   SellWizardData get _data => widget.data;
@@ -44,6 +46,7 @@ class _SellStockScreenState extends State<SellStockScreen> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _hold?.cancel();
     _qtyCtrl.dispose();
     _noteCtrl.dispose();
     super.dispose();
@@ -54,13 +57,28 @@ class _SellStockScreenState extends State<SellStockScreen> {
     _debounce = Timer(const Duration(milliseconds: 600), () => _data.persist());
   }
 
-  void _setQty(int value) {
+  void _setQty(int value, {bool haptic = true}) {
     final clamped = value.clamp(1, SellWizardData.maxQuantity);
     _qtyCtrl.text = '$clamped';
     _qtyCtrl.selection = TextSelection.collapsed(offset: _qtyCtrl.text.length);
     setState(() => _data.quantity = '$clamped');
-    HapticFeedback.selectionClick();
+    if (haptic) HapticFeedback.selectionClick();
     _scheduleSave();
+  }
+
+  /// Holding + or - keeps counting (2026-11-08). A seller with 500 in stock
+  /// should not have to tap 500 times, and one restocking should not have to
+  /// type either; the field itself takes a typed amount for anything else.
+  void _startHold(int delta) {
+    _hold?.cancel();
+    _hold = Timer.periodic(const Duration(milliseconds: 90), (_) {
+      if (mounted) _setQty(_qty + delta, haptic: false);
+    });
+  }
+
+  void _endHold() {
+    _hold?.cancel();
+    _hold = null;
   }
 
   void _setDelivery(bool value) {
@@ -109,13 +127,24 @@ class _SellStockScreenState extends State<SellStockScreen> {
           SellCard(
             highlight: true,
             child: Row(children: [
-              _StepperButton(icon: Icons.remove_rounded, onTap: _qty > 1 ? () => _setQty(_qty - 1) : null),
+              _StepperButton(
+                icon: Icons.remove_rounded,
+                onTap: _qty > 1 ? () => _setQty(_qty - 1) : null,
+                onHoldStart: _qty > 1 ? () => _startHold(-1) : null,
+                onHoldEnd: _endHold,
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: TextField(
                   key: const Key('sell-quantity-field'),
                   controller: _qtyCtrl,
                   textAlign: TextAlign.center,
+                  // Select the amount so the first digit typed replaces it:
+                  // 500 is 5-0-0, not five hundred presses of +.
+                  onTap: () {
+                    _qtyCtrl.selection = TextSelection(
+                        baseOffset: 0, extentOffset: _qtyCtrl.text.length);
+                  },
                   keyboardType: TextInputType.number,
                   inputFormatters: [FilteringTextInputFormatter.digitsOnly,
                       LengthLimitingTextInputFormatter(7)],
@@ -130,8 +159,22 @@ class _SellStockScreenState extends State<SellStockScreen> {
                 ),
               ),
               const SizedBox(width: 12),
-              _StepperButton(icon: Icons.add_rounded, onTap: () => _setQty(_qty + 1)),
+              _StepperButton(
+                icon: Icons.add_rounded,
+                onTap: () => _setQty(_qty + 1),
+                onHoldStart: () => _startHold(1),
+                onHoldEnd: _endHold,
+              ),
             ]),
+          ),
+          const SizedBox(height: 8),
+          const Center(
+            child: Text(
+              'Tap the number to type any amount - or hold + to keep counting.',
+              key: Key('sell-quantity-hint'),
+              textAlign: TextAlign.center,
+              style: TextStyle(color: BrokaColors.textMid, fontSize: 11.5),
+            ),
           ),
           const SizedBox(height: 10),
           Center(
@@ -227,13 +270,23 @@ class _SellStockScreenState extends State<SellStockScreen> {
 }
 
 class _StepperButton extends StatelessWidget {
-  const _StepperButton({required this.icon, required this.onTap});
+  const _StepperButton({
+    required this.icon,
+    required this.onTap,
+    this.onHoldStart,
+    this.onHoldEnd,
+  });
   final IconData icon;
   final VoidCallback? onTap;
+  final VoidCallback? onHoldStart;
+  final VoidCallback? onHoldEnd;
 
   @override
   Widget build(BuildContext context) => GestureDetector(
         onTap: onTap,
+        onLongPressStart: onHoldStart == null ? null : (_) => onHoldStart!(),
+        onLongPressEnd: onHoldEnd == null ? null : (_) => onHoldEnd!(),
+        onLongPressCancel: onHoldEnd,
         child: AnimatedOpacity(
           duration: const Duration(milliseconds: 150),
           opacity: onTap == null ? 0.35 : 1,

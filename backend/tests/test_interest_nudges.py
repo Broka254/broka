@@ -241,6 +241,48 @@ class TestInterestNudgeSweep:
         assert buyer["user_id"] == note.buyer_id
 
     @pytest.mark.asyncio
+    async def test_sweep_texts_a_seller_with_no_plan(self, client, seller):
+        # Free for every seller (2026-11-08): with plans on and no plan on
+        # this account, the availability SMS still goes. It used to spend one
+        # of the seller's plan's alerts and be cancelled without one.
+        buyer = await _register_and_login(
+            client, "0733111005", "Nudge Buyer E", "nudgebuyere@test.ke", "NudgeBuyerE123!"
+        )
+        listing_id = await _create_listing_and_interest(
+            client, seller["access_token"], buyer["access_token"], "No Plan Phone"
+        )
+
+        from api.database import AsyncSessionLocal, Interest
+        from sqlalchemy import select
+        async with AsyncSessionLocal() as session:
+            interest = (await session.execute(
+                select(Interest).where(Interest.listing_id == listing_id)
+            )).scalar_one()
+            interest.nudge_deadline = datetime.utcnow() - timedelta(seconds=1)
+            await session.commit()
+
+        from api.core.config import settings as config
+        before = config.premium_enabled
+        object.__setattr__(config, "premium_enabled", True)
+        mock_sms = AsyncMock(return_value=True)
+        try:
+            with patch("api.core.sms.get_sms_provider",
+                       return_value=AsyncMock(send=mock_sms)):
+                from api.core.workers import task_check_interest_nudges
+                await task_check_interest_nudges({})
+        finally:
+            object.__setattr__(config, "premium_enabled", before)
+
+        mock_sms.assert_called_once()
+
+        async with AsyncSessionLocal() as session:
+            refreshed = (await session.execute(
+                select(Interest).where(Interest.listing_id == listing_id)
+            )).scalar_one()
+        assert refreshed.nudge_sent_at is not None
+        assert refreshed.nudge_cancelled_at is None
+
+    @pytest.mark.asyncio
     async def test_sweep_defers_during_quiet_hours(self, client, seller):
         """A due nudge at 23:30 EAT is held, not sent - and not lost.
 
@@ -461,9 +503,8 @@ class TestTheFiveMinutePromiseIsTrueWhenMade:
 
     The sentence is generated, so the only thing that keeps it honest is
     that the prompt is given the real answer: are the listing's texts on,
-    is there a number, does the seller's plan still have SMS alerts. A
-    promise printed with any of those closed is a reassuring lie the buyer
-    discovers by waiting forever.
+    is there a number. A promise printed with either closed is a reassuring
+    lie the buyer discovers by waiting forever.
     """
 
     @pytest.mark.asyncio
@@ -472,7 +513,7 @@ class TestTheFiveMinutePromiseIsTrueWhenMade:
         from api.routers.negotiate import _seller_can_be_texted
         seller = SimpleNamespace(id="s1", phone="+254700000001")
         assert await _seller_can_be_texted(
-            None, SimpleNamespace(sms_alerts=False), seller) is False
+            SimpleNamespace(sms_alerts=False), seller) is False
 
     @pytest.mark.asyncio
     async def test_a_seller_without_a_phone_gets_no_promise(self):
@@ -480,7 +521,7 @@ class TestTheFiveMinutePromiseIsTrueWhenMade:
         from api.routers.negotiate import _seller_can_be_texted
         seller = SimpleNamespace(id="s2", phone=None)
         assert await _seller_can_be_texted(
-            None, SimpleNamespace(sms_alerts=True), seller) is False
+            SimpleNamespace(sms_alerts=True), seller) is False
 
     @pytest.mark.asyncio
     async def test_otherwise_the_promise_is_offered(self):
@@ -488,7 +529,22 @@ class TestTheFiveMinutePromiseIsTrueWhenMade:
         from api.routers.negotiate import _seller_can_be_texted
         seller = SimpleNamespace(id="s3", phone="+254700000002")
         assert await _seller_can_be_texted(
-            None, SimpleNamespace(sms_alerts=True), seller) is True
+            SimpleNamespace(sms_alerts=True), seller) is True
+
+    @pytest.mark.asyncio
+    async def test_a_seller_without_a_plan_is_still_textable(self):
+        # The availability text is free (2026-11-08), so a missing plan must
+        # not withhold the five-minute promise either.
+        from dataclasses import replace
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from api.core.config import settings as config
+        from api.routers.negotiate import _seller_can_be_texted
+        seller = SimpleNamespace(id="s4", phone="+254700000003")
+        with patch("api.domains.premium.entitlements.settings",
+                   replace(config, premium_enabled=True)):
+            assert await _seller_can_be_texted(
+                SimpleNamespace(sms_alerts=True), seller) is True
 
     @pytest.mark.asyncio
     async def test_the_prompt_says_so_only_when_it_will_happen(

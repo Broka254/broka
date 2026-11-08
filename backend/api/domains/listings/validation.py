@@ -25,10 +25,13 @@ from api.domains.escrow.service import MAX_AGREED_PRICE_KES
 MIN_NAME_LEN = 3
 MAX_NAME_LEN = 120
 MAX_DESCRIPTION_LEN = 2000
-# A description is required (2026-09-25). Twenty characters is one short
-# sentence - "Used 2 years, works well" - enough to say something a photo
-# can't, not an essay.
-MIN_DESCRIPTION_LEN = 20
+# A description is optional (2026-11-08). It required twenty characters:
+# a listing with no words was one buyers had to message just to learn its
+# condition. But a seller who has said it all in the photos, name, price
+# and details should not be blocked from the market - Zeno can offer to
+# write the words, and blocking the wizard loses the listing entirely.
+# What is written is still capped, and still part of what a "not as
+# described" dispute is judged against.
 MIN_CATEGORY_LEN = 2
 MAX_CATEGORY_LEN = 60
 MAX_LOCATION_NAME_LEN = 100
@@ -136,15 +139,12 @@ def clean_condition(value: Optional[str]) -> Optional[str]:
 
 
 def clean_description(value: Optional[str]) -> str:
-    """Required. The buyer's first question - what condition, what's
-    included, why it's being sold - and what a "not as described" dispute
-    is decided against, with the photos."""
+    """Optional (2026-11-08). The buyer's first question - what condition,
+    what's included, why it's being sold - when the seller chooses to
+    answer it here; the photos and details can carry a listing without it.
+    Empty and absent both become "", so the column is never null for a
+    listing posted by a current app build."""
     text = (value or "").strip()
-    if len(text) < MIN_DESCRIPTION_LEN:
-        raise invalid(
-            f"Describe the item in at least {MIN_DESCRIPTION_LEN} characters - its "
-            f"condition, what's included and why you're selling."
-        )
     if len(text) > MAX_DESCRIPTION_LEN:
         raise invalid(f"Keep the description to {MAX_DESCRIPTION_LEN} characters or fewer.")
     return text

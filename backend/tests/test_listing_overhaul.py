@@ -201,10 +201,10 @@ class TestTaxonomyMigration:
 
 # ── What a listing must say ────────────────────────────────────────────────
 
-class TestDescriptionIsRequired:
+class TestDescriptionIsOptional:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("description", [None, "", "   ", "Nice phone"])
-    async def test_missing_or_too_short_is_refused(self, client, description):
+    async def test_a_listing_posts_without_one(self, client, description):
         _, h = await _user()
         body = _body()
         if description is None:
@@ -212,8 +212,8 @@ class TestDescriptionIsRequired:
         else:
             body["description"] = description
         r = await client.post("/listings/", json=body, headers=h)
-        assert r.status_code == 422
-        assert "Describe the item" in r.text
+        assert r.status_code == 201, r.text
+        assert r.json()["description"] == ("Nice phone" if description == "Nice phone" else "")
 
     @pytest.mark.asyncio
     async def test_a_real_description_is_kept(self, client):

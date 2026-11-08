@@ -415,20 +415,14 @@ void main() {
   });
 
   group('Go live', () {
-    testWidgets('says before the answer that texts need a plan', (tester) async {
-      final backend = _PremiumBackend(me: _me());
+    testWidgets('the availability text needs no plan', (tester) async {
       await _open(tester, SellZenoAlertScreen(
-          data: _draft(), question: 'Shall I text you?', premiumRepository: backend.repository));
-      expect(find.textContaining('Texts come with a BROKA plan'), findsOneWidget);
-      expect(find.byKey(const Key('sell-sms-plans')), findsOneWidget);
-    });
-
-    testWidgets('a plan with texts left: as before', (tester) async {
-      final backend = _PremiumBackend(me: _me(plan: 'pro', smsLeft: 40));
-      await _open(tester, SellZenoAlertScreen(
-          data: _draft(), question: 'Shall I text you?', premiumRepository: backend.repository));
+          data: _draft(), question: 'Shall I text you?'));
+      // Free for every seller (2026-11-08): no plan pitch, no notification
+      // fallback sentence, and the opt-in still says exactly what it sends.
       expect(find.textContaining('Texts come with a BROKA plan'), findsNothing);
       expect(find.byKey(const Key('sell-sms-plans')), findsNothing);
+      expect(find.textContaining('One text per buyer'), findsOneWidget);
     });
   });
 }

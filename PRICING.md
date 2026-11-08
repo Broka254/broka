@@ -441,8 +441,8 @@ out (`task_expire_featured_listings`); their callbacks and status poll stay.
 ## 4. Premium: Plus, Pro, Elite
 
 **What is premium.** The features that cost BROKA money every time they are
-used, or that are worth real money to the user: voice mode, texts from Zeno,
-the Buying Agent's watches and Zeno negotiating for a buyer, **AI cover
+used, or that are worth real money to the user: voice mode, texts a seller
+composes to the other party through Zeno, the Buying Agent's watches and Zeno negotiating for a buyer, **AI cover
 images while posting a listing**, **Zeno writing a listing's description
 from its photo**, **pricing a listing with Zeno against what similar BROKA
 listings ask**, and hosting auctions. **Bidding on auctions
@@ -593,7 +593,8 @@ builds show it as it is. Background work has nobody to show a 402 to:
 | Zeno insights (no plan, free looks used) | The screen says why, offers the plans and closes | - |
 | Buying Agent watch | 402 (the Zeno tab's action: `FAILED` with the plan code) and the plans | - |
 | Zeno negotiating for you | 402 and the plans | The automatic opener on a new match skips the buyer |
-| Text from Zeno | Go live says, before "SMS me", that texts need a plan | The availability nudge is cancelled for that buyer; the in-app notification still goes |
+| Text from Zeno (composing one to the other party) | The send is refused with 402 and the plans | - |
+| Availability reminder to a seller | - (free for every seller; the listing's "SMS me" opt-in is not a plan feature) | - |
 | Hosting an auction | 402 when the auction listing is created | - |
 
 **In the app:** Menu → BROKA Premium (`/premium`): the plan, what is left
@@ -656,7 +657,7 @@ types, and tiers on it had cliffs (BUSINESS_MODEL_REVIEW.md section 6).
     would undercut that house's own listing fee: 2,999 against 7,840 a month
     for a KES 20M house.
   - A shop can't hold vehicles, property or land.
-- **SMS alerts:** one a month per listing, up to 300.
+- **SMS alerts:** the availability reminder is free for every seller, so a store plan does not gate it.
 - **Prepaying** uses the premium discounts (8% / 15% / 20%).
 - **The margin rule is checked at every size of every card**, prepaid periods
   included (`tests/test_pricing.py`). The tightest is a 1,000-listing shop at

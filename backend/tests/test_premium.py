@@ -543,23 +543,29 @@ class TestSmsAlerts:
             return await db.get(Interest, interest_id)
 
     @pytest.mark.asyncio
-    async def test_a_seller_without_a_plan_is_not_texted(self, premium_on):
-        seller, _ = await _user()
+    async def test_a_seller_without_a_plan_is_still_texted(self, client, premium_on):
+        # Free for every seller (2026-11-08). This used to cancel the nudge
+        # for an account with no plan - the one least likely to be in the app.
+        seller, h = await _user()
         interest_id = await self._due_interest(seller)
         send = AsyncMock(return_value=True)
         await self._sweep(send)
-        send.assert_not_called()
-        assert (await self._interest(interest_id)).nudge_cancelled_at is not None
+        send.assert_called_once()
+        interest = await self._interest(interest_id)
+        assert interest.nudge_sent_at is not None
+        assert interest.nudge_cancelled_at is None
+        assert (await client.get("/premium/me", headers=h)).json()["usage"]["sms_alerts"]["used"] == 0
 
     @pytest.mark.asyncio
-    async def test_a_seller_on_plus_is_texted_and_it_counts(self, client, premium_on):
+    async def test_a_seller_on_plus_is_texted_and_it_does_not_count(self, client, premium_on):
         seller, h = await _user("plus")
         interest_id = await self._due_interest(seller)
         send = AsyncMock(return_value=True)
         await self._sweep(send)
         send.assert_called_once()
         assert (await self._interest(interest_id)).nudge_sent_at is not None
-        assert (await client.get("/premium/me", headers=h)).json()["usage"]["sms_alerts"]["used"] == 1
+        # The availability reminder is not a premium allowance any more.
+        assert (await client.get("/premium/me", headers=h)).json()["usage"]["sms_alerts"]["used"] == 0
 
     @pytest.mark.asyncio
     async def test_a_text_that_does_not_go_is_not_spent(self, client, premium_on):

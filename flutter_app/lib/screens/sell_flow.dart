@@ -126,7 +126,9 @@ class SellFlow {
         return data.name.trim().length >= 3 &&
             (!data.isLand || LandSize.problem(data.attributes) == null);
       case description:
-        return data.description.trim().length >= SellWizardData.minDescriptionLength;
+        // Optional (2026-11-08): nothing can be missing here, so a restored
+        // draft never reopens on a step the seller already left.
+        return true;
       case price:
         final amount = parseKesInput(data.price);
         return amount != null && amount > 0 && amount <= maxListingPriceKes &&

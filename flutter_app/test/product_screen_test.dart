@@ -424,9 +424,9 @@ void main() {
       expect(find.byKey(const Key('product-add-to-cart')), findsNothing);
       expect(find.text('Add to cart'), findsNothing);
 
-      // The store's own website, by its slug - not the generic in-app store
-      // screen (storefront_launcher.dart, 2026-11-07). This still expected
-      // the '/store-view' route after that change.
+      // The store's home in the app, by its immutable slug - not the web
+      // storefront (storefront_launcher.dart, 2026-11-08). The website stays
+      // for shared links and a seller previewing their own shop.
       Uri? website;
       storeUrlLauncherOverride = (uri, mode) async {
         website = uri;
@@ -435,8 +435,8 @@ void main() {
       addTearDown(() => storeUrlLauncherOverride = null);
       await tester.tap(find.byKey(const Key('product-visit-store')));
       await tester.pumpAndSettle();
-      expect(website, Uri.parse('https://www.broka.co.ke/store/clanix'));
-      expect(opened, isNot(contains('/store-view')));
+      expect(website, isNull);
+      expect(opened, contains('/store-view'));
     });
 
     testWidgets('a personal listing or an auction has no Visit Store', (tester) async {

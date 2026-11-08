@@ -1,11 +1,11 @@
-// BROKA - Sell Wizard Step 4: Description (required)
+// BROKA - Sell Wizard Step 4: Description (optional)
 //
-// Required since 2026-09-25, here and on the server (listings/validation.py
-// MIN_DESCRIPTION_LEN): a listing with no words was a listing buyers had to
-// message just to learn its condition, and the description is half of
-// what a "not as described" dispute is judged against. Twenty characters -
-// one real sentence - is the floor; the prompts below help sellers write
-// more than that.
+// Optional since 2026-11-08, here and on the server
+// (listings/validation.py clean_description): a listing with no words made
+// buyers message just to learn its condition, which is why the step offers
+// help writing one - not why it should block a seller who has said it all
+// in the photos and details. What is written is kept, still capped, and
+// still what a "not as described" dispute is judged against.
 //
 // Zeno writes it from the photo (2026-10-05): a premium allowance
 // (PRICING.md section 4), offered at the top of the step as what it is
@@ -233,32 +233,20 @@ class _SellDescriptionScreenState extends State<SellDescriptionScreen> {
   }
 
   void _onChanged(String v) {
-    setState(() {
-      _data.description = v.trim();
-      if (_error != null && _data.description.length >= SellWizardData.minDescriptionLength) {
-        _error = null;
-      }
-    });
+    setState(() => _data.description = v.trim());
     _scheduleSave();
   }
 
   void _next() {
+    // Optional: no floor, no error. A seller who has nothing to add is not
+    // stopped - the listing is the photos, name, price and details.
     _data.description = _descCtrl.text.trim();
-    if (_data.description.length < SellWizardData.minDescriptionLength) {
-      setState(() => _error = 'Describe the item in at least '
-          '${SellWizardData.minDescriptionLength} characters - its condition, what\'s '
-          'included and why you\'re selling.');
-      return;
-    }
     setState(() => _error = null);
     SellFlow.next(context, _data, from: SellFlow.description);
   }
 
   @override
   Widget build(BuildContext context) {
-    final length = _data.description.length;
-    const min = SellWizardData.minDescriptionLength;
-    final enough = length >= min;
     return SellStepScaffold(
       step: SellFlow.description, totalSteps: SellFlow.total,
       title: SellFlow.title(SellFlow.description),
@@ -283,32 +271,11 @@ class _SellDescriptionScreenState extends State<SellDescriptionScreen> {
         ),
         SellGap.section,
         Row(children: [
-          Expanded(child: sellStepLabel('DESCRIPTION  (REQUIRED)')),
-          AnimatedSwitcher(
-            duration: const Duration(milliseconds: 200),
-            child: Text(
-              enough ? '✓ Looks good' : '${min - length} more characters',
-              key: ValueKey(enough),
-              style: TextStyle(
-                color: enough ? BrokaColors.success : BrokaColors.textMid,
-                fontSize: 11.5, fontWeight: FontWeight.w700),
-            ),
-          ),
+          Expanded(child: sellStepLabel('DESCRIPTION  (OPTIONAL)')),
+          const Text('Helps buyers decide',
+              style: TextStyle(color: BrokaColors.textMid, fontSize: 11.5,
+                  fontWeight: FontWeight.w700)),
         ]),
-        const SizedBox(height: 8),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: TweenAnimationBuilder<double>(
-            tween: Tween(end: (length / min).clamp(0.0, 1.0)),
-            duration: const Duration(milliseconds: 250),
-            builder: (_, v, __) => LinearProgressIndicator(
-              value: v,
-              minHeight: 3,
-              backgroundColor: BrokaColors.border,
-              valueColor: AlwaysStoppedAnimation(enough ? BrokaColors.success : BrokaColors.gold),
-            ),
-          ),
-        ),
         SellGap.label,
         TextFormField(
           key: const Key('sell-description-field'),

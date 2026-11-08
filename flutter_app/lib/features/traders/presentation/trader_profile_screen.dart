@@ -247,7 +247,7 @@ class _TraderProfileScreenState extends State<TraderProfileScreen> {
             onTapItem: (item) => Navigator.pushNamed(context, '/product',
                 arguments: {'listingId': (item as BrokaListing).id}),
             onViewStore: (_, storeSlug) =>
-                visitStoreBySlug(context, storeSlug),
+                openStoreHome(context, slug: storeSlug),
             emptyStateBuilder: (_) => const Padding(
               padding: EdgeInsets.symmetric(vertical: 32),
               child: Center(
@@ -522,7 +522,7 @@ class _TraderProfileScreenState extends State<TraderProfileScreen> {
       _sectionTitle(trader.stores.length == 1 ? 'Store' : 'Stores'),
       for (final s in trader.stores)
         GestureDetector(
-          onTap: () => visitStoreBySlug(context, s.slug),
+          onTap: () => openStoreHome(context, slug: s.slug),
           child: _glass(
               margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),

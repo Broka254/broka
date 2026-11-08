@@ -1496,28 +1496,19 @@ LANGUAGE INSTRUCTION: {_language_instruction(lang)}
 """)
 
 
-async def _seller_can_be_texted(db, listing, seller) -> bool:
+async def _seller_can_be_texted(listing, seller) -> bool:
     """Whether the 5-minute follow-up text will actually go out.
 
-    Three independent gates, the same ones api/core/workers._fire_availability_
-    nudge applies before it sends: the listing-level opt-out, a phone number
-    on file, and a plan that still has SMS alerts. Zeno makes this promise in
-    the buyer's own conversation, so a promise made with a gate closed is a
-    reassuring lie - and the buyer discovers it by waiting forever.
+    The same two gates api/core/workers._fire_availability_nudge applies
+    before it sends: the listing-level opt-out and a phone number on file.
+    Texts are free for every seller (2026-11-08), so a plan no longer closes
+    this gate. Zeno makes this promise in the buyer's own conversation, so a
+    promise made with a gate closed is a reassuring lie - and the buyer
+    discovers it by waiting forever.
     """
     if getattr(listing, "sms_alerts", True) is False:
         return False
-    if not getattr(seller, "phone", None):
-        return False
-    try:
-        from api.domains.premium import entitlements
-        return await entitlements.has_left(db, seller.id, entitlements.Feature.SMS)
-    except Exception as exc:
-        # A pricing lookup must never fail the buyer's message. Say nothing
-        # about a text rather than promise one that may not happen.
-        logger.warning("[negotiate] SMS entitlement check failed seller=%s: %s",
-                       seller.id, exc)
-        return False
+    return bool(getattr(seller, "phone", None))
 
 
 async def _system_for_sender_reply(db, listing, seller, b_name, dist_str, lang, sender_role: str,
@@ -3263,7 +3254,7 @@ async def send_message(
     # text. A seller's relay never makes that promise.
     sms_followup = (
         sender_role == "buyer" and classification["needs_relay"]
-        and await _seller_can_be_texted(db, listing, seller)
+        and await _seller_can_be_texted(listing, seller)
     )
     sys_sender = await _system_for_sender_reply(
         db, listing, seller, b_name, dist_str, lang, sender_role,

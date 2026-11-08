@@ -447,7 +447,7 @@ class _ListingSearchScreenState extends State<ListingSearchScreen> {
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
             fetchPage: (page) => _fetchPage(query, sort, page),
             onTapItem: (item) => _openListing(item as BrokaListing),
-            onViewStore: (_, storeSlug) => visitStoreBySlug(context, storeSlug),
+            onViewStore: (_, storeSlug) => openStoreHome(context, slug: storeSlug),
             emptyStateBuilder: (_) => BrokaEmptyState(
               emoji: '🔍',
               gradient: const [BrokaColors.neonBlue, BrokaColors.neonPurple],

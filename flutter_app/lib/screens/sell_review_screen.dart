@@ -173,7 +173,8 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
                   ? (data.deliveryNote.isEmpty ? 'Can arrange' : 'Can arrange - ${data.deliveryNote}')
                   : 'Buyer picks up'),
           _row('Location', data.location),
-          _row('Description', data.description),
+          if (data.description.trim().isNotEmpty)
+            _row('Description', data.description.trim()),
         ])),
       ]),
     );

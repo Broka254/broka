@@ -1697,7 +1697,7 @@ class _ProductScreenState extends State<ProductScreen> {
   Widget _visitStoreButton(Listing l) {
     return OutlinedButton.icon(
       key: const Key('product-visit-store'),
-      onPressed: () => visitStoreBySlug(context, l.storeSlug),
+      onPressed: () => openStoreHome(context, slug: l.storeSlug),
       style: OutlinedButton.styleFrom(
         foregroundColor: BrokaColors.textHigh,
         minimumSize: const Size.fromHeight(52),

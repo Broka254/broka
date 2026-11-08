@@ -354,7 +354,7 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
             (_, i) => StoreCard(
               key: Key('nearby-store-${rail[i].id}'),
               store: rail[i],
-              onTap: () => visitStoreWebsite(context, rail[i]),
+              onTap: () => openStoreHomeFor(context, rail[i]),
               onDetails: () => showStoreDetails(context, rail[i],
                   repository: _repo),
               onMap: () => openStoreMap(context, rail[i],
@@ -445,7 +445,7 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
           delegate: SliverChildBuilderDelegate(
             (_, i) => StoreCard(
               store: main[i],
-              onTap: () => visitStoreWebsite(context, main[i]),
+              onTap: () => openStoreHomeFor(context, main[i]),
               onDetails: () => showStoreDetails(context, main[i],
                   repository: _repo),
               onMap: () => openStoreMap(context, main[i],

@@ -305,7 +305,7 @@ class _SubcategoryScreenState extends State<SubcategoryScreen> {
                     onTapItem: (item) => Navigator.pushNamed(context, '/product',
                         arguments: {'listingId': (item as BrokaListing).id}),
                     onViewStore: (_, storeSlug) =>
-                        visitStoreBySlug(context, storeSlug),
+                        openStoreHome(context, slug: storeSlug),
                     emptyStateBuilder: (_) => _emptyState(visual.emoji, colors),
                   ),
                   const SliverToBoxAdapter(child: SizedBox(height: 12)),

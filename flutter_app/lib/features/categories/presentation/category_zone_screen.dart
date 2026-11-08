@@ -338,7 +338,7 @@ class _CategoryZoneScreenState extends State<CategoryZoneScreen> {
                       arguments: {'listingId': (item as BrokaListing).id},
                     ),
                     onViewStore: (_, storeSlug) =>
-                        visitStoreBySlug(context, storeSlug),
+                        openStoreHome(context, slug: storeSlug),
                     emptyStateBuilder: (_) => BrokaEmptyState(
                       emoji: visual.emoji,
                       gradient: zoneColors,

@@ -412,7 +412,7 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
                 delegate: SliverChildBuilderDelegate(
                   (_, i) => StoreCard(
                     store: _nearest[i],
-                    onTap: () => visitStoreWebsite(context, _nearest[i]),
+                    onTap: () => openStoreHomeFor(context, _nearest[i]),
                     onDetails: () => showStoreDetails(context, _nearest[i],
                         repository: _repo),
                     onMap: () => openStoreMap(context, _nearest[i],
@@ -491,7 +491,7 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
               delegate: SliverChildBuilderDelegate(
                 (_, i) => StoreCard(
                   store: _stores[i],
-                  onTap: () => visitStoreWebsite(context, _stores[i]),
+                  onTap: () => openStoreHomeFor(context, _stores[i]),
                   onDetails: () => showStoreDetails(context, _stores[i],
                       repository: _repo),
                   onMap: () => openStoreMap(context, _stores[i],

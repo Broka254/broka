@@ -26,7 +26,6 @@ class SellWizardData {
   // applied as the seller types instead of refused at the end.
   static const maxNameLength = 120;
   static const maxDescriptionLength = 2000;
-  static const minDescriptionLength = 20;
   static const maxPriceUnitLength = 24;
   static const maxQuantity = 1000000;
   static const maxDeliveryNoteLength = 120;

@@ -19,6 +19,32 @@ Uri? storeWebsiteUriForSlug(String? rawSlug) {
   return Uri.https('www.broka.co.ke', '/store/$slug');
 }
 
+/// Opens the store's home **in the app** - StoreHomeScreen on '/store-view'.
+///
+/// Every in-app card and store badge goes here (2026-11-08). Sending those
+/// taps to the website instead put a screen the app already has behind an
+/// in-app browser, losing the cart, Follow and in-app checkout a buyer in
+/// BROKA expects. The website stays a deliberate destination: a shared link,
+/// or a seller's own "View as a buyer".
+Future<void> openStoreHome(
+  BuildContext context, {
+  String? storeId,
+  String? slug,
+  String? via,
+}) {
+  final id = storeId?.trim();
+  final link = slug?.trim().toLowerCase();
+  final source = via?.trim();
+  return Navigator.of(context).pushNamed('/store-view', arguments: {
+    if (id != null && id.isNotEmpty) 'storeId': id,
+    if (link != null && link.isNotEmpty) 'slug': link,
+    if (source != null && source.isNotEmpty) 'via': source,
+  });
+}
+
+Future<void> openStoreHomeFor(BuildContext context, Store store) =>
+    openStoreHome(context, storeId: store.id, slug: store.slug);
+
 Future<bool> _launchStoreWebsiteUri(
   Uri? uri, {
   StoreUrlLauncher? launcher,
@@ -35,9 +61,11 @@ Future<bool> _launchStoreWebsiteUri(
   }
 }
 
-/// Opens the dedicated website instead of the generic in-app StoreHomeScreen.
-/// In-app browser mode prevents Android's verified `/store` app link from
-/// handing this deliberate website visit back to the generic app screen.
+/// Opens the dedicated website - for a shared link or a seller previewing
+/// their own public storefront, never for an in-app store card
+/// ([openStoreHome] is that). In-app browser mode prevents Android's
+/// verified `/store` app link from handing this deliberate website visit
+/// back to the app screen.
 Future<bool> launchStoreWebsite(
   Store store, {
   StoreUrlLauncher? launcher,

@@ -134,7 +134,7 @@ class _TrendingScreenState extends State<TrendingScreen> {
                       arguments: {'listingId': (item as BrokaListing).id},
                     ),
                     onViewStore: (_, storeSlug) =>
-                        visitStoreBySlug(context, storeSlug),
+                        openStoreHome(context, slug: storeSlug),
                     emptyStateBuilder: (_) => BrokaEmptyState(
                       emoji: _visual.emoji,
                       gradient: _visual.gradient,
