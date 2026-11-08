@@ -30,6 +30,14 @@
 // api/core/nudge_templates.py) and that the seller who answers first is the
 // one a buyer deals with; "See plans" opens the plans' case for texts
 // (premium_upsell.dart) rather than dropping them on the plans screen.
+//
+// 2026-11-08: the step fits. Zeno's 230 dp portrait, the answers and a
+// 250 dp card for texts ran to about twice a 360 x 800 phone's height, and
+// the listing fee - said "before Go live, not sprung after" - came last,
+// under all of it, where few sellers scrolled. Now the portrait is 156 dp,
+// the texts offer is the wizard's premium strip (sell_zeno_boost_card.dart)
+// with the text Zeno would send moved into its plans' sheet, and the fee
+// is said right above GO LIVE.
 import 'dart:async';
 import 'dart:math';
 
@@ -48,6 +56,7 @@ import '../features/premium/presentation/premium_upsell.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../widgets/delivery_nudge.dart';
+import '../widgets/sell_zeno_boost_card.dart';
 import '../services/listing_publisher.dart';
 import '../services/photo_upload_tracker.dart';
 import '../services/sell_draft_store.dart';
@@ -189,8 +198,23 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
         message: 'Texts from Zeno come with BROKA Plus and up.',
         upgradeTo: 'plus',
         feature: PremiumFeature.sms,
-        premium: widget.premiumRepository);
+        premium: widget.premiumRepository,
+        preview: _SmsPreview(
+          listingName: _data.name,
+          firstName: (ApiService.currentUserName ?? '').trim().split(' ').first,
+        ));
     if (opened && mounted) _loadPlan();
+  }
+
+  /// What listing will cost, for a listing that pays: said beside GO LIVE.
+  /// The banners under the answers say when it is covered or free instead.
+  bool get _quotesFee {
+    final fee = _fee;
+    return _unpaidListingId == null &&
+        fee != null &&
+        fee.feesEnabled &&
+        !fee.storeCovered &&
+        fee.launchOffer?.eligible != true;
   }
 
   /// Opens the Listing fee screen for the listing just created, and
@@ -317,17 +341,22 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
         // gone, and the way out is the celebration's buttons.
         loading: _loading || _live,
         onNext: _goLive,
-        bottom: _LaunchButton(
-          key: const Key('sell-go-live'),
-          loading: _loading,
-          animation: _ripple,
-          label: _unpaidListingId != null ? 'PAY TO GO LIVE' : 'GO LIVE  🚀',
-          onPressed: _loading ? null : _goLive,
-        ),
+        bottom: Column(mainAxisSize: MainAxisSize.min, children: [
+          // The price where it is agreed to. At the end of the scroll it sat
+          // under Zeno, the answers and the texts offer, out of sight.
+          if (_quotesFee) _feeTeaser(_fee!),
+          _LaunchButton(
+            key: const Key('sell-go-live'),
+            loading: _loading,
+            animation: _ripple,
+            label: _unpaidListingId != null ? 'PAY TO GO LIVE' : 'GO LIVE  🚀',
+            onPressed: _loading ? null : _goLive,
+          ),
+        ]),
         child: Column(children: [
           const SizedBox(height: 4),
           _zeno(),
-          const SizedBox(height: 18),
+          const SizedBox(height: 12),
           ZenoStreamingBubble(
             key: const Key('zeno-question'),
             text: _question,
@@ -340,9 +369,9 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
             visible: _questionDone,
             index: 0,
             child: phone == null
-                ? const SizedBox(height: 18)
+                ? const SizedBox(height: 14)
                 : Padding(
-                    padding: const EdgeInsets.only(top: 8, bottom: 18),
+                    padding: const EdgeInsets.only(top: 6, bottom: 14),
                     child: Text('I\'d text $phone', style: const TextStyle(
                         color: BrokaColors.textMid, fontSize: 12, fontWeight: FontWeight.w600)),
                   ),
@@ -354,9 +383,9 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
               key: const Key('sell-sms-yes'),
               emoji: '📲',
               title: 'Yes, SMS me',
+              // Why a text is worth it is the strip's to say, below.
               subtitle: _smsNeedsPlan
-                  ? 'Texts come with a BROKA plan - they reach you even with the app closed and no '
-                      'data. Without one, Zeno tells you in BROKA instead.'
+                  ? 'Texts come with a BROKA plan. Without one, Zeno tells you in BROKA instead.'
                   : 'One text per buyer, only if you haven\'t replied - never at night.',
               selected: _data.smsAlerts == true,
               accent: BrokaColors.neonGreen,
@@ -382,11 +411,21 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
               visible: _questionDone,
               index: 3,
               child: Padding(
-                padding: const EdgeInsets.only(top: 16),
-                child: _SmsPitch(
-                  listingName: _data.name,
-                  firstName: (ApiService.currentUserName ?? '').trim().split(' ').first,
-                  onPlans: _seePlans,
+                padding: const EdgeInsets.only(top: 18),
+                // Built afresh once it shows, so its sweep of light plays
+                // then - not while it waits, invisible, for Zeno's question.
+                child: KeyedSubtree(
+                  key: ValueKey(_questionDone),
+                  child: SellZenoBoostCard(
+                    key: const Key('sell-sms-plans'),
+                    icon: Icons.sms_rounded,
+                    title: 'Never miss a buyer',
+                    benefit: 'Zeno texts you even with the app closed and no data.',
+                    badge: 'PREMIUM',
+                    locked: true,
+                    cta: 'Get texts',
+                    onTap: _seePlans,
+                  ),
                 ),
               ),
             ),
@@ -403,8 +442,9 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
               padding: const EdgeInsets.only(top: 12),
               child: LaunchOfferBanner(offer: _fee!.launchOffer!, kind: LaunchOfferKind.listing),
             )
-          else if (_fee != null && _fee!.feesEnabled) _feeTeaser(_fee!)
-          else if (_fee?.freeListing == true)
+          // A listing that pays has its fee said beside GO LIVE (_quotesFee);
+          // the server sends free_listing with fees_enabled false.
+          else if (_fee?.freeListing == true && _fee?.feesEnabled == false)
             const Padding(
               padding: EdgeInsets.only(top: 12),
               child: _FreeListingNote(),
@@ -425,7 +465,7 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
   /// "Listing fee KES 60 for 2 months" - so the price is no surprise.
   Widget _feeTeaser(ListingFeeQuote fee) => Padding(
         key: const Key('sell-fee-teaser'),
-        padding: const EdgeInsets.only(top: 10),
+        padding: const EdgeInsets.only(bottom: 10),
         child: Text(
           'Listing fee KES ${formatKesAmount(fee.monthlyFee)} for '
           '${fee.periodMonths == 1 ? 'a month' : '${fee.periodMonths} months'}'
@@ -470,13 +510,19 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
     ]);
   }
 
+  // Zeno's portrait: the box its ripples fill, and its face. Two-thirds of
+  // the 230 / 168 dp it was (2026-11-08) - at that size it took a third of
+  // a 360 x 800 phone's screen before Zeno had asked anything.
+  static const double _heroBox = 156;
+  static const double _heroFace = 114;
+
   Widget _zeno() {
     return SizedBox(
-      width: 230, height: 230,
+      width: _heroBox, height: _heroBox,
       child: AnimatedBuilder(
         animation: Listenable.merge([_float, _ripple]),
         builder: (_, __) {
-          final bob = _still ? 0.0 : sin(_float.value * pi) * 8 - 4;
+          final bob = _still ? 0.0 : sin(_float.value * pi) * 6 - 3;
           return Stack(alignment: Alignment.center, children: [
             // Ripples: rings leaving Zeno like a signal going out.
             for (var i = 0; i < 3; i++)
@@ -487,12 +533,12 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
             Transform.translate(
               offset: Offset(0, bob),
               child: Container(
-                width: 168, height: 168,
+                width: _heroFace, height: _heroFace,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   boxShadow: [
-                    BoxShadow(color: BrokaColors.gold.withOpacity(0.55), blurRadius: 36),
-                    BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.35), blurRadius: 60),
+                    BoxShadow(color: BrokaColors.gold.withOpacity(0.55), blurRadius: 26),
+                    BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.35), blurRadius: 44),
                   ],
                 ),
                 child: ClipOval(
@@ -509,7 +555,7 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
 
   Widget _rippleRing(double t) {
     if (_still) return const SizedBox.shrink();
-    final size = 168 + 62 * t;
+    final size = _heroFace + (_heroBox - _heroFace) * t;
     return IgnorePointer(
       child: Container(
         width: size, height: size,
@@ -527,11 +573,11 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
   Widget _orbitingIcon(int i) {
     const icons = ['💬', '📲', '🔔'];
     final angle = (_still ? 0.0 : _ripple.value * 2 * pi * 0.5) + i * 2 * pi / 3;
-    const radius = 104.0;
+    const radius = _heroBox * 0.45;
     return Transform.translate(
       offset: Offset(cos(angle) * radius, sin(angle) * radius * 0.55),
       child: Container(
-        width: 34, height: 34,
+        width: 28, height: 28,
         alignment: Alignment.center,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
@@ -539,7 +585,7 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
           border: Border.all(color: BrokaColors.gold.withOpacity(0.6)),
           boxShadow: const [BrokaColors.glowGold],
         ),
-        child: Text(icons[i], style: const TextStyle(fontSize: 16)),
+        child: Text(icons[i], style: const TextStyle(fontSize: 13)),
       ),
     );
   }
@@ -811,72 +857,49 @@ class _ConfettiPainter extends CustomPainter {
 }
 
 
-/// What a text from Zeno looks like, and why a seller wants one: shown to a
-/// seller whose plan has no texts, under the question.
-class _SmsPitch extends StatelessWidget {
-  const _SmsPitch({required this.listingName, required this.firstName, required this.onPlans});
+/// What a text from Zeno looks like (the wording of
+/// api/core/nudge_templates.py), with the seller's name and item in it: in
+/// the plans' sheet the texts strip opens, where a seller without texts
+/// decides. Why one is worth having is the sheet's own case for texts.
+class _SmsPreview extends StatelessWidget {
+  const _SmsPreview({required this.listingName, required this.firstName});
   final String listingName;
   final String firstName;
-  final VoidCallback onPlans;
 
   @override
   Widget build(BuildContext context) {
     final who = firstName.isEmpty ? '' : ' $firstName';
     final what = listingName.trim().isEmpty ? 'item' : listingName.trim();
-    return SellCard(
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('WHAT ZENO WOULD TEXT YOU', style: TextStyle(
-            color: BrokaColors.neonGreen, fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 1.1)),
-        const SizedBox(height: 10),
-        // An SMS bubble, as the phone's own messages app shows one.
-        Container(
-          key: const Key('sell-sms-preview'),
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF2A2F3A),
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(4), topRight: Radius.circular(16),
-              bottomLeft: Radius.circular(16), bottomRight: Radius.circular(16)),
-            border: Border.all(color: BrokaColors.border),
-          ),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Row(children: [
-              Icon(Icons.sms_rounded, size: 14, color: BrokaColors.neonGreen),
-              SizedBox(width: 6),
-              Text('BROKA', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800)),
-              Spacer(),
-              Text('now', style: TextStyle(color: BrokaColors.textMid, fontSize: 11)),
-            ]),
-            const SizedBox(height: 6),
-            Text('Hi$who. Zeno from BROKA: a buyer wants your $what. Still available at the same '
-                'price? Reply in the BROKA app to continue.',
-                style: const TextStyle(color: Colors.white, fontSize: 13, height: 1.45)),
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Text('WHAT ZENO WOULD TEXT YOU', style: TextStyle(
+          color: BrokaColors.neonGreen, fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 1.1)),
+      const SizedBox(height: 8),
+      // An SMS bubble, as the phone's own messages app shows one.
+      Container(
+        key: const Key('sell-sms-preview'),
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFF2A2F3A),
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(4), topRight: Radius.circular(16),
+            bottomLeft: Radius.circular(16), bottomRight: Radius.circular(16)),
+          border: Border.all(color: BrokaColors.border),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Row(children: [
+            Icon(Icons.sms_rounded, size: 14, color: BrokaColors.neonGreen),
+            SizedBox(width: 6),
+            Text('BROKA', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800)),
+            Spacer(),
+            Text('now', style: TextStyle(color: BrokaColors.textMid, fontSize: 11)),
           ]),
-        ),
-        const SizedBox(height: 14),
-        const Text(
-          'Buyers ask several sellers at once. The one who answers first is the one they deal with - '
-          'a text reaches you even with the app closed and no data.',
-          style: TextStyle(color: BrokaColors.textHigh, fontSize: 12.5, height: 1.45),
-        ),
-        const SizedBox(height: 12),
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton.icon(
-            key: const Key('sell-sms-plans'),
-            onPressed: onPlans,
-            icon: const Icon(Icons.workspace_premium_rounded, color: BrokaColors.gold, size: 18),
-            label: const Text('Get texts from Zeno', style: TextStyle(
-                color: BrokaColors.gold, fontSize: 13.5, fontWeight: FontWeight.w800)),
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size.fromHeight(46),
-              side: BorderSide(color: BrokaColors.gold.withOpacity(0.6)),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-          ),
-        ),
-      ]),
-    );
+          const SizedBox(height: 6),
+          Text('Hi$who. Zeno from BROKA: a buyer wants your $what. Still available at the same '
+              'price? Reply in the BROKA app to continue.',
+              style: const TextStyle(color: Colors.white, fontSize: 13, height: 1.45)),
+        ]),
+      ),
+    ]);
   }
 }
 

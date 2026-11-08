@@ -22,6 +22,8 @@
 // in a conversation (ZenoAutolistScreen). The wizard then opens at what
 // Zeno can't know (how many, where), with every step it filled in under
 // it. NEXT is still there for a seller who'd rather write it themselves.
+// Since 2026-11-08 the offer is a strip (sell_zeno_boost_card.dart), and
+// the example of Zeno's lines is in the plans' sheet a locked one opens.
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -108,7 +110,8 @@ class _SellPhotosScreenState extends State<SellPhotosScreen> {
               : "You've used your free listing by Zeno. You can still list it yourself, free - tap NEXT.",
           upgradeTo: p.hasPlan ? null : 'plus',
           feature: PremiumFeature.aiDescriptions,
-          premium: widget.premium);
+          premium: widget.premium,
+          preview: ZenoBeforeAfter(category: _data.category, subcategory: _data.subcategoryName));
       if (opened && mounted) await _loadPremium();
       return;
     }
@@ -506,21 +509,21 @@ class _SellPhotosScreenState extends State<SellPhotosScreen> {
           icon: Icons.auto_awesome_rounded,
           title: 'Let Zeno list it for you',
           benefit: photos.isEmpty
-              ? 'Snap the item - Zeno does the rest while you answer a few questions.'
-              : 'Zeno does the rest from your photo while you answer a few questions.',
-          badge: 'PREMIUM',
+              ? 'One photo, and Zeno writes the whole listing.'
+              : 'Zeno writes the whole listing from your photo.',
+          // No plan's name while plans are off: it is free for everyone.
+          badge: (_premium?.enabled ?? true) ? 'PREMIUM' : null,
           locked: _zenoLocked,
           ribbon: _zenoFreeTry ? 'FIRST ONE FREE' : null,
           footnote: _zenoLeftText,
-          points: const [
-            'Names it and finds its category',
-            'Writes the description buyers look for',
-            'Suggests a fair price, and makes a cover',
-          ],
-          cta: _zenoLocked ? 'Unlock Zeno listings' : (photos.isEmpty ? 'Take a photo for Zeno' : 'List it with Zeno'),
+          cta: _zenoLocked
+              ? 'Unlock'
+              : _zenoFreeTry
+                  ? 'Try free'
+                  : (photos.isEmpty ? 'Snap it' : 'List it'),
           onTap: _listWithZeno,
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 10),
         const Center(
           child: Text('Or tap NEXT to fill it in yourself - free.',
               style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),

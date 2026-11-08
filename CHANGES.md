@@ -1,3 +1,46 @@
+# The sell wizard's premium offers are strips, and its steps fit (2026-11-08)
+
+Asked for: the cards telling sellers to pay for Premium took too much room
+on the New listing steps (screenshots of Photos, Description, Price, Stock
+& delivery and Go live); make them smaller but still easy to notice, and
+fix the spacing on those steps.
+
+- **One strip per offer** (`sell_zeno_boost_card.dart`), about 100 dp
+  instead of 260-460: the title, one line on what it does for the sale,
+  and a pill at its side ("Unlock", "Try free", "Write it", "Price it",
+  "List it"). On a 360 x 800 phone the description box and the asking
+  price are now on screen without scrolling.
+- **Still noticed, at no height**: the plan's tag (PREMIUM, PRO) sits on
+  the strip's top border, FIRST ONE FREE takes its place for a free try,
+  the pill is amber when it unlocks, and a band of light crosses the pill
+  once when the strip appears or its offer changes. It never loops and
+  never moves under reduced motion. The whole strip, pill included, is
+  one tap target.
+- **The case moved, it didn't go**: the three ticks repeated the plans'
+  sheet, so they are gone. The examples (Zeno's lines beside "phone for
+  sale, call me", the price range with hidden numbers, the text Zeno would
+  send) are shown in the plans' sheet the locked strip opens
+  (`showPremiumUpsell(preview:)`), where the seller decides.
+- **Go live**: Zeno's portrait is 156 dp instead of 230. The 250 dp texts
+  card is a strip. The "Yes, SMS me" line is shorter. The listing fee
+  ("said before Go live, not sprung after") is now right above GO LIVE.
+  It used to be the last thing in the scroll, under everything else.
+- **Cover image**: the AI cover note is one line. Its three ticks
+  repeated the look picker and the note under the gallery button.
+- Stock & delivery has no offer and is unchanged.
+
+Fixed along the way:
+
+- While plans are off (`/premium/me` `enabled: false`), every feature is
+  free and nothing is sold, but the strips still showed PREMIUM and PRO,
+  which read as a price. They show no plan name then.
+
+Tests: `sell_premium_strip_test.dart`. It checks strip height, the step's
+field on screen, the tag, Unlock and Try free, the examples in the sheet,
+no plan name while plans are off, the one-time sweep and reduced motion,
+the fee above GO LIVE, and texts as a strip with the SMS in its sheet.
+The existing premium and wizard tests pass unchanged.
+
 # Cache-first stores, calls, categories and Trending (2026-11-08)
 
 Asked for: the same data saving Home, the Menu and the Seller Dashboard

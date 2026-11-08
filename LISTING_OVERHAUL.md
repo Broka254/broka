@@ -299,6 +299,22 @@ Sellers saw a one-line pitch and moved on. Now:
 No figures are invented: the examples are labelled as examples and the
 prices come from the server.
 
+**2026-11-08: strips, and the case in the sheet.** Those cards grew to
+260-460 dp, and on a 360 dp phone they pushed each step's own field (the
+description box, the asking price) below the fold. Each offer is now one
+strip of about 100 dp (`SellZenoBoostCard`): the title, a line on what it
+does for the sale, and a pill at its side ("Unlock", "Try free", "Write
+it"). The plan's tag sits on the strip's top border (FIRST ONE FREE takes
+its place for a free try), the pill is amber when it unlocks, and a sweep
+of light crosses it once when it appears or its offer changes (never
+under reduced motion). The example, the locked range and the text Zeno
+would send moved into the plans' sheet the locked strip opens
+(`showPremiumUpsell(preview:)`), whose own three lines already said what
+the ticks did. While plans are off no strip names a plan. The Cover
+step's note is one line. Go live: Zeno's portrait is 156 dp instead of
+230, texts are offered as a strip, and the listing fee is said right
+above GO LIVE instead of at the end of the scroll.
+
 ### "Let Zeno list it for you"
 
 The seller takes the photos; Zeno does the rest, as a conversation

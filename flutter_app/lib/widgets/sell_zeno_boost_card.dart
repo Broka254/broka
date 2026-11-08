@@ -7,28 +7,41 @@
 // sells sooner. The plan it needs is a badge on the card, and a locked card
 // still opens - into the plans, with the same reason (premium_upsell.dart).
 //
-// 2026-10-08: sellers read the one-line pitch and moved on. A card can now
-// show what the seller would get (a [preview]: Zeno's lines beside the
-// usual "phone for sale, call me"), what it does in a few ticks
-// ([points]), a [ribbon] for a free try, and a button that says what
-// happens on tap ([cta]) rather than a chevron.
+// 2026-10-08: sellers read the one-line pitch and moved on. A card could
+// then show what the seller would get (an example), what it does in a few
+// ticks, a ribbon for a free try, and a button saying what happens on tap.
+//
+// 2026-11-08: a strip, not a page. With the ticks, the example and a
+// full-width button the card grew to 260-460 dp, and on a 360 dp phone it
+// pushed each step's own field (the description box, the asking price)
+// below the fold: sellers scrolled past an advert to reach the form. The
+// strip is about 100 dp - the title, a line on what it does for the sale,
+// and the button at its side. Being seen costs it no height: the plan's
+// tag sits on the top border, the button is amber when it unlocks, and a
+// sweep of light crosses the button once when the card appears or its
+// offer changes (never under reduced motion, never in a loop - an advert
+// that never stops moving is one sellers learn to ignore). The ticks and
+// the example moved to where a seller decides: the plans' sheet a locked
+// card opens (showPremiumUpsell's preview), with ZenoBeforeAfter and
+// ZenoLockedRange below.
 import 'package:flutter/material.dart';
 
 import '../main.dart';
 
-class SellZenoBoostCard extends StatelessWidget {
+/// The premium amber: a plan's tag, and a button that unlocks.
+const _amber = [Color(0xFFF5B83D), Color(0xFFE08A1E)];
+
+class SellZenoBoostCard extends StatefulWidget {
   const SellZenoBoostCard({
     super.key,
     required this.icon,
     required this.title,
     required this.benefit,
-    required this.badge,
     required this.onTap,
+    this.badge,
     this.locked = false,
     this.busy = false,
     this.footnote,
-    this.points = const [],
-    this.preview,
     this.cta,
     this.ribbon,
   });
@@ -36,11 +49,13 @@ class SellZenoBoostCard extends StatelessWidget {
   final IconData icon;
   final String title;
 
-  /// Why it helps the listing sell - one line.
+  /// Why it helps the listing sell, in a few words: two lines at most.
   final String benefit;
 
-  /// The plan it comes with: "PREMIUM", "PRO".
-  final String badge;
+  /// The plan it comes with: "PREMIUM", "PRO". None while plans are off
+  /// (PremiumStatus.enabled false): nothing is sold then, and a plan's
+  /// name on a feature that is free reads as a price.
+  final String? badge;
 
   /// The plan doesn't have it (or this month's is spent): the tap shows
   /// the plans, and the card says so with a lock.
@@ -52,26 +67,75 @@ class SellZenoBoostCard extends StatelessWidget {
   /// "28 of 30 left this month" - or nothing.
   final String? footnote;
 
-  /// What it does, a few words each, ticked.
-  final List<String> points;
-
-  /// What the seller would get, shown small.
-  final Widget? preview;
-
-  /// The button's words: "Write it for me". None: a chevron, as before.
+  /// The button's words, short enough for the strip's side: "Unlock",
+  /// "Write it". None: a chevron.
   final String? cta;
 
-  /// "FIRST ONE FREE" - over the card's corner.
+  /// "FIRST ONE FREE" - on the top border, in the plan tag's place.
   final String? ribbon;
   final VoidCallback? onTap;
 
   @override
+  State<SellZenoBoostCard> createState() => _SellZenoBoostCardState();
+}
+
+class _SellZenoBoostCardState extends State<SellZenoBoostCard> with SingleTickerProviderStateMixin {
+  // Made in initState, not lazily: a lazy one first touched in dispose
+  // asks a deactivated tree for its TickerMode.
+  late final AnimationController _sheen;
+  bool _still = false;
+  bool _swept = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _sheen = AnimationController(vsync: this, duration: const Duration(milliseconds: 1600));
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _still = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    if (_still) {
+      _sheen.value = 0;
+    } else if (!_swept) {
+      _swept = true;
+      _sheen.forward(from: 0);
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant SellZenoBoostCard old) {
+    super.didUpdateWidget(old);
+    // A new offer - the plan has loaded, a photo is in: sweep again, once.
+    final changed = old.locked != widget.locked || old.cta != widget.cta || old.ribbon != widget.ribbon;
+    if (changed && !_still) _sheen.forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    _sheen.dispose();
+    super.dispose();
+  }
+
+  static String _words(String label) => label.isEmpty
+      ? label
+      : label[0].toUpperCase() + label.substring(1).toLowerCase();
+
+  @override
   Widget build(BuildContext context) {
+    final w = widget;
+    final Widget? tag = w.ribbon != null
+        ? _Tag(key: const Key('zeno-boost-ribbon'), label: w.ribbon!, free: true)
+        : w.badge != null
+            ? _Tag(key: const Key('zeno-boost-badge'), label: w.badge!, locked: w.locked)
+            : null;
     final card = Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 16, 14, 16),
+      // A little more on top when a tag sits on the border above the title.
+      padding: EdgeInsets.fromLTRB(12, tag == null ? 12 : 15, 12, 12),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(16),
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
@@ -81,170 +145,190 @@ class SellZenoBoostCard extends StatelessWidget {
           ],
         ),
         border: Border.all(color: BrokaColors.neonPurple.withOpacity(0.6)),
-        boxShadow: [BoxShadow(color: BrokaColors.neonPurple.withOpacity(0.18), blurRadius: 16)],
+        boxShadow: [BoxShadow(color: BrokaColors.neonPurple.withOpacity(0.18), blurRadius: 14)],
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: BrokaColors.neonPurple.withOpacity(0.28),
-            ),
-            alignment: Alignment.center,
-            child: busy
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                : Icon(icon, color: Colors.white, size: 21),
+      child: Row(children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: BrokaColors.neonPurple.withOpacity(0.28),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Wrap(
-                crossAxisAlignment: WrapCrossAlignment.center,
-                spacing: 8,
-                runSpacing: 4,
-                children: [
-                  Text(title,
-                      style: const TextStyle(
-                          color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800, height: 1.25)),
-                  _Badge(badge, locked: locked),
-                ],
-              ),
-              const SizedBox(height: 6),
-              Text(benefit,
-                  style: const TextStyle(color: BrokaColors.textHigh, fontSize: 12.5, height: 1.45)),
-            ]),
+          alignment: Alignment.center,
+          child: w.busy
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              : Icon(w.icon, color: Colors.white, size: 18),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text(w.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 14, fontWeight: FontWeight.w800, height: 1.25)),
+            const SizedBox(height: 3),
+            Text(w.benefit,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: BrokaColors.textHigh, fontSize: 12, height: 1.35)),
+            if (w.footnote != null) ...[
+              const SizedBox(height: 4),
+              Text(w.footnote!,
+                  key: const Key('zeno-boost-footnote'),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: BrokaColors.textMid, fontSize: 11, fontWeight: FontWeight.w600)),
+            ],
+          ]),
+        ),
+        const SizedBox(width: 10),
+        if (w.cta == null)
+          const Icon(Icons.chevron_right_rounded, color: BrokaColors.textMid)
+        else
+          _Button(
+            label: w.busy ? 'On it…' : w.cta!,
+            icon: w.locked ? Icons.lock_open_rounded : w.icon,
+            locked: w.locked,
+            sheen: _sheen,
           ),
-          if (cta == null) ...[
-            const SizedBox(width: 6),
-            const Padding(
-              padding: EdgeInsets.only(top: 10),
-              child: Icon(Icons.chevron_right_rounded, color: BrokaColors.textMid),
-            ),
-          ],
-        ]),
-        if (points.isNotEmpty) ...[
-          const SizedBox(height: 12),
-          for (final point in points)
-            Padding(
-              padding: const EdgeInsets.only(left: 54, bottom: 6),
-              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Padding(
-                  padding: EdgeInsets.only(top: 1),
-                  child: Icon(Icons.check_rounded, size: 15, color: BrokaColors.neonGreen),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(point,
-                      style: const TextStyle(color: BrokaColors.textHigh, fontSize: 12, height: 1.4)),
-                ),
-              ]),
-            ),
-        ],
-        if (preview != null) ...[
-          const SizedBox(height: 12),
-          preview!,
-        ],
-        if (cta != null) ...[
-          const SizedBox(height: 14),
-          Container(
-            key: const Key('zeno-boost-cta'),
-            height: 44,
-            width: double.infinity,
-            alignment: Alignment.center,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              gradient: locked
-                  ? const LinearGradient(colors: [Color(0xFFF5B83D), Color(0xFFE08A1E)])
-                  : const LinearGradient(colors: [BrokaColors.neonPurple, BrokaColors.neonBlue]),
-            ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(locked ? Icons.lock_open_rounded : icon, size: 17, color: Colors.white),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(busy ? 'Zeno is on it…' : cta!,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w800)),
-              ),
-            ]),
-          ),
-        ],
-        if (footnote != null) ...[
-          const SizedBox(height: 8),
-          Center(
-            child: Text(footnote!,
-                key: const Key('zeno-boost-footnote'),
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5, fontWeight: FontWeight.w600)),
-          ),
-        ],
       ]),
     );
+    final needs = w.locked && w.badge != null ? ' Needs BROKA ${_words(w.badge!)}.' : '';
+    final free = w.ribbon != null ? ' ${_words(w.ribbon!)}.' : '';
     return Semantics(
       button: true,
-      label: '$title. $benefit${locked ? ' Needs BROKA $badge.' : ''}',
+      label: '${w.title}. ${w.benefit}$needs$free',
       excludeSemantics: true,
+      // The whole strip is the button, its pill included: one target, so a
+      // tap anywhere on it does what the pill says.
       child: InkWell(
-        onTap: busy ? null : onTap,
-        borderRadius: BorderRadius.circular(18),
-        child: ribbon == null
+        onTap: w.busy ? null : w.onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: tag == null
             ? card
             : Stack(clipBehavior: Clip.none, children: [
                 card,
-                Positioned(
-                  top: -9,
-                  right: 14,
-                  child: Container(
-                    key: const Key('zeno-boost-ribbon'),
-                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(8),
-                      gradient: const LinearGradient(colors: [BrokaColors.neonGreen, BrokaColors.neonCyan]),
-                      boxShadow: [BoxShadow(color: BrokaColors.neonGreen.withOpacity(0.4), blurRadius: 10)],
-                    ),
-                    child: Text(ribbon!,
-                        style: const TextStyle(
-                            color: Colors.black, fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 0.6)),
-                  ),
-                ),
+                Positioned(top: -9, right: 14, child: tag),
               ]),
       ),
     );
   }
 }
 
-class _Badge extends StatelessWidget {
-  const _Badge(this.label, {required this.locked});
+/// The plan's name (or the free try) on the strip's top border.
+class _Tag extends StatelessWidget {
+  const _Tag({super.key, required this.label, this.locked = false, this.free = false});
   final String label;
   final bool locked;
+  final bool free;
 
   @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+  Widget build(BuildContext context) {
+    final colors = free ? const [BrokaColors.neonGreen, BrokaColors.neonCyan] : _amber;
+    final ink = free ? Colors.black : Colors.white;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        gradient: LinearGradient(colors: colors),
+        boxShadow: [BoxShadow(color: colors.first.withOpacity(0.4), blurRadius: 10)],
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        if (locked) ...[
+          Icon(Icons.lock_rounded, size: 10, color: ink),
+          const SizedBox(width: 3),
+        ],
+        Text(label,
+            style: TextStyle(color: ink, fontSize: 9.5, fontWeight: FontWeight.w900, letterSpacing: 0.6)),
+      ]),
+    );
+  }
+}
+
+/// The strip's pill: amber to unlock, Zeno's violet-to-blue to use.
+class _Button extends StatelessWidget {
+  const _Button({required this.label, required this.icon, required this.locked, required this.sheen});
+  final String label;
+  final IconData icon;
+  final bool locked;
+  final Animation<double> sheen;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = locked ? _amber : const [BrokaColors.neonPurple, BrokaColors.neonBlue];
+    return ConstrainedBox(
+      key: const Key('zeno-boost-cta'),
+      constraints: const BoxConstraints(minHeight: 36, maxWidth: 128),
+      child: DecoratedBox(
         decoration: BoxDecoration(
-          gradient: const LinearGradient(colors: [Color(0xFFF5B83D), Color(0xFFE08A1E)]),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(18),
+          gradient: LinearGradient(colors: colors),
+          boxShadow: [BoxShadow(color: colors.first.withOpacity(0.35), blurRadius: 10)],
         ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          if (locked) ...[
-            const Icon(Icons.lock_rounded, size: 10, color: Colors.white),
-            const SizedBox(width: 3),
-          ],
-          Text(label,
-              style: const TextStyle(
-                  color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.w900, letterSpacing: 0.6)),
-        ]),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: Stack(alignment: Alignment.center, children: [
+            Positioned.fill(child: _Sheen(animation: sheen)),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(icon, size: 15, color: Colors.white),
+                const SizedBox(width: 5),
+                Flexible(
+                  child: Text(label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white, fontSize: 12.5, fontWeight: FontWeight.w800)),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// One band of light across the pill. It waits out the step's own
+/// entrance (the first third of the controller), then crosses once.
+class _Sheen extends StatelessWidget {
+  const _Sheen({required this.animation});
+  final Animation<double> animation;
+
+  static const _crossing = Interval(0.35, 1, curve: Curves.easeInOutCubic);
+
+  @override
+  Widget build(BuildContext context) => IgnorePointer(
+        child: AnimatedBuilder(
+          animation: animation,
+          builder: (_, __) {
+            final t = _crossing.transform(animation.value);
+            if (t <= 0 || t >= 1) return const SizedBox.shrink();
+            return FractionalTranslation(
+              translation: Offset(t * 2.4 - 1.2, 0),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(colors: [
+                    Colors.white.withOpacity(0),
+                    Colors.white.withOpacity(0.45),
+                    Colors.white.withOpacity(0),
+                  ]),
+                ),
+              ),
+            );
+          },
+        ),
       );
 }
 
 /// What a listing says without Zeno and with it, side by side - examples
-/// for the kind of item being sold, labelled as examples.
+/// for the kind of item being sold, labelled as examples. Shown in the
+/// plans' sheet a locked description or listing card opens.
 class ZenoBeforeAfter extends StatelessWidget {
   const ZenoBeforeAfter({super.key, required this.category, this.subcategory});
   final String category;
@@ -331,6 +415,7 @@ class ZenoBeforeAfter extends StatelessWidget {
 }
 
 /// A price range with its numbers hidden - what Pro shows, before Pro.
+/// Shown in the plans' sheet a locked price card opens.
 class ZenoLockedRange extends StatelessWidget {
   const ZenoLockedRange({super.key});
 
