@@ -10,6 +10,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:broka/core/network/data_saver.dart';
+import 'package:broka/features/stores/presentation/storefront_launcher.dart';
 import 'package:broka/main.dart' show BrokaColors, ZoneGlowText;
 import 'package:broka/models/listing.dart';
 import 'package:broka/models/listing_photo.dart';
@@ -422,9 +424,19 @@ void main() {
       expect(find.byKey(const Key('product-add-to-cart')), findsNothing);
       expect(find.text('Add to cart'), findsNothing);
 
+      // The store's own website, by its slug - not the generic in-app store
+      // screen (storefront_launcher.dart, 2026-11-07). This still expected
+      // the '/store-view' route after that change.
+      Uri? website;
+      storeUrlLauncherOverride = (uri, mode) async {
+        website = uri;
+        return true;
+      };
+      addTearDown(() => storeUrlLauncherOverride = null);
       await tester.tap(find.byKey(const Key('product-visit-store')));
       await tester.pumpAndSettle();
-      expect(opened, contains('/store-view'));
+      expect(website, Uri.parse('https://www.broka.co.ke/store/clanix'));
+      expect(opened, isNot(contains('/store-view')));
     });
 
     testWidgets('a personal listing or an auction has no Visit Store', (tester) async {
@@ -437,6 +449,8 @@ void main() {
 
   // The gallery asked for each photo's large file and nothing else, so one
   // missing file was an emoji where the photo should be (2026-10-19).
+  // It now asks for the medium size first: the large file was two to three
+  // times the bytes for a 320dp-tall box (mobile-data pass).
   group('the photo gallery', () {
     const base = 'https://media.test/img/g1';
     final photo = const ListingPhoto(
@@ -446,25 +460,61 @@ void main() {
       large: '$base/large.webp',
     );
 
-    testWidgets('a photo whose large file is missing shows its medium size', (tester) async {
-      final net = FakeImageNetwork(available: {'$base/medium.webp'})..install();
+    tearDown(DataSaver.reset);
+
+    testWidgets('shows the medium size, and never downloads the large file for it', (tester) async {
+      final net = FakeImageNetwork(available: {'$base/medium.webp', '$base/large.webp'})..install();
       addTearDown(net.uninstall);
 
       await open(tester, _listing(photos: [photo]));
 
       expect(tester.takeException(), isNull);
-      expect(net.requested.take(2), ['$base/large.webp', '$base/medium.webp']);
       expect(net.loaded('$base/medium.webp'), findsOneWidget);
+      expect(net.requested.where((u) => u.startsWith(base)), ['$base/medium.webp']);
+    });
+
+    testWidgets('a photo whose medium file is missing shows its large size', (tester) async {
+      final net = FakeImageNetwork(available: {'$base/large.webp'})..install();
+      addTearDown(net.uninstall);
+
+      await open(tester, _listing(photos: [photo]));
+
+      expect(net.requested.take(2), ['$base/medium.webp', '$base/large.webp']);
+      expect(net.loaded('$base/large.webp'), findsOneWidget);
       expect(net.requested, isNot(contains('$base/thumb.webp'))); // stops at the first file that works
     });
 
-    testWidgets('with large and medium both missing it falls back to the thumbnail', (tester) async {
+    testWidgets('with medium and large both missing it falls back to the thumbnail', (tester) async {
       final net = FakeImageNetwork(available: {'$base/thumb.webp'})..install();
       addTearDown(net.uninstall);
 
       await open(tester, _listing(photos: [photo]));
 
       expect(net.loaded('$base/thumb.webp'), findsOneWidget);
+    });
+
+    testWidgets('with Data saver on it shows the thumbnail the card already downloaded', (tester) async {
+      DataSaver.enabled.value = true;
+      final net = FakeImageNetwork(
+          available: {'$base/thumb.webp', '$base/medium.webp', '$base/large.webp'})..install();
+      addTearDown(net.uninstall);
+
+      await open(tester, _listing(photos: [photo]));
+
+      expect(net.loaded('$base/thumb.webp'), findsOneWidget);
+      expect(net.requested.where((u) => u.startsWith(base)), ['$base/thumb.webp']);
+    });
+
+    testWidgets('with Data saver on a missing thumbnail falls back to medium, never large', (tester) async {
+      DataSaver.enabled.value = true;
+      final net = FakeImageNetwork(available: {'$base/large.webp'})..install();
+      addTearDown(net.uninstall);
+
+      await open(tester, _listing(photos: [photo]));
+
+      expect(net.requested.where((u) => u.startsWith(base)),
+          ['$base/thumb.webp', '$base/medium.webp']);
+      expect(net.requested, isNot(contains('$base/large.webp')));
     });
   });
 

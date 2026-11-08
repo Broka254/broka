@@ -7,6 +7,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import 'core/navigation/app_route_observer.dart';
+import 'core/network/data_saver.dart';
 import 'core/network/instrumented_client.dart';
 import 'core/state/marketplace_state.dart';
 import 'core/network/api_client.dart';
@@ -159,6 +160,8 @@ Future<void> _main() async {
   ));
   await ApiService.loadSavedSession();
   await apiClient.loadToken();
+  // Before the first screen picks a photo size (DataSaver).
+  await DataSaver.load();
   // ApiService owns the refresh token; apiClient asks it to renew when a
   // request comes back 401, then retries with the new token.
   apiClient.onUnauthorized = ApiService.renewSession;
@@ -199,6 +202,9 @@ Future<void> _main() async {
     // (via the same showIncomingCall the poller already uses) is what the
     // user actually sees.
     FirebaseMessaging.onMessage.listen((message) {
+      // Something happened: the sweep stops idling, so the Inbox badge and
+      // receipts catch up now rather than at its slower idle pace.
+      GlobalPollerService.instance.nudge();
       NotificationService.instance.handleForegroundFcmMessage({
         ...message.data,
         // A message push's own wording, which the app shows itself while

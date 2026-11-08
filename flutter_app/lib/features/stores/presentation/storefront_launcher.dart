@@ -5,6 +5,11 @@ import '../domain/models/store.dart';
 
 typedef StoreUrlLauncher = Future<bool> Function(Uri uri, LaunchMode mode);
 
+/// What opens a store's website when a caller passes no launcher: for a
+/// widget test of a screen whose button calls [visitStoreBySlug] itself.
+@visibleForTesting
+StoreUrlLauncher? storeUrlLauncherOverride;
+
 /// The web storefront's canonical route is `/store/<slug>` (web/src/lib/links.ts).
 /// Use the immutable slug, never a display name, store ID, or a legacy plural
 /// `/stores/<slug>` URL from an older payload.
@@ -21,6 +26,7 @@ Future<bool> _launchStoreWebsiteUri(
   if (uri == null) return false;
 
   final StoreUrlLauncher open = launcher ??
+      storeUrlLauncherOverride ??
       ((uri, mode) => launchUrl(uri, mode: mode));
   try {
     return await open(uri, LaunchMode.inAppBrowserView);

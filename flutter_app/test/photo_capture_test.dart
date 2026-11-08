@@ -108,8 +108,9 @@ void main() {
 
     expect(picker.calls.single.source, ImageSource.gallery);
     expect(picker.calls.single.options.imageQuality, 85);
-    expect(picker.calls.single.options.maxWidth, 2048);
-    expect(picker.calls.single.options.maxHeight, 2048);
+    // The server keeps 1600 px at most; more is only mobile data.
+    expect(picker.calls.single.options.maxWidth, 1600);
+    expect(picker.calls.single.options.maxHeight, 1600);
     expect(results.single!.path, startsWith('${base.path}${Platform.pathSeparator}store_draft'));
   });
 

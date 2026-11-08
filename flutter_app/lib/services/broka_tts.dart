@@ -318,8 +318,14 @@ class BrokaTts {
   /// none (reported through [onUnavailable]).
   Future<Uint8List?> _fetch(String text, String language) async {
     final cacheKey = '$language:$text';
-    final cached = _cache[cacheKey];
-    if (cached != null) return cached;
+    // Least recently used goes first, not oldest fetched: a greeting heard
+    // every session was the first thing evicted once 40 other parts had
+    // been fetched, and then downloaded again.
+    final cached = _cache.remove(cacheKey);
+    if (cached != null) {
+      _cache[cacheKey] = cached;
+      return cached;
+    }
 
     // The backend can still route an "english" request to the Swahili
     // voice, so only a language it refused outright is skipped.

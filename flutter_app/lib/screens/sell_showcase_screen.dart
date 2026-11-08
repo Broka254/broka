@@ -47,6 +47,7 @@ import '../features/premium/data/premium_repository.dart';
 import '../features/premium/domain/premium.dart';
 import '../features/premium/presentation/premium_upsell.dart';
 import '../main.dart';
+import '../services/photo_capture.dart';
 import '../services/photo_upload_tracker.dart';
 import '../services/sell_photo_store.dart';
 import '../services/sell_wizard_data.dart';
@@ -255,9 +256,13 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> with TickerProv
     try {
       // Bounded like every other picked image: a full-size gallery photo
       // can pass the server's 10 MB upload limit and fail only at Activate,
-      // and nothing larger than 1600 px is ever stored.
+      // and nothing larger than 1600 px is ever stored (so nothing larger
+      // is sent: PhotoCapture's gallery size).
       final xfile = await _picker.pickImage(
-        source: ImageSource.gallery, imageQuality: 85, maxWidth: 2048, maxHeight: 2048,
+        source: ImageSource.gallery,
+        imageQuality: PhotoCapture.galleryQuality,
+        maxWidth: PhotoCapture.galleryMaxSide,
+        maxHeight: PhotoCapture.galleryMaxSide,
       );
       _data.pendingPick = null;
       if (xfile == null) {

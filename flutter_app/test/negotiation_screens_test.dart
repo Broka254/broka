@@ -461,6 +461,22 @@ void main() {
       expect(recorder.calls.where((c) => c == 'start'), hasLength(1));
     });
 
+    // The record package's defaults - stereo, 44.1 kHz, 128 kbit/s - made a
+    // minute of talking nearly a megabyte to send over mobile data.
+    testWidgets('a voice note is recorded small: mono AAC at 32 kbit/s', (tester) async {
+      await tester.pumpWidget(screen(const NegotiationScreen(animateBackground: false)));
+      await _settle(tester);
+
+      await tester.tap(mic);
+      await _settle(tester);
+
+      final config = recorder.lastConfig!;
+      expect(config.encoder, AudioEncoder.aacLc);
+      expect(config.numChannels, 1);
+      expect(config.bitRate, lessThanOrEqualTo(32000));
+      expect(config.sampleRate, lessThanOrEqualTo(24000));
+    });
+
     testWidgets('a recorder that will not stop does not leave the bar up',
         (tester) async {
       recorder.stopError = PlatformException(code: 'record', message: 'stop failed');
@@ -506,6 +522,7 @@ class _FakeRecorder extends RecordPlatform {
   Object? stopError;
   Object? cancelError;
   final calls = <String>[];
+  RecordConfig? lastConfig;
 
   @override
   Future<void> create(String recorderId) async {}
@@ -517,6 +534,7 @@ class _FakeRecorder extends RecordPlatform {
   Future<void> start(String recorderId, RecordConfig config,
       {required String path}) async {
     calls.add('start');
+    lastConfig = config;
     if (startError != null) throw startError!;
   }
 

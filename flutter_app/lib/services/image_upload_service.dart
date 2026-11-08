@@ -8,6 +8,7 @@
 import 'dart:io';
 
 import '../core/network/api_client.dart';
+import 'upload_shrink.dart';
 
 /// What an image is for. The backend refuses an id used for the wrong
 /// thing (a store logo as a listing photo).
@@ -56,12 +57,15 @@ class ImageUploadService {
     String filename = 'photo.jpg',
     void Function(double fraction)? onProgress,
   }) async {
+    // No bigger than the server keeps (UploadShrink): the rest was mobile
+    // data spent on detail thrown away on arrival.
+    final body = await UploadShrink.forUpload(bytes);
     Object? lastError;
     for (var attempt = 0; attempt < 2; attempt++) {
       try {
         final json = await _api.uploadFile(
           '/media/images',
-          bytes: bytes,
+          bytes: body,
           filename: filename,
           fields: {'purpose': purpose},
           onProgress: onProgress == null

@@ -21,6 +21,7 @@ import 'package:flutter/foundation.dart'
     show debugPrint, kDebugMode, visibleForTesting;
 import 'package:flutter/material.dart';
 
+import '../core/cache/image_cache_managers.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 
@@ -92,21 +93,41 @@ class BrokaImage extends StatelessWidget {
   }
 
   /// Bytes for a data URI or bare base64 string, or null.
+  ///
+  /// The same string gives the same bytes object while it is remembered:
+  /// Image.memory and MemoryImage are keyed on the bytes' identity, so a
+  /// fresh decode on every rebuild missed Flutter's image cache and decoded
+  /// the picture again each time a chat or a list repainted.
   static Uint8List? inlineBytes(String? source) {
     final s = source?.trim();
     if (s == null || s.isEmpty || networkUrl(s) != null) return null;
+    final known = _decoded.remove(s);
+    if (known != null) {
+      _decoded[s] = known; // most recently used goes last
+      return known;
+    }
     final payload = s.startsWith('data:') ? s.substring(s.indexOf(',') + 1) : s;
     try {
-      return base64Decode(payload);
+      final bytes = base64Decode(payload);
+      _decoded[s] = bytes;
+      while (_decoded.length > _decodedCap) {
+        _decoded.remove(_decoded.keys.first);
+      }
+      return bytes;
     } catch (_) {
       return null;
     }
   }
 
+  static const int _decodedCap = 48;
+  static final Map<String, Uint8List> _decoded = <String, Uint8List>{};
+
   /// An ImageProvider for circle avatars and decorations, or null.
   static ImageProvider? provider(String? source) {
     final url = networkUrl(source);
-    if (url != null) return CachedNetworkImageProvider(url);
+    if (url != null) {
+      return CachedNetworkImageProvider(url, cacheManager: BrokaImageCache.instance);
+    }
     final bytes = inlineBytes(source);
     return bytes != null ? MemoryImage(bytes) : null;
   }
@@ -196,6 +217,8 @@ class BrokaImage extends StatelessWidget {
   }) =>
       CachedNetworkImage(
         imageUrl: url,
+        // BROKA's own store, not the 200-file default (image_cache_managers.dart).
+        cacheManager: BrokaImageCache.instance,
         fit: fit,
         width: width,
         height: height,

@@ -86,7 +86,6 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
   double? _currentOffer;
   Map<String, dynamic>? _sellerInfo;
   int    _dealProbability = 50;
-  Timer? _heartbeatTimer;
 
   // TTS - off by default (2026-10-25), as on the Zeno tab: the speaker in
   // the header turns Zeno's voice on.
@@ -200,9 +199,8 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
       GlobalPollerService.instance.markScreenActive(lid, buyerId: _buyerId);
     }
     _loadDealStatus();
-    ApiService.updateLastSeen();
-    _heartbeatTimer = Timer.periodic(
-        const Duration(seconds: 60), (_) => ApiService.updateLastSeen());
+    // Presence: the app-wide heartbeat (main.dart) covers this screen too.
+    // Its own one doubled it, and kept going with the app in the background.
   }
 
   // ── Deal state ─────────────────────────────────────────────────────────────
@@ -444,8 +442,13 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
       final aiThread = history.where((m) =>
           m.role == 'broker' || ((m.role == 'buyer' || m.role == 'seller') && m.viaAi)).toList();
       _refreshDirectChatUnreadCount();
-      _unreadTimer ??= Timer.periodic(
-          const Duration(seconds: 30), (_) => _refreshDirectChatUnreadCount());
+      // Only while the app is in front: a badge nobody can see is not worth
+      // a request every 30 seconds in the background.
+      _unreadTimer ??= Timer.periodic(const Duration(seconds: 30), (_) {
+        final state = WidgetsBinding.instance.lifecycleState;
+        if (state != null && state != AppLifecycleState.resumed) return;
+        _refreshDirectChatUnreadCount();
+      });
       if (mounted) {
         final merged = _mergeZenoThreads(aiThread, List<Message>.of(_messages));
         if (merged.isNotEmpty) {
@@ -527,7 +530,6 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     _msgCtrl.dispose(); _scrollCtrl.dispose(); _composerFocus.dispose();
     _tts.stop();
     _voice.dispose();
-    _heartbeatTimer?.cancel();
     super.dispose();
   }
 

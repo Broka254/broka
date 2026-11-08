@@ -4046,6 +4046,7 @@ async def unsend_message(
 @router.get("/{listing_id}/history", response_model=List[MessageOut])
 async def get_history(
     listing_id: str,
+    request: Request,
     buyer_id:   Optional[str] = Query(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -4241,7 +4242,7 @@ async def get_history(
     except Exception:
         pass
 
-    return filtered
+    return conditional_json(request, filtered)
 
 
 # ── Read tracking (unread counts + "seen" ticks) ───────────────────────────
@@ -4775,6 +4776,7 @@ async def store_direct_message(
 @router.get("/store/{store_id}/history", response_model=List[MessageOut])
 async def get_store_history(
     store_id: str,
+    request: Request,
     buyer_id: Optional[str] = Query(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -4845,7 +4847,7 @@ async def get_store_history(
                     o.reply_preview = _reply_preview_for(ref)
     except Exception:
         pass
-    return out
+    return conditional_json(request, out)
 
 
 @router.get("/store/{store_id}/thread-info")
@@ -4966,6 +4968,32 @@ def _etag_matches(if_none_match: Optional[str], etag: str) -> bool:
         tag = tag.strip()
         return tag[2:] if tag.startswith("W/") else tag
     return any(bare(t) == bare(etag) for t in if_none_match.split(",")) or if_none_match.strip() == "*"
+
+
+def body_etag(payload) -> str:
+    """A weak validator for a JSON body: the same data, the same tag."""
+    body = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
+    return 'W/"' + hashlib.sha256(body.encode("utf-8")).hexdigest()[:32] + '"'
+
+
+def conditional_json(request: Request, items) -> Response:
+    """`items` as JSON with an ETag, or an empty 304 when the caller already
+    holds exactly this.
+
+    Used by the direct-chat history routes. The chat asks for the whole
+    thread every few seconds whenever its socket is down - routine on a
+    weak mobile connection - and nearly every answer is the one it already
+    has, a conversation's worth of bytes each time. Edits and unsends change
+    old rows, so a "messages since" cursor would miss them; a tag over the
+    whole answer cannot. A client that sends no If-None-Match gets the same
+    body as before, plus the header.
+    """
+    payload = jsonable_encoder(items)
+    etag = body_etag(payload)
+    headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+    if _etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers=headers)
+    return JSONResponse(content=payload, headers=headers)
 
 
 @router.get("/inbox/{user_id}")

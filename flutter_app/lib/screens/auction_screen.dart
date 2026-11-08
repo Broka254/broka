@@ -89,8 +89,13 @@ class _AuctionScreenState extends State<AuctionScreen> {
         if (_secondsLeft > 0 && mounted) setState(() => _secondsLeft--);
       });
     }
-    _refreshTimer = Timer.periodic(
-        const Duration(seconds: 30), (_) => _loadLeaderboard());
+    // A safety net for missed live frames (every bid frame reloads it
+    // anyway), so not while the app is in the background.
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      final state = WidgetsBinding.instance.lifecycleState;
+      if (state != null && state != AppLifecycleState.resumed) return;
+      _loadLeaderboard();
+    });
   }
 
   Future<void> _loadAuction() async {

@@ -17,6 +17,7 @@ import '../../../core/utils/result.dart';
 import '../../../services/api_service.dart';
 import '../../../services/image_upload_service.dart';
 import '../../../services/photo_capture.dart';
+import '../../../widgets/broka_image.dart';
 import '../../../widgets/collapsing_screen_header.dart' show BrokaEmptyState, BrokaHeaderButton;
 import '../../../widgets/constellation_background.dart';
 import '../../../widgets/product_grid_view.dart';
@@ -32,7 +33,9 @@ import '../domain/models/trader.dart';
 /// a bad photo must not take the whole card down with it.
 ImageProvider? traderPhoto(String? value) {
   if (value == null || value.isEmpty) return null;
-  if (value.startsWith('http')) return NetworkImage(value);
+  // Cached on disk (BrokaImage.provider); NetworkImage fetched it again
+  // on every visit.
+  if (value.startsWith('http')) return BrokaImage.provider(value);
   try {
     return MemoryImage(base64Decode(value.contains(',') ? value.split(',').last : value));
   } catch (_) {
@@ -271,6 +274,7 @@ class _TraderProfileScreenState extends State<TraderProfileScreen> {
     final top = MediaQuery.of(context).padding.top;
     final photo = traderPhoto(trader.profilePhoto);
     final cover = trader.coverUrl;
+    final coverImage = BrokaImage.provider(cover);
     return SizedBox(
       height: top + 268,
       child: Stack(fit: StackFit.expand, children: [
@@ -283,8 +287,8 @@ class _TraderProfileScreenState extends State<TraderProfileScreen> {
             colors: [Colors.white, Colors.white, Colors.transparent],
             stops: [0.0, 0.55, 1.0],
           ).createShader(r),
-          child: cover != null
-              ? Image.network(cover,
+          child: coverImage != null
+              ? Image(image: coverImage,
                   fit: BoxFit.cover,
                   color: Colors.black.withOpacity(0.35),
                   colorBlendMode: BlendMode.darken,

@@ -487,3 +487,22 @@ async def get_user_profile(
     svc = AuthService(db)
     return await svc.get_user_profile(
         user_id, viewer_id=current_user["id"], viewer_lat=lat, viewer_lng=lng)
+
+
+@router.get("/user/{user_id}/presence")
+async def get_user_presence(
+    user_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Only whether someone is online and when they were last seen.
+
+    An open chat refreshes the other person's presence every 30 seconds.
+    It used to ask GET /user/{id} for that, the whole profile - an inline
+    base64 photo included on older accounts - a hundred and twenty times an
+    hour, for the one line under the name. The same fields, from the same
+    function, so the two can never disagree; no more visible than the full
+    profile already makes them to any signed-in user.
+    """
+    svc = AuthService(db)
+    return await svc.get_user_presence(user_id)

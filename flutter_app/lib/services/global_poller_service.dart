@@ -37,6 +37,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import '../core/network/data_saver.dart';
 import 'api_service.dart';
 import 'local_chat_store.dart';
 import 'active_call.dart';
@@ -173,8 +174,76 @@ class GlobalPollerService {
 
   void _startTimer() {
     _timer?.cancel();
-    _timer = Timer.periodic(sweepInterval, (_) => _checkAll());
+    _ticksSinceSweep = 0;
+    _timer = Timer.periodic(sweepInterval, (_) => _onTick());
   }
+
+  // ── Pace ──────────────────────────────────────────────────────────────────
+  //
+  // The timer ticks every [sweepInterval]; a tick only sweeps once enough
+  // ticks have passed (ticksBetweenSweeps). It used to sweep on every tick
+  // whatever happened: with the server down or the phone between towers it
+  // kept failing every 7 seconds, and on a quiet afternoon it asked for the
+  // same unchanged inbox 500 times an hour. Each answer is small (a 304),
+  // but the requests and the radio waking for them are what a bundle and a
+  // battery pay for.
+
+  int _ticksSinceSweep = 0;
+  int _failedSweeps = 0;
+  int _quietSweeps = 0;
+
+  @visibleForTesting
+  int get failedSweeps => _failedSweeps;
+
+  @visibleForTesting
+  int get quietSweeps => _quietSweeps;
+
+  /// How many [sweepInterval] ticks go by between two sweeps.
+  ///
+  /// * After failures it backs off - 7, 14, 28, then 56 seconds - and the
+  ///   first sweep that reaches the server puts it back to 7.
+  /// * When nothing has changed for a while it slows to every 14 and then
+  ///   21 seconds (35 with Data saver), but only once push is connected:
+  ///   then a call or message reaches the phone by push within a second,
+  ///   and each push nudges the sweep back to full speed ([nudge]). Without
+  ///   push this sweep is how a call rings at all, so it never idles.
+  @visibleForTesting
+  static int ticksBetweenSweeps({
+    required int failedSweeps,
+    required int quietSweeps,
+    required bool pushReady,
+    required bool dataSaver,
+  }) {
+    if (failedSweeps > 0) return 1 << (failedSweeps >= 4 ? 3 : failedSweeps - 1);
+    if (!pushReady) return 1;
+    if (quietSweeps >= 12) return dataSaver ? 5 : 3;
+    if (quietSweeps >= 4) return 2;
+    return 1;
+  }
+
+  int get _ticksNeeded => ticksBetweenSweeps(
+        failedSweeps: _failedSweeps,
+        quietSweeps: _quietSweeps,
+        pushReady: pushReady,
+        dataSaver: DataSaver.isOn,
+      );
+
+  void _onTick() {
+    _ticksSinceSweep++;
+    if (_ticksSinceSweep < _ticksNeeded) return;
+    unawaited(_checkAll());
+  }
+
+  /// Something happened that the sweep should see now: a push arrived in
+  /// the foreground. Back to full speed, and one sweep straight away.
+  void nudge() {
+    _quietSweeps = 0;
+    if (_running) unawaited(_checkAll());
+  }
+
+  /// One sweep, as a tick would run it.
+  @visibleForTesting
+  Future<void> sweep() => _checkAll();
 
   /// Unread messages across all threads, as of the last sweep: the number
   /// on Home's Inbox tab. Seeded from the cached inbox at start so the
@@ -234,6 +303,8 @@ class GlobalPollerService {
     // on the first sweep rather than waiting out the throttle from a
     // previous account's session.
     _lastAnnouncementsCheck = null;
+    _failedSweeps = 0;
+    _quietSweeps = 0;
     unawaited(_seedUnreadFromCache());
     _startTimer();
     // Run once immediately rather than waiting for the first tick.
@@ -267,6 +338,8 @@ class GlobalPollerService {
     // after a failed registration, on a different network or after the
     // token rotated while no isolate was listening.
     unawaited(ensurePushRegistration());
+    // Back from the background: full speed, whatever the pace was before.
+    _quietSweeps = 0;
     await _checkAll();
   }
 
@@ -411,6 +484,8 @@ class GlobalPollerService {
     pushReady = false;
     _timer?.cancel();
     _timer = null;
+    _failedSweeps = 0;
+    _quietSweeps = 0;
     _pushRetryTimer?.cancel();
     _pushRetryTimer = null;
     _pushRetryAttempt = 0;
@@ -470,6 +545,8 @@ class GlobalPollerService {
     if (_checking) return; // avoid overlapping runs if one is slow
     if (ApiService.currentUserId == null) return;
     _checking = true;
+    _ticksSinceSweep = 0;
+    var reachedServer = false;
     try {
       // Conditional: an unchanged inbox comes back as an empty 304 and the
       // previous list (ApiService.getInbox). Every check below still runs
@@ -477,6 +554,9 @@ class GlobalPollerService {
       // marks, _deliveredMarks), and incoming calls have their own request.
       final threads = await ApiService.getInbox(conditional: true);
       final changed = !ApiService.lastInboxNotModified;
+      reachedServer = true;
+      _failedSweeps = 0;
+      _quietSweeps = changed ? 0 : _quietSweeps + 1;
       inbox.value = InboxSnapshot(
         threads: threads,
         confirmedAt: DateTime.now(),
@@ -629,7 +709,10 @@ class GlobalPollerService {
       // next resume, or the announcements screen itself retries.
       unawaited(_checkAnnouncementsThrottled());
     } catch (_) {
-      // Network hiccup or not logged in - just try again next tick.
+      // Network hiccup or a server error: try again, a little later each
+      // time (ticksBetweenSweeps). A failure after the inbox arrived (a
+      // notification that could not be posted) is not the network's.
+      if (!reachedServer) _failedSweeps++;
     } finally {
       _checking = false;
     }

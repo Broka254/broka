@@ -4,9 +4,16 @@
 // Exposes a Stream<DealStatusUpdate> per deal.
 // Auto-reconnects with exponential backoff (1s → 2s → 4s → 8s → 16s, cap 32s).
 // Sends a ping every 25s to keep the connection alive through proxies.
+//
+// The backoff used to stay at 1s: every attempt reset the retry count as it
+// started, before the server had answered, so an unreachable server was
+// tried every second forever and _maxRetries was never reached - a
+// reconnect a second over mobile data for as long as the deal screen was
+// open. The count resets on the server's first frame now.
 
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 // ── Domain object ─────────────────────────────────────────────────────────────
@@ -88,8 +95,19 @@ class DealWsClient {
   );
 
   static const Duration _pingInterval   = Duration(seconds: 25);
-  static const Duration _maxBackoff     = Duration(seconds: 32);
+  static const int      _maxBackoffSteps = 32; // 32 units: 32 seconds
   static const int      _maxRetries     = 10;
+
+  /// Tests point the client at a local server, and shrink the backoff's
+  /// unit so a run of failed attempts takes milliseconds.
+  @visibleForTesting
+  static String? baseUrlOverride;
+  @visibleForTesting
+  static Duration backoffUnit = const Duration(seconds: 1);
+
+  /// Failed attempts since the server last answered.
+  @visibleForTesting
+  int get retryCount => _retryCount;
 
   final String dealId;
   final String token;
@@ -125,10 +143,12 @@ class DealWsClient {
 
   void _doConnect() {
     if (_disposed) return;
-    final uri = Uri.parse('$_baseWsUrl/deal-ws/ws/$dealId?token=$token');
-    _channel = WebSocketChannel.connect(uri);
+    final uri = Uri.parse('${baseUrlOverride ?? _baseWsUrl}/deal-ws/ws/$dealId?token=$token');
+    final channel = _channel = WebSocketChannel.connect(uri);
+    // A refused handshake is reported through the stream below; this only
+    // keeps it from also surfacing as an unhandled error.
+    unawaited(channel.ready.then((_) {}, onError: (Object _) {}));
     _emit(WsConnectionState.connected);
-    _retryCount = 0;
     _startPing();
 
     _sub = _channel!.stream.listen(
@@ -161,6 +181,8 @@ class DealWsClient {
   // ── Message handling ─────────────────────────────────────────────────────────
 
   void _onMessage(dynamic raw) {
+    // The server is talking: whatever went wrong before is over.
+    _retryCount = 0;
     try {
       final json = jsonDecode(raw as String) as Map<String, dynamic>;
       final type = json['type'] as String?;
@@ -198,9 +220,8 @@ class DealWsClient {
     _cleanup(keepState: true);
     _emit(WsConnectionState.reconnecting);
 
-    final delay = Duration(
-      seconds: (1 << _retryCount).clamp(1, _maxBackoff.inSeconds),
-    );
+    final steps = 1 << (_retryCount >= 5 ? 5 : _retryCount);
+    final delay = backoffUnit * (steps > _maxBackoffSteps ? _maxBackoffSteps : steps);
     _retryCount++;
 
     _reconnectTimer = Timer(delay, () {

@@ -33,6 +33,7 @@ import '../features/categories/domain/category_visual.dart';
 import '../features/listings/data/repositories/listings_repository.dart';
 import '../features/listings/domain/models/listing_engagement.dart';
 import '../core/network/api_client.dart';
+import '../core/network/data_saver.dart';
 import '../features/stores/presentation/storefront_launcher.dart';
 import '../core/utils/result.dart';
 import '../features/safe_payment/escrow_callout.dart';
@@ -226,24 +227,34 @@ class _ProductScreenState extends State<ProductScreen> {
     });
   }
 
-  /// Gallery sources, first photo first: the stored images' large size
+  /// Gallery sources, first photo first: the stored images' medium size
   /// when the listing has them, else the legacy base64 photos. BrokaImage
   /// renders either.
+  ///
+  /// Medium (960 px), not large (1600 px): the gallery is a 320dp-tall box
+  /// on a phone, where the large file is two to three times the bytes for a
+  /// difference nobody can see - and every product page opened on mobile
+  /// data paid it. With Data saver on, the card's own thumbnail comes
+  /// first: it is already on the phone, so the page costs no picture bytes
+  /// at all.
   List<String> get _photos {
     final stored = _listing?.photos ?? const [];
-    if (stored.isNotEmpty) return stored.map((p) => p.large).toList();
+    if (stored.isNotEmpty) {
+      return stored.map((p) => DataSaver.isOn ? p.thumb : p.medium).toList();
+    }
     final raw = _listing?.verifiedPhotos;
     if (raw == null || raw.isEmpty) return [];
     return raw.split(',').where((s) => s.isNotEmpty).toList();
   }
 
-  /// What photo [i] falls back to when its large file can't be loaded: the
-  /// same photo's other sizes, largest first. Legacy base64 photos have no
-  /// other sizes.
+  /// What photo [i] falls back to when its first choice can't be loaded:
+  /// the same photo's other sizes. Data saver never falls back to the large
+  /// file. Legacy base64 photos have no other sizes.
   List<String> _photoFallbacks(int i) {
     final stored = _listing?.photos ?? const [];
     if (i < 0 || i >= stored.length) return const [];
-    return [stored[i].medium, stored[i].thumb];
+    if (DataSaver.isOn) return [stored[i].medium];
+    return [stored[i].large, stored[i].thumb];
   }
 
   bool get _isMine => _listing?.sellerId == ApiService.currentUserId;
