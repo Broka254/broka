@@ -191,7 +191,8 @@ void main() {
       final shown = tester
           .widget<Text>(find.descendant(
               of: find.byType(ZenoStreamingText, skipOffstage: false).last,
-              matching: find.byType(Text, skipOffstage: false)))
+              matching: find.byType(Text, skipOffstage: false),
+              skipOffstage: false))
           .textSpan!
           .toPlainText();
       expect(shown, isNot(_reply), reason: 'not the whole reply at once');
