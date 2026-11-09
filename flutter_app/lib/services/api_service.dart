@@ -1890,7 +1890,7 @@ class ApiService {
     String? storeId,
     required String senderRole,
     required String senderId,
-    required String contentType,   // "audio" | "image"
+    required String contentType,   // "audio" | "image" | "file" (a document)
     required Uint8List fileBytes,
     required String fileName,
     required String mimeType,
@@ -1932,13 +1932,35 @@ class ApiService {
       if (caption != null && caption.trim().isNotEmpty) {
         request.fields['caption'] = caption.trim();
       }
-      final streamed = await request.send().timeout(const Duration(seconds: 60));
+      // Long enough for the file at ~50 KB/s: a fixed minute failed every
+      // document over about 3 MB on a slow connection, mid-upload.
+      final seconds = (60 + fileBytes.length ~/ 50000).clamp(60, 600);
+      final streamed = await request.send().timeout(Duration(seconds: seconds));
       return http.Response.fromStream(streamed);
     }
 
     final res = await _sendAuthed(send);
     if (res.statusCode != 200) throw Exception(_extractError(res.body));
     return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// A document shared in a direct chat (GET /media/chat-files/{id}),
+  /// fetched with this phone's sign-in: only the thread's two people may
+  /// have it. Only ever this API's own path - the bearer token never goes
+  /// to an address a message carries.
+  static Future<Uint8List> downloadChatFile(String mediaPath) async {
+    if (!mediaPath.startsWith('/media/chat-files/')) {
+      throw ArgumentError.value(mediaPath, 'mediaPath', 'not a chat file');
+    }
+    final uri = Uri.parse('$baseUrl$mediaPath');
+    final res = await _sendAuthed(() => http
+        .get(uri, headers: _headers)
+        .timeout(const Duration(minutes: 5)));
+    if (res.statusCode == 404) {
+      throw Exception('This file is no longer available.');
+    }
+    if (res.statusCode != 200) throw Exception(_extractError(res.body));
+    return res.bodyBytes;
   }
 
   // ── General Zeno memory (durable assistant / Buying Agent) ─────────────

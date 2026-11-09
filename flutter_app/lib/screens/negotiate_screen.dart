@@ -1821,68 +1821,67 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     );
   }
 
-  /// Home's search pill, as on Zeno's screen: the offer tag and the mic sit
-  /// inside it, and the send button scales in once there is a message.
+  /// The chat composer card (chat_parts.dart, 2026-11-09), as in the
+  /// direct chat: the message on top, and under it the offer and the photo
+  /// as labelled chips, the microphone and the send button on the right.
   Widget _buildInputBar() => Padding(
     padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
-    child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-      Expanded(
-        child: ChatComposerPill(
-          focused: _composerFocused,
-          child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            ChatComposerAction(
-              icon: Icons.sell_outlined,
-              tooltip: 'Make an offer',
-              onTap: _showOfferDialog,
-            ),
-            // Zeno can look at a picture here too; only in a deal's room -
-            // the listing-less free chat has nowhere to send one.
-            if (_listing != null)
-              ChatComposerAction(
-                icon: Icons.add_photo_alternate_outlined,
-                tooltip: 'Show Zeno a photo',
-                onTap: _showZenoPhoto,
-              ),
-            Expanded(
-              child: TextField(
-                key: const Key('negotiate-composer'),
-                controller: _msgCtrl,
-                focusNode: _composerFocus,
-                style: const TextStyle(color: BrokaColors.textHigh, fontSize: 15.5, height: 1.35),
-                minLines: 1,
-                maxLines: 5,
-                textCapitalization: TextCapitalization.sentences,
-                keyboardType: TextInputType.multiline,
-                textInputAction: TextInputAction.newline,
-                cursorColor: BrokaColors.neonBlue,
-                decoration: const InputDecoration(
-                  isDense: true,
-                  filled: false,
-                  hintText: 'Message Zeno',
-                  hintStyle: TextStyle(color: BrokaColors.textMid, fontSize: 15),
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 14),
-                ),
-              ),
-            ),
-            if (!_hasDraft)
-              AnimatedBuilder(
-                animation: _voice,
-                builder: (_, __) => ChatComposerAction(
-                  icon: _voice.isOpen ? Icons.mic_rounded : Icons.mic_none_rounded,
-                  tooltip: 'Talk to Zeno',
-                  onTap: _openVoice,
-                  active: _voice.isOpen,
-                  leading: false,
-                ),
-              ),
-          ]),
+    child: ChatComposerCard(
+      focused: _composerFocused,
+      field: TextField(
+        key: const Key('negotiate-composer'),
+        controller: _msgCtrl,
+        focusNode: _composerFocus,
+        style: const TextStyle(color: BrokaColors.textHigh, fontSize: 15.5, height: 1.35),
+        minLines: 1,
+        maxLines: 5,
+        textCapitalization: TextCapitalization.sentences,
+        keyboardType: TextInputType.multiline,
+        textInputAction: TextInputAction.newline,
+        cursorColor: BrokaColors.neonBlue,
+        decoration: const InputDecoration(
+          isDense: true,
+          filled: false,
+          hintText: 'Message Zeno',
+          hintStyle: TextStyle(color: BrokaColors.textMid, fontSize: 15),
+          border: InputBorder.none,
+          enabledBorder: InputBorder.none,
+          focusedBorder: InputBorder.none,
+          contentPadding: EdgeInsets.fromLTRB(2, 10, 2, 6),
         ),
       ),
-      ChatSendButton(visible: _hasDraft, onTap: () => _send()),
-    ]),
+      leading: [
+        ChatComposerChip(
+          icon: Icons.sell_outlined,
+          label: 'Offer',
+          tooltip: 'Make an offer',
+          color: BrokaColors.gold,
+          onTap: _showOfferDialog,
+        ),
+        // Zeno can look at a picture here too; only in a deal's room -
+        // the listing-less free chat has nowhere to send one.
+        if (_listing != null)
+          ChatComposerChip(
+            icon: Icons.add_photo_alternate_outlined,
+            label: 'Photo',
+            tooltip: 'Show Zeno a photo',
+            onTap: _showZenoPhoto,
+          ),
+      ],
+      trailing: [
+        if (!_hasDraft)
+          AnimatedBuilder(
+            animation: _voice,
+            builder: (_, __) => ChatComposerIconButton(
+              icon: _voice.isOpen ? Icons.mic_rounded : Icons.mic_none_rounded,
+              tooltip: 'Talk to Zeno',
+              onTap: _openVoice,
+              active: _voice.isOpen,
+            ),
+          ),
+        ChatSendButton(visible: _hasDraft, onTap: () => _send(), size: 38),
+      ],
+    ),
   );
 }
 

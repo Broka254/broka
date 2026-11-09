@@ -57,9 +57,10 @@ class _MemoryBackend:
         self.buffers: dict = {}  # (room, user) -> [envelope]
         self.subscribers: list = []  # (instance_id, callback)
 
-    async def register(self, room, user, instance, conn):
+    async def register(self, room, user, instance, conn, extra=None):
         self.presence.setdefault(room, {})[user] = {
             "instance": instance, "conn": conn, "exp": time.time() + PRESENCE_TTL_SECONDS,
+            **(extra or {}),
         }
 
     async def unregister(self, room, user, conn) -> bool:
@@ -187,16 +188,29 @@ class CallSignalingHub:
             except Exception:
                 pass
 
-    async def register(self, room_id, user_id, connection_id):
+    async def register(self, room_id, user_id, connection_id, *, standby: bool = False,
+                       peer: Optional[str] = None):
+        """Presence for one socket. `standby` marks a callee's phone that is
+        in the room while the call still rings (calls.py, answering without
+        "Connecting"): signals reach it, but it has not joined the call, so
+        no replica counts it towards `ready` or keeps the call alive for it.
+        `peer` is that phone's id for the connection it negotiated, which
+        the caller is told along with `ready`."""
         await self.ensure_subscribed()
+        extra = {}
+        if standby:
+            extra["standby"] = True
+        if peer:
+            extra["peer"] = peer
         if self._use_redis:
             client = await self._get_client()
-            entry = json.dumps({"instance": self.instance_id, "conn": connection_id, "exp": time.time() + PRESENCE_TTL_SECONDS})
+            entry = json.dumps({"instance": self.instance_id, "conn": connection_id,
+                                "exp": time.time() + PRESENCE_TTL_SECONDS, **extra})
             await client.hset(_presence_key(room_id), user_id, entry)
             await client.expire(_presence_key(room_id), PRESENCE_TTL_SECONDS * 3)
         else:
-            await self._mem.register(room_id, user_id, self.instance_id, connection_id)
-        logger.info("[signaling] PRESENCE_JOIN instance=%s room=%s user=%s conn=%s", self.instance_id, room_id, user_id, connection_id)
+            await self._mem.register(room_id, user_id, self.instance_id, connection_id, extra)
+        logger.info("[signaling] PRESENCE_JOIN instance=%s room=%s user=%s conn=%s standby=%s", self.instance_id, room_id, user_id, connection_id, standby)
 
     async def unregister(self, room_id, user_id, connection_id) -> bool:
         """Only the owning connection can remove presence: a ghost socket's

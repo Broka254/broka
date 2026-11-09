@@ -58,6 +58,7 @@ from api.core.message_visibility import (
     visible_to_role_clause,
 )
 from api.core.audit import record_audit
+from api.core.chat_files import file_fields
 from api.core.config import settings
 from api.domains.pricing.safe_payment import ai_payment_policy
 from api.core.circuit_breaker import deepseek_breaker, gemini_breaker, CircuitOpenError
@@ -442,6 +443,11 @@ class MessageOut(BaseModel):
     # fallback rather than leaking private Zeno contents.
     reply_to_message_id: Optional[str] = None
     reply_preview:    Optional[dict] = None
+    # A shared document (msg_type "file"): what the chat shows of it before
+    # it is downloaded from media_url (api/core/chat_files.py).
+    file_name:        Optional[str] = None
+    file_size:        Optional[int] = None
+    file_mime:        Optional[str] = None
 
 
 # ── Individual AI callers ─────────────────────────────────────────────────────
@@ -3588,6 +3594,26 @@ async def seller_default_buyer(db: AsyncSession, listing_id: str) -> Optional[st
     return result.scalar_one_or_none()
 
 
+def inbox_preview(m: NegotiationMessage) -> str:
+    """The Inbox's line for a thread's last message. A photo, voice note or
+    document without words used to read "[media]"; a document's line is
+    its name, which is what the other person wants to know."""
+    if getattr(m, "deleted_at", None):
+        return "Message deleted"
+    text = (m.content or "").strip()
+    kind = getattr(m, "msg_type", None) or "text"
+    if kind == "file":
+        name = getattr(m, "file_name", None) or "Document"
+        return (f"\U0001F4C4 {name}" + (f" \u00b7 {text}" if text else ""))[:80]
+    if text:
+        return text[:80]
+    if kind == "image":
+        return "\U0001F4F7 Photo"
+    if kind in ("voice", "audio"):
+        return "\U0001F3A4 Voice message"
+    return "[media]"
+
+
 def _reply_preview_for(m: Optional[NegotiationMessage]) -> Optional[dict]:
     """Compact quote preview for a referenced message. Never leaks private
     Zeno contents: only genuine direct-chat rows reach here - callers refuse
@@ -3609,6 +3635,9 @@ def _reply_preview_for(m: Optional[NegotiationMessage]) -> Optional[dict]:
         label = "Photo"
     elif msg_type in ("voice", "audio"):
         label = "Voice message"
+    elif msg_type == "file":
+        # The document's name: "the invoice" is what the reply is about.
+        label = (getattr(m, "file_name", None) or "Document")[:140]
     elif msg_type == "call":
         label = "Call"
     elif msg_type == "deleted":
@@ -3968,6 +3997,13 @@ async def edit_message(
     content = content[:CHAT_CONTENT_MAX_CHARS]
     msg.content = content
     msg.edited_at = _dt.utcnow()
+    # The new words are scanned like a new message's: sending something
+    # innocent and editing a phone number into it went past the scan.
+    await _audit_off_platform_solicitation(
+        db, sender_id=current["id"], message_id=msg.id,
+        listing_id=msg.listing_id or f"store:{msg.store_id}",
+        role=msg.role, content=content,
+    )
     await db.commit()
     await db.refresh(msg)
 
@@ -4009,12 +4045,25 @@ async def unsend_message(
         if not msg.created_at or _dt.utcnow() - msg.created_at > UNSEND_WINDOW:
             raise HTTPException(status_code=400,
                 detail="This message is too old to unsend.")
+        if (msg.msg_type or "") == "file":
+            # A document's bytes live in their own row: unsent, it is gone
+            # for both sides - not left downloadable by anyone holding its
+            # link.
+            from sqlalchemy import delete as sa_delete
+            from api.models.chat_file import ChatFile
+            file_id = (msg.media_url or "").rsplit("/", 1)[-1]
+            if file_id:
+                await db.execute(sa_delete(ChatFile).where(
+                    ChatFile.id == file_id, ChatFile.uploader_id == msg.sender_id))
         msg.deleted_at = _dt.utcnow()
         msg.msg_type = "deleted"
         msg.content = None
         msg.media_url = None
         msg.duration_secs = None
         msg.call_type = None
+        msg.file_name = None
+        msg.file_size = None
+        msg.file_mime = None
         await db.commit()
         await db.refresh(msg)
         if msg.buyer_id:
@@ -4112,7 +4161,8 @@ async def get_history(
                                    msg_type=msg_type, media_url=media_url, duration_secs=duration,
                                    call_type=call_type, created_at=created_at,
                                    is_agent_initiated=bool(getattr(m, "is_agent_initiated", False)),
-                                   edited_at=edited_iso, deleted_at=deleted_iso, deleted=deleted)
+                                   edited_at=edited_iso, deleted_at=deleted_iso, deleted=deleted,
+                                   **file_fields(m))
                     )
 
         elif m.role == actual_role and (
@@ -4147,7 +4197,8 @@ async def get_history(
                                msg_type=msg_type, media_url=media_url, duration_secs=duration,
                                call_type=call_type, created_at=created_at,
                                client_msg_id=getattr(m, "client_msg_id", None),
-                               edited_at=edited_iso, deleted_at=deleted_iso, deleted=deleted)
+                               edited_at=edited_iso, deleted_at=deleted_iso, deleted=deleted,
+                                   **file_fields(m))
                 )
 
         elif actual_role == "seller" and m.role == "buyer":
@@ -4168,7 +4219,8 @@ async def get_history(
                         MessageOut(id=m.id, role="buyer", content=content, via_ai=msg_via_ai,
                                    msg_type=msg_type, media_url=media_url, duration_secs=duration,
                                    call_type=call_type, created_at=created_at,
-                                   edited_at=edited_iso, deleted_at=deleted_iso, deleted=deleted)
+                                   edited_at=edited_iso, deleted_at=deleted_iso, deleted=deleted,
+                                   **file_fields(m))
                     )
 
         elif actual_role == "buyer" and m.role == "seller":
@@ -4183,7 +4235,8 @@ async def get_history(
                         MessageOut(id=m.id, role="seller", content=content, via_ai=msg_via_ai,
                                    msg_type=msg_type, media_url=media_url, duration_secs=duration,
                                    call_type=call_type, created_at=created_at,
-                                   edited_at=edited_iso, deleted_at=deleted_iso, deleted=deleted)
+                                   edited_at=edited_iso, deleted_at=deleted_iso, deleted=deleted,
+                                   **file_fields(m))
                     )
 
     # Attach quote-reply references without leaking private threads. The row
@@ -4807,6 +4860,7 @@ async def get_store_history(
             deleted_at=(m.deleted_at.isoformat() + "Z") if getattr(m, "deleted_at", None) else None,
             deleted=deleted,
             reply_to_message_id=getattr(m, "reply_to_message_id", None),
+            **file_fields(m),
         ))
     # Quote previews from send-time snapshots (same rule as /history).
     try:
@@ -5129,8 +5183,7 @@ async def get_inbox(
             # "[media]" fallback claimed the buyer's last message was an
             # attachment when they had actually unsent it - the seller's
             # branch already said "Message deleted".
-            "last_message":      ("Message deleted" if getattr(last_msg, "deleted_at", None)
-                                  else (last_msg.content or "[media]"))[:80],
+            "last_message":      inbox_preview(last_msg),
             "last_role":         last_msg.role,
             # Which message last_message is. The app's notifier compared the
             # TEXT of the last message with the one it had notified about,
@@ -5278,8 +5331,7 @@ async def get_inbox(
                 "counterpart_avatar": counterpart_photo or "",
                 "is_online":         is_on,
                 "last_seen":         last_seen_str,
-                "last_message":      ("Message deleted" if getattr(last_msg, "deleted_at", None)
-                                      else (last_msg.content or "[media]"))[:80],
+                "last_message":      inbox_preview(last_msg),
                 "last_role":         last_msg.role,
                 # See the buyer view above.
                 "last_message_id":   last_msg.id,
@@ -5480,8 +5532,7 @@ async def get_inbox(
                 "counterpart_avatar": ((store_photo_by_id.get(store.id) or (owner.profile_photo if owner else None)) or "") if my_role == "buyer" else ((buyer_user.profile_photo if buyer_user else None) or ""),
                 "is_online":         is_on,
                 "last_seen":         last_seen_str,
-                "last_message":      ("Message deleted" if getattr(last_msg, "deleted_at", None)
-                                      else (last_msg.content or "[media]"))[:80],
+                "last_message":      inbox_preview(last_msg),
                 "last_role":         last_msg.role,
                 "last_message_id":   last_msg.id,
                 "last_message_at":   (last_msg.created_at.isoformat() + "Z") if last_msg.created_at else None,

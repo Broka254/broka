@@ -1,15 +1,21 @@
 """
 BROKA - Media Router
-Handles voice note and image uploads for negotiations.
-Files are stored as base64 in the NegotiationMessage row itself (no external
-object storage required); an image is first processed like a listing photo
-(api/core/image_processing.py: validated, upright, metadata stripped). The
+Handles voice note, image and document uploads for negotiations.
+Voice notes and images are stored as base64 in the NegotiationMessage row
+itself (no external object storage required); an image is first processed
+like a listing photo (api/core/image_processing.py: validated, upright,
+metadata stripped). A document is a ChatFile row the message names
+(api/models/chat_file.py), fetched by the thread's two people only. The
 Flutter client sends multipart/form-data with the file bytes and the
 negotiation metadata; we persist and broadcast.
 
 POST /media/upload
-  Multipart body: listing_id, buyer_id (optional), role, content_type (audio|image), file
-  Returns: MessageOut-compatible dict including media_url (data URI).
+  Multipart body: listing_id, buyer_id (optional), role, content_type (audio|image|file), file
+  Returns: MessageOut-compatible dict including media_url (a data URI, or
+  /media/chat-files/{id} for a document) and file_name/file_size/file_mime.
+
+GET /media/chat-files/{file_id}
+  A chat document, for the buyer and seller of its thread only.
 
 GET /media/ws/{listing_id}
   WebSocket endpoint for real-time message delivery.
@@ -19,22 +25,29 @@ GET /media/ws/{listing_id}
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
+import re
 import uuid
 from datetime import datetime as _dt
 from typing import Dict, List, Optional
 
 from fastapi import (
     APIRouter, Depends, File, Form, HTTPException,
-    Query, UploadFile, WebSocket, WebSocketDisconnect,
+    Query, Response, UploadFile, WebSocket, WebSocketDisconnect,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from api.core.chat_files import (
+    MAX_FILE_BYTES, FileRejected, accept_document, content_disposition, file_fields,
+)
 from api.core.image_processing import ImageRejected, process_image
+from api.core.rate_limit import chat_media_daily_limiter, chat_media_limiter
 from api.database import get_db, NegotiationMessage, Listing, User
+from api.models.chat_file import ChatFile
 from api.security import get_current_user, decode_access_token
 
 logger = logging.getLogger(__name__)
@@ -339,13 +352,29 @@ def _msg_to_dict(m: NegotiationMessage, uid: str, is_seller: bool) -> dict:
         "deleted":      getattr(m, "deleted_at", None) is not None,
         "reply_to_message_id": getattr(m, "reply_to_message_id", None),
         "reply_preview": _reply_preview_dict(m),
+        **file_fields(m),
     }
 
 
-# ── Upload endpoint — voice notes and images ──────────────────────────────────
+
+# ── Upload endpoint — voice notes, images and documents ───────────────────────
 
 MAX_VOICE_MB = 5
 MAX_IMAGE_MB = 10
+
+# A voice note is stored with the type its upload declared, and that type
+# rides to the other phone inside a data: URI. Only audio: a declared
+# "text/html" or "image/svg+xml" was stored and relayed as a "voice note".
+_AUDIO_TYPE_RE = re.compile(r"audio/[a-z0-9][a-z0-9.+-]{0,40}")
+
+# What one voice note can last: the recorder's own limit is far below this.
+MAX_VOICE_SECONDS = 3600
+
+
+def _max_bytes(content_type: str) -> int:
+    if content_type == "file":
+        return MAX_FILE_BYTES
+    return (MAX_VOICE_MB if content_type == "audio" else MAX_IMAGE_MB) * 1024 * 1024
 
 
 @router.post("/upload")
@@ -354,7 +383,7 @@ async def upload_media(
     store_id:      Optional[str] = Form(default=None),
     sender_role:   str       = Form(...),
     sender_id:     str       = Form(...),
-    content_type:  str       = Form(...),   # "audio" | "image"
+    content_type:  str       = Form(...),   # "audio" | "image" | "file"
     buyer_id:      Optional[str] = Form(default=None),
     duration_secs: Optional[int] = Form(default=None),
     # The id the sender's app gave this voice note or photo before sending
@@ -362,22 +391,28 @@ async def upload_media(
     client_msg_id: Optional[str] = Form(default=None, max_length=64),
     # Optional quote-reply reference (multipart field, same rules as text).
     reply_to_message_id: Optional[str] = Form(default=None, max_length=64),
-    # Optional caption for an image message, shown under the photo.
+    # Optional caption for an image or a document, shown with it.
     caption: Optional[str] = Form(default=None, max_length=2000),
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Upload a voice note or image into a negotiation thread.
-    File is stored as a base64 data URI in NegotiationMessage.media_url.
-    After saving, the message is broadcast via WebSocket to all thread participants.
+    Upload a voice note, image or document into a negotiation thread.
+    A voice note or photo is stored as a base64 data URI in
+    NegotiationMessage.media_url; a document as a ChatFile row the message
+    names (api/models/chat_file.py). After saving, the message is broadcast
+    via WebSocket to all thread participants.
     """
     authenticated_uid = current_user["id"]
     if sender_id != authenticated_uid:
         raise HTTPException(status_code=403, detail="sender_id mismatch")
     if bool(listing_id) == bool(store_id):
         raise HTTPException(status_code=400, detail="listing_id or store_id required")
+    # Keyed by the signed-in user. Nothing limited this: every upload is
+    # decoded (a photo), stored and pushed to the other side.
+    await chat_media_limiter.check_and_record(authenticated_uid)
+    await chat_media_daily_limiter.check_and_record(authenticated_uid)
 
     listing = None
     store = None
@@ -417,8 +452,9 @@ async def upload_media(
             )
 
     # Validate content type
-    if content_type not in ("audio", "image"):
-        raise HTTPException(status_code=400, detail="content_type must be 'audio' or 'image'")
+    if content_type not in ("audio", "image", "file"):
+        raise HTTPException(status_code=400,
+            detail="content_type must be 'audio', 'image' or 'file'")
 
     client_msg_id = (client_msg_id or "").strip() or None
     if client_msg_id:
@@ -428,30 +464,13 @@ async def upload_media(
         if earlier is not None:
             return _upload_response(earlier)
 
-    max_bytes = (MAX_VOICE_MB if content_type == "audio" else MAX_IMAGE_MB) * 1024 * 1024
-    file_bytes = await file.read()
+    max_bytes = _max_bytes(content_type)
+    # Read one byte past the limit and no more: a whole upload read to
+    # learn it was too big held up to the 32 MB body cap in memory first.
+    file_bytes = await file.read(max_bytes + 1)
     if len(file_bytes) > max_bytes:
         raise HTTPException(status_code=413,
-            detail=f"File too large (max {MAX_VOICE_MB if content_type == 'audio' else MAX_IMAGE_MB} MB)")
-
-    if content_type == "image":
-        # Through the same processing as a listing photo: stored as sent,
-        # a phone shot reached the other side of the chat with its EXIF -
-        # GPS included, i.e. where the sender was standing - and any bytes
-        # at all could be passed off as an image. The largest listing size
-        # is kept; it is re-encoded from pixels, so upright and metadata-free.
-        try:
-            processed = await asyncio.to_thread(process_image, file_bytes)
-        except ImageRejected as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
-        file_bytes = processed.variants["large"][0]
-        mime = "image/webp"
-    else:
-        mime = file.content_type or "audio/mp4"
-
-    # Build data URI
-    b64  = base64.b64encode(file_bytes).decode()
-    data_uri = f"data:{mime};base64,{b64}"
+            detail=f"File too large (max {max_bytes // (1024 * 1024)} MB)")
 
     effective_buyer_id: Optional[str] = (
         authenticated_uid if actual_role == "buyer" else buyer_id
@@ -468,6 +487,44 @@ async def upload_media(
         if not effective_buyer_id:
             raise HTTPException(status_code=400, detail="buyer_id required")
 
+    chat_file: Optional[ChatFile] = None
+    if content_type == "image":
+        # Through the same processing as a listing photo: stored as sent,
+        # a phone shot reached the other side of the chat with its EXIF -
+        # GPS included, i.e. where the sender was standing - and any bytes
+        # at all could be passed off as an image. The largest listing size
+        # is kept; it is re-encoded from pixels, so upright and metadata-free.
+        try:
+            processed = await asyncio.to_thread(process_image, file_bytes)
+        except ImageRejected as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        b64 = base64.b64encode(processed.variants["large"][0]).decode()
+        media_url = f"data:image/webp;base64,{b64}"
+    elif content_type == "audio":
+        mime = (file.content_type or "audio/mp4").split(";", 1)[0].strip().lower()
+        if not _AUDIO_TYPE_RE.fullmatch(mime):
+            raise HTTPException(status_code=415, detail="A voice note must be audio")
+        b64 = base64.b64encode(file_bytes).decode()
+        media_url = f"data:{mime};base64,{b64}"
+    else:
+        try:
+            file_name, file_mime = accept_document(file.filename or "", file_bytes)
+        except FileRejected as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        chat_file = ChatFile(
+            id=str(uuid.uuid4()),
+            uploader_id=authenticated_uid,
+            listing_id=listing_id,
+            store_id=store_id,
+            buyer_id=effective_buyer_id,
+            file_name=file_name,
+            mime_type=file_mime,
+            size_bytes=len(file_bytes),
+            sha256=hashlib.sha256(file_bytes).hexdigest(),
+            data=file_bytes,
+        )
+        media_url = chat_file_url(chat_file.id)
+
     # Listing threads only: a photo to a seller arms the availability
     # reminder. Store threads have no single listing to chase.
     if actual_role == "buyer" and listing is not None:
@@ -477,6 +534,7 @@ async def upload_media(
         )
 
     from api.routers.negotiate import (
+        _audit_off_platform_solicitation,
         _reply_snapshot_json,
         _validate_reply_reference,
     )
@@ -485,25 +543,41 @@ async def upload_media(
         db, (reply_to_message_id or "").strip() or None,
         listing_id=listing_id, buyer_id=effective_buyer_id, store_id=store_id,
     )
-    msg_type = "voice" if content_type == "audio" else "image"
+    msg_type = {"audio": "voice", "image": "image", "file": "file"}[content_type]
+    text = ((caption or "").strip() or None) if content_type != "audio" else None
     nm = NegotiationMessage(
         listing_id=listing_id,
         store_id=store_id,
         sender_id=authenticated_uid,
         role=actual_role,
         recipient_role="seller" if actual_role == "buyer" else "buyer",
-        content=(caption or "").strip() or None if content_type == "image" else None,
+        content=text,
         buyer_id=effective_buyer_id,
         via_ai=False,
         msg_type=msg_type,
-        media_url=data_uri,
-        duration_secs=duration_secs if content_type == "audio" else None,
+        media_url=media_url,
+        duration_secs=(max(0, min(duration_secs, MAX_VOICE_SECONDS))
+                       if content_type == "audio" and duration_secs is not None else None),
         client_msg_id=client_msg_id,
         reply_to_message_id=((reply_to_message_id or "").strip() or None),
         reply_snapshot=_reply_snapshot_json(_preview),
+        file_name=chat_file.file_name if chat_file else None,
+        file_size=chat_file.size_bytes if chat_file else None,
+        file_mime=chat_file.mime_type if chat_file else None,
     )
+    if chat_file is not None:
+        db.add(chat_file)
     db.add(nm)
     try:
+        await db.flush()
+        if text:
+            # A caption is typed text like any message, and was the one
+            # thing a user typed that the contact-leak scan never saw.
+            await _audit_off_platform_solicitation(
+                db, sender_id=authenticated_uid, message_id=nm.id,
+                listing_id=listing_id or f"store:{store_id}",
+                role=actual_role, content=text,
+            )
         await db.commit()
     except IntegrityError:
         # The same upload twice at once; the unique index let one in.
@@ -521,6 +595,56 @@ async def upload_media(
     await _broadcast(key, payload, exclude_uid=authenticated_uid)
 
     return _upload_response(nm)
+
+
+def chat_file_url(file_id: str) -> str:
+    """Where a chat document is fetched from: a path on this API, sent with
+    the app's own sign-in (never a public storage URL)."""
+    return f"/media/chat-files/{file_id}"
+
+
+@router.get("/chat-files/{file_id}")
+async def download_chat_file(
+    file_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """A document shared in a direct chat, for the two people in that chat.
+
+    Anyone else gets 404 - not 403, which would confirm the file exists.
+    Sent as an attachment, with its type pinned (nosniff) and a sandbox
+    policy, so nothing ever renders one as a page."""
+    row = (await db.execute(
+        select(ChatFile).where(ChatFile.id == file_id)
+    )).scalar_one_or_none()
+    uid = current_user["id"]
+    allowed = row is not None and uid in (row.buyer_id, row.uploader_id)
+    if row is not None and not allowed:
+        # The thread's seller: the listing's, or the store's owner.
+        if row.store_id:
+            from api.models.store import Store
+            owner = (await db.execute(
+                select(Store.owner_id).where(Store.id == row.store_id)
+            )).scalar_one_or_none()
+            allowed = owner == uid
+        elif row.listing_id:
+            seller = (await db.execute(
+                select(Listing.seller_id).where(Listing.id == row.listing_id)
+            )).scalar_one_or_none()
+            allowed = seller == uid
+    if not allowed:
+        raise HTTPException(status_code=404, detail="File not found")
+    return Response(
+        content=row.data,
+        media_type=row.mime_type,
+        headers={
+            "Content-Disposition": content_disposition(row.file_name),
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "sandbox",
+            # The file never changes; only these two may have it.
+            "Cache-Control": "private, max-age=86400",
+        },
+    )
 
 
 async def sent_with_client_id(
@@ -553,6 +677,7 @@ def _upload_response(nm: NegotiationMessage) -> dict:
         "deleted":       getattr(nm, "deleted_at", None) is not None,
         "reply_to_message_id": getattr(nm, "reply_to_message_id", None),
         "reply_preview": _reply_preview_dict(nm),
+        **file_fields(nm),
     }
 
 

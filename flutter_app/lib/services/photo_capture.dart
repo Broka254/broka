@@ -86,6 +86,31 @@ class PhotoCapture {
   static Future<File?> pickFromGallery(BuildContext context) =>
       _pick(context, ImageSource.gallery);
 
+  /// Several photos from the gallery, at most [limit] of them, sized as a
+  /// single pick is. Empty when none were picked. Android's photo picker
+  /// enforces the limit itself; an older gallery may hand back more, and
+  /// the first [limit] are kept.
+  static Future<List<File>> pickManyFromGallery(BuildContext context,
+      {required int limit}) async {
+    try {
+      final picked = await ImagePicker().pickMultiImage(
+        imageQuality: galleryQuality,
+        maxWidth: galleryMaxSide,
+        maxHeight: galleryMaxSide,
+        limit: limit < 2 ? 2 : limit,
+      );
+      return [for (final x in picked.take(limit)) File(x.path)];
+    } on PlatformException catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+            e.code.contains('denied')
+                ? 'BROKA needs permission to use your photos. Allow it in your phone settings.'
+                : "Couldn't open the gallery.")));
+      }
+      return const [];
+    }
+  }
+
   static Future<File?> _pick(BuildContext context, ImageSource source) async {
     final camera = source == ImageSource.camera;
     try {

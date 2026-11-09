@@ -160,6 +160,9 @@ void main() {
       await type(tester, 'too small');
       await until(tester, find.text('Not now'));
       await tester.ensureVisible(find.text('Not now'));
+      // ensureVisible scrolls without a frame: the tap must see where the
+      // button is now, not where it was (under the composer card).
+      await tester.pump();
       await tester.tap(find.text('Not now'));
       await run(tester, const Duration(seconds: 2));
       expect(find.byType(ZenoScreen), findsOneWidget);

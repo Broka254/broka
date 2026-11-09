@@ -16,6 +16,8 @@ class AspectImage extends StatefulWidget {
     this.borderRadius = BorderRadius.zero,
     this.placeholderHeight = 160,
     this.errorIconSize = 36,
+    this.fillWidth = false,
+    this.minHeight = 0,
   });
 
   final ImageProvider provider;
@@ -25,6 +27,17 @@ class AspectImage extends StatefulWidget {
   final BorderRadius borderRadius;
   final double placeholderHeight;
   final double errorIconSize;
+
+  /// Always [maxWidth] wide (the chat's photo frame, 2026-11-09). The photo
+  /// keeps its own ratio while its height falls between [minHeight] and
+  /// [maxHeight]; past either bound it is cropped to the bound ([fit]
+  /// cover) rather than shrunk, so a tall portrait no longer sits in a
+  /// strip between two dark bars.
+  final bool fillWidth;
+
+  /// The shortest a [fillWidth] photo is drawn: a panorama is cropped to
+  /// this rather than flattened into a sliver.
+  final double minHeight;
 
   @override
   State<AspectImage> createState() => _AspectImageState();
@@ -105,7 +118,10 @@ class _AspectImageState extends State<AspectImage> {
     // tall panorama can't push the bubble off screen.
     var w = widget.maxWidth;
     var h = w / ratio;
-    if (h > widget.maxHeight) {
+    if (widget.fillWidth) {
+      final low = widget.minHeight < widget.maxHeight ? widget.minHeight : widget.maxHeight;
+      h = h.clamp(low, widget.maxHeight).toDouble();
+    } else if (h > widget.maxHeight) {
       h = widget.maxHeight;
       w = h * ratio;
     }

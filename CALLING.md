@@ -83,6 +83,16 @@ Messages on `/calls/ws/{room_id}`:
 | `callee_ringing` | server → caller | A phone of the callee's is ringing (`POST /calls/{room_id}/alerted`): "Calling…" becomes "Ringing…". |
 | `callee_answered` | server → caller | The callee pressed Accept (`POST /calls/{room_id}/answer`); their phone is on its way into the call. Re-sent to a caller socket that joins while the call is answered. |
 | `renegotiate` | callee → caller (relayed) | The callee turned its camera on mid-call and needs a fresh offer. Only the caller offers; its offer goes out flagged `restart` (and `renegotiate`), which every build answers mid-call. |
+| `ringing_ready` | server → caller | `{peer}`: a phone of the callee's waits in the room while it rings (its socket on `/calls/ws/{room_id}/ringing`). The caller sends its offer to it now, microphone held. Since 2026-11-09. |
+| `ringing_left` | server → caller | `{peer}`: that phone's ringing socket went before it answered. The caller drops what it negotiated with it. |
+| `accept` | callee → server | Accept, on a ringing socket: the phone joins the call on the socket it has. Answered by `ready`. |
+
+`ready` names the callee's phone (`peer`) when that phone negotiated the
+call while it rang, so the caller can tell the phone it negotiated with
+from another. `offer` carries an `offer_id` and `answer` echoes it, so an
+answer to an offer the caller has since replaced is dropped. A ringing
+socket is refused with close 4010 when the call is not ringing, the socket
+is not the callee's, or `CALL_RINGING_PRECONNECT` is off.
 
 Only `offer`, `answer`, `ice`, `hangup`, `video_state` and `renegotiate` are
 ever relayed between peers.
@@ -258,6 +268,7 @@ relay layer could be added later without redesigning `call_state.py`.
 | `APNS_AUTH_KEY`, `APNS_KEY_ID`, `APNS_TEAM_ID` | iOS PushKit VoIP pushes. Unset -> iOS calls work foregrounded but can't ring a terminated app. See IOS_CALLING_SETUP.md. |
 | `APNS_BUNDLE_ID` | Defaults to `com.broka.app`. Must match the Xcode bundle id. |
 | `APNS_USE_PRODUCTION` | Must match `aps-environment` in `Runner.entitlements`. Mismatch = push accepted, nothing rings. |
+| `CALL_RINGING_PRECONNECT` | Default on. Off, the ringing socket (`/calls/ws/{room}/ringing`) is refused with close 4010 and every phone answers the way it did before 2026-11-09. A switch that needs no app release. See "Answering without Connecting…" below. |
 
 ## What device testing must still confirm
 
@@ -931,3 +942,90 @@ restart and simply show no picture.
 
 Tests: `backend/tests/test_answered_call_not_lost.py`;
 `flutter_app/test/call_answer_ring_and_video_test.dart`. Not device-verified.
+
+# Answering without "Connecting…" (2026-11-09)
+
+Reported: when someone answers a call, it shows "Connecting…" for 3-5
+seconds before the audio starts.
+
+Everything that came after Accept was a chain of round trips on mobile
+data: the callee's phone opened its socket, joined, waited for `ready`,
+received the caller's offer, answered, and only then ran ICE and DTLS. The
+2026-10-09 pass moved what it could (TURN credentials, the peer connection
+and its candidate pool) into the ring. The negotiation itself now happens
+then too.
+
+**While it rings.** A voice call ringing on the in-app screen of an Android
+phone (`WebRtcService.prepareRinging`) joins the call's room on a ringing
+socket, `/calls/ws/{room}/ringing?peer=<id>` (`calls.call_signaling_ringing`).
+The server tells the caller (`ringing_ready`). The caller sends its offer
+with its microphone track disabled. The ringing phone answers with no
+microphone at all: the answer's audio is send-and-receive with an empty
+sender (`_answerWithMicrophoneSlot`), so the microphone can join later
+without a second negotiation. ICE and DTLS then run while it rings. Neither
+side hears anything. The ringing phone plays nothing it receives
+(`_holdRemote`). The caller's microphone stays held through mute and unmute,
+and the server is told no `state`, because nobody has answered.
+
+**Accept.** One `accept` frame on the socket that is already open. The
+server records the answer, stops the callee's other phones ringing, and
+sends `ready` with the phone's `peer` (`_standby_accepted`). On the callee,
+the microphone opens and goes onto the empty sender (`replaceTrack`), the
+caller's audio is unmuted, and the call is connected. On the caller, `ready`
+naming that phone releases the microphone and puts the call through. If the
+connection dropped since, an ICE restart goes out first.
+
+**What a ringing socket may not do.** It never counts as the callee having
+joined: no `ready`, no `accepted`. Its leaving never ends the call, because
+the phone, or another of the callee's phones, may still answer from the
+notification. Of what it sends, only `answer` and `ice` are relayed. A
+`hangup` from it only closes it, since a decline is recorded through
+`POST /calls/log-result`. The ringing phone changes no call state while it
+rings, because the call screen stops the ringtone on any state change.
+
+**Falling back.** Anything that goes wrong drops back to the old way: a
+refused socket (close 4010: switched off with `CALL_RINGING_PRECONNECT`,
+not ringing, not the callee), a dropped one, a failed connection, a server
+without the route, or Accept before the socket was up. Accept then joins the
+call as it did before, and nothing of the abandoned connection is kept. On
+the caller: `ringing_left`, a failed connection while ringing, or a `ready`
+naming another phone (answered elsewhere) replaces the peer connection and
+sends a fresh offer (`_resetPreconnect`). Offers carry an `offer_id` and
+answers echo it, so a late answer to a replaced offer is ignored, and a
+phone that gets an offer with a new id answers it on a new connection
+(`_rebuildForNewOffer`). Older apps on either side ignore the new frames
+and call the old way.
+
+**The caller's clocks.** An offer can now go out while the other phone
+rings, so neither "the callee joined" (`peerJoined`, which ends the
+no-answer window) nor the 30-second connect timeout starts at the offer any
+more. Both start at `ready`.
+
+Also on the way:
+
+- The callee sends its answer before adding the caller's queued ICE
+  candidates and capping the video bitrate. Both used to hold it back by
+  a platform round trip each.
+- Offers are answered one at a time (`_queueOffer`). An offer resent on a
+  second `ready` while the first was still being answered could set a
+  second answer on the same connection and fail the call.
+- An offer that could not be made is not kept (`_localOffer`). A
+  connection being replaced has a moment with no peer connection, and an
+  offer asked for then would otherwise be a cached failure.
+- An answer resent with an `offer_id` is not taken for the answer to an
+  ICE restart in progress.
+- `callee_ringing` is still shown once a ringing phone has negotiated
+  ("Ringing…" waited on there being no remote description).
+- Answering from the notification also prepares the peer connection while
+  the microphone opens (`prepare()` before `start()`).
+
+The server's half is in `backend/api/routers/calls.py` (the block above
+`_standby_sockets`) and `api/core/call_signaling.py` (presence entries
+carry `standby` and `peer`). Not device-verified. On a real phone, check
+that the ringtone keeps playing while the connection comes up (WebRTC's
+audio device may start playout of the held track), and that the caller's
+voice is heard the instant Accept is pressed. If a model misbehaves,
+`CALL_RINGING_PRECONNECT=false` turns the feature off with no release.
+
+Tests: `backend/tests/test_call_answer_while_ringing.py`;
+`flutter_app/test/call_answer_while_ringing_test.dart`.

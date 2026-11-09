@@ -1047,6 +1047,8 @@ class GlobalPollerService {
       case 'image': return '\u{1F4F7} Photo';
       case 'voice': return '\u{1F3A4} Voice message';
       case 'video': return '\u{1F3AC} Video';
+      // The server names the document ("📄 Invoice.pdf").
+      case 'file':  return raw.trim().isNotEmpty ? raw : '\u{1F4C4} Document';
       // A call row's content is the raw outcome verb ("missed"), which
       // is not a sentence anyone should be notified with.
       case 'call':  return 'Missed call';

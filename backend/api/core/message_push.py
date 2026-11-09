@@ -114,9 +114,12 @@ def recipients_of(role: str, recipient_role: Optional[str], via_ai: Optional[boo
     return set()
 
 
-def preview_of(msg_type: Optional[str], content: Optional[str]) -> str:
+def preview_of(msg_type: Optional[str], content: Optional[str],
+               file_name: Optional[str] = None) -> str:
     """One line for the notification. Non-text rows carry a placeholder or a
-    URL as their content, neither of which belongs in it."""
+    URL as their content, neither of which belongs in it. A document is
+    announced by its name ("📄 Invoice.pdf"), its caption being only a note
+    on it."""
     kind = msg_type or "text"
     if kind == "image":
         return "\U0001F4F7 Photo"
@@ -124,6 +127,9 @@ def preview_of(msg_type: Optional[str], content: Optional[str]) -> str:
         return "\U0001F3A4 Voice message"
     if kind == "video":
         return "\U0001F3AC Video"
+    if kind == "file":
+        name = " ".join((file_name or "").split()) or "Document"
+        return "\U0001F4C4 " + (name if len(name) <= 120 else name[:117] + "...")
     text = " ".join((content or "").split())
     return text if len(text) <= 160 else text[:157] + "..."
 
@@ -294,7 +300,7 @@ async def build_notification(db, listing_id: str, buyer_id: str, role: str) -> O
     listing_name = (listing.name or "").strip()
     short_listing = listing_name if len(listing_name) <= 40 else listing_name[:37] + "..."
     title = f"{sender_name} · {short_listing}" if short_listing else sender_name
-    preview = preview_of(newest.msg_type, newest.content)
+    preview = preview_of(newest.msg_type, newest.content, getattr(newest, "file_name", None))
     body = preview if count == 1 else f"{count} new messages · {preview}"
 
     return {
@@ -477,7 +483,7 @@ async def build_store_notification(db, store_id: str, buyer_id: str, role: str) 
         sender_photo = await avatar_url(db, other_id)
     except Exception as exc:
         logger.warning("[message_push] no photo for user=%s: %s", other_id, exc)
-    preview = preview_of(newest.msg_type, newest.content)
+    preview = preview_of(newest.msg_type, newest.content, getattr(newest, "file_name", None))
     body = preview if count == 1 else f"{count} new messages · {preview}"
     return {
         "user_id": recipient_id,
