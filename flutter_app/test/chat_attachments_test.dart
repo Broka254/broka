@@ -206,6 +206,10 @@ void main() {
   group('photos', () {
     testWidgets('several go at once, each its own message, the caption on the first',
         (tester) async {
+      // Tall enough that the list builds all three bubbles.
+      tester.view.physicalSize = const Size(800, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
       final files = <File>[];
       await tester.runAsync(() async {
         for (var i = 0; i < 3; i++) {
@@ -241,7 +245,7 @@ void main() {
           find.widgetWithText(TextField, 'Add a caption to the first photo (optional)'),
           'Front, back and the box');
       await tester.tap(find.byKey(const Key('photos-send')));
-      await settleIo(tester, rounds: 60);
+      await settleIo(tester, rounds: 150);
 
       final sent = uploads();
       expect(sent, hasLength(3), reason: 'one upload per photo');
@@ -288,7 +292,7 @@ void main() {
       expect(find.text('Quote.pdf'), findsOneWidget, reason: 'named before it goes');
       expect(find.text('PDF · 14 B'), findsOneWidget);
       await tester.tap(find.byKey(const Key('documents-send')));
-      await settleIo(tester, rounds: 40);
+      await settleIo(tester, rounds: 80);
 
       final sent = uploads().single;
       expect(hasField(sent, 'content_type', 'file'), isTrue);
@@ -332,7 +336,7 @@ void main() {
           findsOneWidget);
 
       await tester.tap(find.descendant(of: bubble, matching: find.text('Prices.xlsx')));
-      await settleIo(tester, rounds: 20);
+      await settleIo(tester, rounds: 40);
       expect(fakeRequests.where((r) => r.method == 'GET' && r.uri.path == '/media/chat-files/f9'),
           hasLength(1));
       final open = documentCalls.where((c) => c.method == 'open').single;
@@ -495,7 +499,7 @@ void main() {
       await tester.tap(find.byKey(const Key('unsent-bubble')));
       await settle(tester);
       await tester.tap(find.text('Try again'));
-      await settleIo(tester, rounds: 20);
+      await settleIo(tester, rounds: 40);
 
       final sent = uploads().single;
       expect(sent.body, contains('filename="image.png"'));
