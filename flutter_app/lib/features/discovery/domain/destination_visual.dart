@@ -1,7 +1,7 @@
 // lib/features/discovery/domain/destination_visual.dart
 //
 // The four non-category destinations on Home's discovery rail - Trending,
-// Auctions, Traders, Stores - and their one visual definition each.
+// Auctions, Traders, Online Store - and their one visual definition each.
 //
 // This is the same lesson as features/categories/domain/category_visual.dart,
 // applied to the other half of the rail. Those four pills had their emoji,
@@ -34,7 +34,7 @@ class DestinationVisual {
   final List<Color> gradient;
 
   /// The rail card's picture (a bundled asset), or null to draw the card
-  /// from [gradient] and [emoji]. Trending, Traders and Stores carry the
+  /// from [gradient] and [emoji]. Trending, Traders and Online Store carry the
   /// photos supplied for them (2026-10-28); Auctions has none.
   final String? assetPath;
 
@@ -94,8 +94,8 @@ class DestinationVisuals {
   );
 
   static const stores = DestinationVisual(
-    label: 'Stores',
-    title: 'Stores',
+    label: 'Online Store',
+    title: 'Online Store',
     emoji: '🏬',
     icon: Icons.storefront_rounded,
     gradient: [BrokaColors.gold, BrokaColors.neonPurple],

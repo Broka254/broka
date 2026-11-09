@@ -148,8 +148,8 @@ void main() {
       }
       // Spot-checks from the taxonomy's two extremes, so a table that
       // silently reverted to "<name> Zone" cannot pass on uniqueness alone.
-      expect(CategoryVisuals.zoneTitleFor('Land'), 'The Plot');
-      expect(CategoryVisuals.zoneTitleFor('Automobiles'), 'Motor Row');
+      expect(CategoryVisuals.zoneTitleFor('Land'), 'Plot');
+      expect(CategoryVisuals.zoneTitleFor('Automobiles'), 'Garage');
     });
 
     test('"Other" is the catch-all and carries plain brand identity', () {

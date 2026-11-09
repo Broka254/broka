@@ -577,7 +577,7 @@ void main() {
       expect(find.text('HOW MANY BAGS DO YOU HAVE?'), findsOneWidget);
       await tester.enterText(find.byKey(const Key('sell-quantity-field')), '100');
       await tester.pump();
-      expect(find.text('100 bags available'), findsOneWidget);
+      expect(find.text('Buyers will see 100 bags available'), findsOneWidget);
 
       await _tap(tester, find.text('NEXT'));
       await tester.pump();
@@ -590,12 +590,16 @@ void main() {
       expect(data.quantity, '100');
     });
 
-    testWidgets('a big amount is typed, and holding + keeps counting', (tester) async {
+    testWidgets('a big amount is typed into the field, not stepped to',
+        (tester) async {
       final data = SellWizardData()..priceUnit = 'bag';
       await _open(tester, SellStockScreen(data: data));
-      expect(find.byKey(const Key('sell-quantity-hint')), findsOneWidget);
+      expect(find.text('Buyers will see 1 bag available'), findsOneWidget);
+      // No stepper: 500 in stock is 3 digits, not 500 taps.
+      expect(find.byIcon(Icons.add_rounded), findsNothing);
+      expect(find.byIcon(Icons.remove_rounded), findsNothing);
 
-      // Tapping the number selects it, so the first digit replaces it.
+      // Tapping the field selects the default, so the first digit replaces it.
       await tester.tap(find.byKey(const Key('sell-quantity-field')));
       await tester.pump();
       final field = tester.widget<TextField>(
@@ -606,15 +610,7 @@ void main() {
       await tester.enterText(find.byKey(const Key('sell-quantity-field')), '500');
       await tester.pump();
       expect(data.quantity, '500');
-
-      // Holding + counts on its own: 500 is one gesture, not 500 taps.
-      final gesture = await tester
-          .startGesture(tester.getCenter(find.byIcon(Icons.add_rounded)));
-      await tester.pump(const Duration(milliseconds: 600));
-      await tester.pump(const Duration(milliseconds: 450));
-      await gesture.up();
-      await tester.pump();
-      expect(int.parse(data.quantity), greaterThan(502));
+      expect(find.text('Buyers will see 500 bags available'), findsOneWidget);
     });
 
     testWidgets('land is not asked about delivery', (tester) async {

@@ -274,14 +274,14 @@ void main() {
       await _settle(tester);
 
       // 2026-11-02: the rail used to lead with Automobiles, Property and Land
-      // (the backend's seed order) and put Trending and Stores at the far
+      // (the backend's seed order) and put Trending and Online Store at the far
       // end. It now opens with the two shortcuts, then Electronics - the
       // category a buyer is most likely to browse.
       final rail = find.byKey(const Key('home-category-rail'));
       final cards = find.descendant(of: rail, matching: find.byType(CategoryArtCard));
       expect(
           tester.widgetList<CategoryArtCard>(cards).take(3).map((c) => c.label).toList(),
-          ['Trending', 'Stores', 'Electronics']);
+          ['Trending', 'Online Store', 'Electronics']);
 
       // "See all" uses the same order, so it does not drop back to the seed
       // order the rail just stopped leading with.
@@ -302,7 +302,7 @@ void main() {
       expect(((image.image as ResizeImage).imageProvider as AssetImage).assetName,
           'assets/category_art/electronics.webp');
 
-      // Trending and Stores lead the row since the popularity pass
+      // Trending and Online Store lead the row since the popularity pass
       // (2026-11-02) and Traders closes it; each carries the photo supplied
       // for it (2026-10-28: image 3 for Trending, 1 for Traders, 2 for
       // Stores), and each card must show its own picture, not a gradient.
@@ -313,7 +313,7 @@ void main() {
       // order, when both were at the far end) would scroll past it.
       for (final (label, asset) in const [
         ('Trending', 'assets/category_art/trending.webp'),
-        ('Stores', 'assets/category_art/stores.webp'),
+        ('Online Store', 'assets/category_art/stores.webp'),
         ('Traders', 'assets/category_art/traders.webp'),
       ]) {
         await tester.scrollUntilVisible(find.byKey(Key('home-rail-card-$label')), 300,

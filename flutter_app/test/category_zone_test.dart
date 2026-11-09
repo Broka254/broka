@@ -101,16 +101,16 @@ void main() {
       await tester.pumpWidget(zone('Land'));
       await _settle(tester);
 
-      // "The Plot", not "Land Zone" - and the category's own name kept above
+      // "Plot", not "Land Zone" - and the category's own name kept above
       // it, so the label is personality and the taxonomy is still readable.
-      expect(find.text('THE PLOT'), findsOneWidget);
+      expect(find.text('PLOT'), findsOneWidget);
       expect(find.text('LAND'), findsOneWidget);
       expect(find.text('LAND ZONE'), findsNothing);
 
       // Per category, not a formula applied to the name.
       await tester.pumpWidget(zone('Automobiles'));
       await _settle(tester);
-      expect(find.text('MOTOR ROW'), findsOneWidget);
+      expect(find.text('GARAGE'), findsOneWidget);
       expect(find.text('AUTOMOBILES ZONE'), findsNothing);
     });
   });

@@ -105,7 +105,11 @@ class _ListingSearchScreenState extends State<ListingSearchScreen> {
     'price_high': 'Price: high to low',
   };
 
-  static const _examples = ['iPhone', 'Maize', 'Toyota', 'Sofa'];
+  // One from each kind of thing people type: a model, a brand + product, a
+  // product, and a make. Every word of a chip has to match for a listing to
+  // show (api/core/text_search.py), so each one is a phrase that appears in
+  // real titles - "Toyota Probox", not "Probox car".
+  static const _examples = ['iPhone 13', 'Samsung TV', 'Sofa set', 'Toyota Probox'];
 
   final _ctrl = TextEditingController();
   final _focus = FocusNode();

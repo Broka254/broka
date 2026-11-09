@@ -273,7 +273,7 @@ class _CategoryZoneScreenState extends State<CategoryZoneScreen> {
                   SliverPersistentHeader(
                     pinned: true,
                     delegate: ArtworkHeroHeader(
-                      // The category's own label ("Motor Row", "The Plot")
+                      // The category's own label ("Garage", "Plot")
                       // rather than "<Category> Zone": twenty-one screens all
                       // ending in the same word read as one template, and the
                       // brief asked for a name with some imagination. The
