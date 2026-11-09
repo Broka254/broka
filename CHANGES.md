@@ -12,7 +12,8 @@ way fixed.
   The direct chat has Photos and Document chips, then "+" (camera, photos
   or a document), the microphone, and send in the microphone's place once
   there is text. Zeno's room has Offer and Photo, and Zeno's screen has
-  Photo (or a Buying Agent tag). All three screens use the same card.
+  Photo (no chip for the Buying Agent). All three screens use the same
+  card.
   `ChatComposerPill` and `ChatComposerAction` are gone.
 - **WhatsApp's photo frame**: every photo is the same width, edge to edge,
   inside a 3 dp frame in the bubble's colour (my gradient, their card). The
@@ -83,10 +84,12 @@ Tests: `backend/tests/test_chat_files.py`,
 `backend/tests/test_call_answer_while_ringing.py`;
 `flutter_app/test/chat_attachments_test.dart`,
 `flutter_app/test/call_answer_while_ringing_test.dart` (with fakes for the
-native peer connection in `test/support/fake_webrtc.dart`). The composer
-tests in `negotiation_screens_test.dart` look for the card now. Not
-device-verified: the document picker and viewer channel, and the ringtone
-while a call connects in the background.
+native peer connection in `test/support/fake_webrtc.dart`). Existing tests
+changed for the taller composer: `negotiation_screens_test.dart` looks for
+the card and reads a new reply still below the fold;
+`zeno_about_listing_test.dart` lets `ensureVisible`'s scroll lay out
+before tapping. Not device-verified: the document picker and viewer
+channel, and the ringtone while a call connects in the background.
 
 # The sell wizard's premium offers are strips, and its steps fit (2026-11-08)
 
