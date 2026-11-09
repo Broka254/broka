@@ -2175,19 +2175,10 @@ class _ZenoScreenState extends State<ZenoScreen>
         ),
       ),
       leading: [
-        // The assistant can look at a photo; the Buying Agent's
-        // conversation is about words (what you want, your budget), so its
-        // card says whose it is instead.
-        if (_isBuying)
-          const ChatComposerChip(
-            icon: Icons.auto_awesome_rounded,
-            label: 'Buying Agent',
-            tooltip: 'Zeno looks for it for you',
-            color: BrokaColors.neonPurple,
-            active: true,
-            onTap: null,
-          )
-        else
+        // The assistant can look at a photo. The Buying Agent's
+        // conversation is about words (what you want, your budget): no
+        // chip, and no label repeating the header's "Buying Agent".
+        if (!_isBuying)
           ChatComposerChip(
             icon: Icons.add_photo_alternate_outlined,
             label: 'Photo',

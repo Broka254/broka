@@ -66,7 +66,7 @@ void main() {
   // disk passes for a document kept on the phone.
   final run = DateTime.now().microsecondsSinceEpoch;
 
-  setUpAll(() {
+  setUpAll(() async {
     installFakeApi();
     for (final name in [
       'xyz.luan/audioplayers',
@@ -80,6 +80,16 @@ void main() {
     messenger.setMockMethodCallHandler(
         const MethodChannel('plugins.flutter.io/path_provider'),
         (_) async => appDocs.path);
+    // Real glyph widths for the overflow check: the test font draws every
+    // character a full em wide and reports overflows no phone would show.
+    final fonts = '${Platform.environment['FLUTTER_ROOT'] ?? ''}/bin/cache/artifacts/material_fonts';
+    if (Directory(fonts).existsSync()) {
+      final roboto = FontLoader('Roboto');
+      for (final f in ['Roboto-Regular.ttf', 'Roboto-Medium.ttf', 'Roboto-Bold.ttf']) {
+        roboto.addFont(Future.value(ByteData.view(File('$fonts/$f').readAsBytesSync().buffer)));
+      }
+      await roboto.load();
+    }
   });
 
   tearDownAll(() {
@@ -421,7 +431,9 @@ void main() {
       ]);
       await tester.pumpWidget(chat());
       await settle(tester);
-      expect(tester.takeException(), isNull);
+      final error = tester.takeException();
+      expect(error, isNull,
+          reason: error is FlutterError ? error.toStringDeep() : '$error');
       expect(find.byKey(const Key('file-bubble')), findsOneWidget);
     });
   });

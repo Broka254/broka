@@ -186,9 +186,12 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 150));
 
+      // skipOffstage: false - the list is still scrolling the new reply up
+      // from under the composer card, 150ms in.
       final shown = tester
           .widget<Text>(find.descendant(
-              of: find.byType(ZenoStreamingText).last, matching: find.byType(Text)))
+              of: find.byType(ZenoStreamingText, skipOffstage: false).last,
+              matching: find.byType(Text, skipOffstage: false)))
           .textSpan!
           .toPlainText();
       expect(shown, isNot(_reply), reason: 'not the whole reply at once');
