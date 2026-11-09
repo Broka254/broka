@@ -2138,112 +2138,86 @@ class _ZenoScreenState extends State<ZenoScreen>
     ),
   );
 
-  /// Home's search pill as the composer: the same fill, outline and focus
-  /// glow, so typing to Zeno looks like typing anywhere else in BROKA - the
-  /// Buying Agent included.
+  /// The chat composer card (chat_parts.dart, 2026-11-09), the one every
+  /// chat in BROKA uses - the Buying Agent included: the message on top, a
+  /// photo waiting to go above it, and under it the photo chip on the left,
+  /// the microphone and the send button on the right. The card doesn't
+  /// light up for listening - voice mode owns that state, and a second
+  /// "recording" outline down here read as a competing session.
   Widget _buildInputBar() => Padding(
     padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Expanded(
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 160),
-            constraints: const BoxConstraints(minHeight: 50),
-            decoration: BoxDecoration(
-              color: BrokaColors.bgCard.withOpacity(0.92),
-              borderRadius: BorderRadius.circular(26),
-              // The composer doesn't highlight for listening - voice mode
-              // owns that state, and a second "recording" outline down here
-              // read as a competing session.
-              border: Border.all(
-                color: BrokaColors.neonBlue.withOpacity(_composerFocused ? 0.85 : 0.45),
-                width: _composerFocused ? 1.6 : 1.2,
-              ),
-              boxShadow: _composerFocused
-                  ? [BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.18), blurRadius: 14)]
-                  : null,
-            ),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              if (_photo != null) _buildStagedPhoto(_photo!),
-              Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                // The assistant can look at a photo; the Buying Agent's
-                // conversation is about words (what you want, your budget).
-                if (_isBuying)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 14, 4, 14),
-                    child: ShaderMask(
-                      blendMode: BlendMode.srcIn,
-                      shaderCallback: (r) => const LinearGradient(
-                        colors: [BrokaColors.neonPurple, BrokaColors.neonCyan],
-                      ).createShader(r),
-                      child: const Icon(Icons.auto_awesome_rounded, size: 18),
-                    ),
-                  )
-                else
-                  ChatComposerAction(
-                    icon: Icons.add_photo_alternate_outlined,
-                    tooltip: 'Show Zeno a photo',
-                    onTap: _attachPhoto,
-                  ),
-                Expanded(
-                  child: TextField(
-                    key: const Key('zeno-composer'),
-                    controller: _msgCtrl,
-                    focusNode: _composerFocus,
-                    style: const TextStyle(
-                        color: BrokaColors.textHigh, fontSize: 15.5, height: 1.35),
-                    minLines: 1,
-                    maxLines: 6,
-                    textCapitalization: TextCapitalization.sentences,
-                    keyboardType: TextInputType.multiline,
-                    textInputAction: TextInputAction.newline,
-                    cursorColor: BrokaColors.neonBlue,
-                    decoration: InputDecoration(
-                      isDense: true,
-                      filled: false,
-                      hintText: _isBuying
-                          ? "Tell Zeno what you're looking for"
-                          : (_about != null ? 'Ask about this listing' : 'Ask Zeno anything'),
-                      hintStyle: const TextStyle(color: BrokaColors.textMid, fontSize: 15),
-                      border: InputBorder.none,
-                      enabledBorder: InputBorder.none,
-                      focusedBorder: InputBorder.none,
-                      contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 6, vertical: 14),
-                    ),
-                  ),
-                ),
-                // Opens voice mode over this conversation. The composer
-                // stays exactly where it is underneath - voice is another
-                // way in, not a replacement for typing.
-                if (!_hasDraft && _photo == null)
-                  InkResponse(
-                    onTap: _openVoice,
-                    radius: 22,
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(8, 13, 14, 13),
-                      child: AnimatedBuilder(
-                        animation: Listenable.merge([_voice, if (!_isBuying) _session]),
-                        builder: (_, __) {
-                          final on = _voice.isOpen || (!_isBuying && (_session?.listening ?? false));
-                          return Icon(
-                            on ? Icons.mic_rounded : Icons.mic_none_rounded,
-                            size: 22,
-                            color: on ? BrokaColors.neonBlue : BrokaColors.textMid,
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-            ]),
-          ),
+    child: ChatComposerCard(
+      focused: _composerFocused,
+      top: _photo != null ? _buildStagedPhoto(_photo!) : null,
+      field: TextField(
+        key: const Key('zeno-composer'),
+        controller: _msgCtrl,
+        focusNode: _composerFocus,
+        style: const TextStyle(
+            color: BrokaColors.textHigh, fontSize: 15.5, height: 1.35),
+        minLines: 1,
+        maxLines: 6,
+        textCapitalization: TextCapitalization.sentences,
+        keyboardType: TextInputType.multiline,
+        textInputAction: TextInputAction.newline,
+        cursorColor: BrokaColors.neonBlue,
+        decoration: InputDecoration(
+          isDense: true,
+          filled: false,
+          hintText: _isBuying
+              ? "Tell Zeno what you're looking for"
+              : (_about != null ? 'Ask about this listing' : 'Ask Zeno anything'),
+          hintStyle: const TextStyle(color: BrokaColors.textMid, fontSize: 15),
+          border: InputBorder.none,
+          enabledBorder: InputBorder.none,
+          focusedBorder: InputBorder.none,
+          contentPadding: const EdgeInsets.fromLTRB(2, 10, 2, 6),
         ),
-        ChatSendButton(visible: _hasDraft || _photo != null, busy: _typing, onTap: () => _send()),
+      ),
+      leading: [
+        // The assistant can look at a photo; the Buying Agent's
+        // conversation is about words (what you want, your budget), so its
+        // card says whose it is instead.
+        if (_isBuying)
+          const ChatComposerChip(
+            icon: Icons.auto_awesome_rounded,
+            label: 'Buying Agent',
+            tooltip: 'Zeno looks for it for you',
+            color: BrokaColors.neonPurple,
+            active: true,
+            onTap: null,
+          )
+        else
+          ChatComposerChip(
+            icon: Icons.add_photo_alternate_outlined,
+            label: 'Photo',
+            tooltip: 'Show Zeno a photo',
+            onTap: _attachPhoto,
+          ),
+      ],
+      trailing: [
+        // Opens voice mode over this conversation. The composer stays
+        // exactly where it is underneath - voice is another way in, not a
+        // replacement for typing. Not "Talk to Zeno": that is the voice
+        // session's own button, on screen at the same time.
+        if (!_hasDraft && _photo == null)
+          AnimatedBuilder(
+            animation: Listenable.merge([_voice, if (!_isBuying) _session]),
+            builder: (_, __) {
+              final on = _voice.isOpen || (!_isBuying && (_session?.listening ?? false));
+              return ChatComposerIconButton(
+                icon: on ? Icons.mic_rounded : Icons.mic_none_rounded,
+                tooltip: 'Voice mode',
+                onTap: _openVoice,
+                active: on,
+              );
+            },
+          ),
+        ChatSendButton(
+            visible: _hasDraft || _photo != null,
+            busy: _typing,
+            onTap: () => _send(),
+            size: 38),
       ],
     ),
   );
@@ -2251,7 +2225,8 @@ class _ZenoScreenState extends State<ZenoScreen>
   /// The photo waiting to go with the next message, with a way to take it
   /// back out.
   Widget _buildStagedPhoto(Uint8List photo) => Padding(
-        padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+        // Inside the composer card's own padding.
+        padding: const EdgeInsets.fromLTRB(0, 8, 0, 2),
         child: Align(
           alignment: Alignment.centerLeft,
           child: Stack(clipBehavior: Clip.none, children: [

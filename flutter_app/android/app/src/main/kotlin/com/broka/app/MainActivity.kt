@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
+import androidx.activity.result.contract.ActivityResultContracts
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -21,6 +22,24 @@ class MainActivity : FlutterFragmentActivity() {
     private val SMS_RETRIEVER_EVENTS = "com.broka.app/sms_retriever_events"
     private val SHARE_CHANNEL = "com.broka.app/share"
     private val LINKS_CHANNEL = "com.broka.app/links"
+    private val DOCUMENTS_CHANNEL = "com.broka.app/documents"
+
+    // ── Documents in a chat (ChatDocuments.kt) ───────────────────────────
+    // The system document picker. Registered here, at construction: an
+    // activity-result launcher must exist before the activity starts.
+    private val chatDocuments by lazy { ChatDocuments(applicationContext) }
+    private var pendingPick: MethodChannel.Result? = null
+    private var pendingPickMaxBytes: Long = 0
+    private val pickDocuments =
+        registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+            val result = pendingPick ?: return@registerForActivityResult
+            pendingPick = null
+            if (uris.isNullOrEmpty()) {
+                result.success(emptyList<Any>())
+            } else {
+                chatDocuments.copyPicked(uris, pendingPickMaxBytes, result)
+            }
+        }
 
     private var linksChannel: MethodChannel? = null
     // The store link that launched the app, handed to Dart once.
@@ -157,6 +176,44 @@ class MainActivity : FlutterFragmentActivity() {
                     }
                 } catch (e: ActivityNotFoundException) {
                     result.success("unavailable")
+                }
+            }
+
+        // ── Documents in a chat (lib/services/chat_documents.dart) ──────
+        //   pick {mimeTypes, maxBytes} - the system picker, several files
+        //     at once; each answered as {path, name, size, mime}, or with
+        //     tooLarge / unreadable instead of a path.
+        //   open {path, mime} - "opened", "no_app" or "missing".
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, DOCUMENTS_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "pick" -> {
+                        if (pendingPick != null) {
+                            // The picker is already up: a second tap.
+                            result.success(emptyList<Any>())
+                            return@setMethodCallHandler
+                        }
+                        val types = call.argument<List<String>>("mimeTypes")
+                            ?.toTypedArray() ?: arrayOf("*/*")
+                        pendingPickMaxBytes =
+                            call.argument<Number>("maxBytes")?.toLong() ?: (15L * 1024 * 1024)
+                        pendingPick = result
+                        try {
+                            pickDocuments.launch(types)
+                        } catch (e: ActivityNotFoundException) {
+                            pendingPick = null
+                            result.error("unavailable", "No document picker on this phone", null)
+                        }
+                    }
+                    "open" -> {
+                        val path = call.argument<String>("path")
+                        if (path == null) {
+                            result.success("missing")
+                        } else {
+                            chatDocuments.open(path, call.argument<String>("mime"), result)
+                        }
+                    }
+                    else -> result.notImplemented()
                 }
             }
 

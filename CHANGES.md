@@ -1,3 +1,93 @@
+# Chat composer card, photo frames, several photos, documents, and calls answered at once (2026-11-09)
+
+Asked for: a chat input like DeepSeek's (the message on top, shortcuts and
+round buttons under it); photos framed the way WhatsApp frames them;
+several photos at once and documents in a chat; no 3-5 seconds of
+"Connecting…" after someone answers a call; and any weaknesses found on the
+way fixed.
+
+- **The composer is a card** (`ChatComposerCard`, `ChatComposerChip`,
+  `ChatComposerIconButton` in `chat_parts.dart`). The message sits on top.
+  Under it are labelled chips on the left and round buttons on the right.
+  The direct chat has Photos and Document chips, then "+" (camera, photos
+  or a document), the microphone, and send in the microphone's place once
+  there is text. Zeno's room has Offer and Photo, and Zeno's screen has
+  Photo (or a Buying Agent tag). All three screens use the same card.
+  `ChatComposerPill` and `ChatComposerAction` are gone.
+- **WhatsApp's photo frame**: every photo is the same width, edge to edge,
+  inside a 3 dp frame in the bubble's colour (my gradient, their card). The
+  time and the ticks sit on the photo over a soft shade, and the caption
+  and any quote are inside the frame. A photo is cropped only when it is
+  taller than 3:4 or flatter than 5:3 (`AspectImage(fillWidth:)`), and it
+  opens whole in the viewer. A portrait used to be a narrow strip between
+  two dark bars.
+- **Several photos at once**: up to ten from the gallery, shown in a strip
+  under a large preview. Tap a thumbnail to look at it, × removes it, and +
+  adds more. One caption goes on the first photo. Each photo is its own
+  message and upload, queued one after another and shrunk off the UI
+  thread.
+- **Documents**: PDF, Word, Excel, PowerPoint, OpenDocument, RTF, text and
+  CSV, up to 15 MB and ten at a time. They are picked with Android's own
+  picker (`ChatDocuments.kt`, channel `com.broka.app/documents`). The bubble
+  shows a badge in the type's colour, the name, "PDF · 1.2 MB" and the
+  caption. Tapping it opens the file in another app: straight from the
+  phone for the sender, after a download for the other person, and kept on
+  the phone afterwards. If no app on the phone opens it, the share sheet
+  does. The server stores each document in its own private table
+  (`chat_files`, schema 13). It decides the type from the bytes, not the
+  name, and serves the file only to the thread's two people
+  (`GET /media/chat-files/{id}`, 404 to anyone else). Unsending a document
+  deletes it there and on both phones. The inbox, pushes and quotes name
+  it ("📄 Quote.pdf").
+- **Calls are answered at once.** A voice call ringing on the in-app
+  screen is negotiated while it rings, over a ringing socket
+  (`/calls/ws/{room}/ringing`). Nothing is heard on either side before
+  Accept. Accept then sends one frame, and the call is through as the
+  microphone opens. Anything unexpected falls back to the old way, and
+  `CALL_RINGING_PRECONNECT=false` turns it off. Answering from the
+  notification also prepares the connection while the microphone opens.
+  Details in CALLING.md ("Answering without Connecting…").
+
+Fixed along the way:
+
+- Ten photos queued behind each other read "Not sent" after 20 seconds of
+  waiting their turn, and tapping one queued it a second time. A send still
+  queued or going reads "Sending" (`receiptFor(inFlight:)`), and a retry of
+  one already on its way does nothing.
+- A failed photo spun as if uploading. It now shows the error mark and
+  "Not sent".
+- Replying to a message that was itself a reply quoted the older message
+  in the composer instead of the one being answered.
+- An unsent photo stayed in the sender's on-phone copy: the delete
+  broadcast found the bubble already gone. Unsending now removes it there.
+- A PNG photo restored from the outbox after a restart was resent as
+  "image/jpeg".
+- Uploads: nothing limited them, so every one was decoded, stored and
+  pushed. They are now rate-limited per user (60 a minute, 600 a day). An
+  upload was read whole before its size was checked, and now only one
+  byte past the limit is read. A "voice note" of any declared type (HTML,
+  SVG) was stored and relayed, and now it must be audio. Its duration is
+  clamped to an hour.
+- A photo's caption, and the new words of an edit, were never scanned for
+  contact details the way a new message is. Both are now.
+- The inbox showed "[media]" for a photo or a voice note without words.
+- The upload timeout grows with the file. A fixed minute failed documents
+  over about 3 MB on a slow connection.
+- Calls: the callee's first join was announced to the caller as a
+  "reconnected" peer. A caller who left while the phone still rang now
+  stops it at once, instead of after the missed-call push. Offers are
+  answered one at a time: an offer resent on a second `ready` while the
+  first was still being answered could set two answers and fail the call.
+
+Tests: `backend/tests/test_chat_files.py`,
+`backend/tests/test_call_answer_while_ringing.py`;
+`flutter_app/test/chat_attachments_test.dart`,
+`flutter_app/test/call_answer_while_ringing_test.dart` (with fakes for the
+native peer connection in `test/support/fake_webrtc.dart`). The composer
+tests in `negotiation_screens_test.dart` look for the card now. Not
+device-verified: the document picker and viewer channel, and the ringtone
+while a call connects in the background.
+
 # The sell wizard's premium offers are strips, and its steps fit (2026-11-08)
 
 Asked for: the cards telling sellers to pay for Premium took too much room

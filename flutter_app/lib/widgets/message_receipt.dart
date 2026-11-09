@@ -56,10 +56,20 @@ class MessageReceiptIcon extends StatelessWidget {
   /// every background - with a white word beside them.
   final bool light;
 
+  /// The glyph alone, no word: the ticks on a photo, beside its time, as
+  /// WhatsApp draws them (2026-11-09). "Not sent" keeps its words - it is
+  /// the one state that asks the user to do something.
+  final bool compact;
+
   /// Receipts are only ever shown on your OWN messages - showing a tick on
   /// someone else's bubble is meaningless, and on a marketplace it would
   /// also tell them when you read things, which isn't theirs to know.
-  const MessageReceiptIcon({super.key, required this.receipt, this.light = false});
+  const MessageReceiptIcon({
+    super.key,
+    required this.receipt,
+    this.light = false,
+    this.compact = false,
+  });
 
   // ── Legibility ────────────────────────────────────────────────────────────
   //
@@ -79,6 +89,7 @@ class MessageReceiptIcon extends StatelessWidget {
   Widget build(BuildContext context) {
     final onPhoto = light;
     final base = onPhoto ? Colors.white : _muted;
+    if (compact && receipt != MessageReceipt.failed) return _glyph(base);
     switch (receipt) {
       case MessageReceipt.sending:
         return _Labelled(
@@ -150,6 +161,37 @@ class MessageReceiptIcon extends StatelessWidget {
           label: 'relayed',
           semantics: 'Relayed by Zeno in its own words',
         );
+    }
+  }
+
+  /// [compact]: the same glyphs, without the word. Screen readers still
+  /// hear the word.
+  Widget _glyph(Color base) {
+    switch (receipt) {
+      case MessageReceipt.sending:
+        return Semantics(
+            label: 'Sending',
+            child: Icon(Icons.schedule_rounded, size: 13, color: base));
+      case MessageReceipt.sent:
+        return Semantics(
+            label: 'Sent',
+            child: Icon(Icons.check_rounded, size: _iconPx, color: base));
+      case MessageReceipt.delivered:
+        return _DoubleTick(color: base, semantics: 'Delivered');
+      case MessageReceipt.read:
+        return const _DoubleTick(
+            color: BrokaColors.neonPurple, semantics: 'Seen', emphasised: true);
+      case MessageReceipt.relayed:
+        // Semantics() has no const constructor (only .fromProperties).
+        return Semantics(
+            label: 'Relayed by Zeno in its own words',
+            child: const Icon(Icons.auto_awesome_rounded,
+                size: 12, color: BrokaColors.neonBlue));
+      case MessageReceipt.failed:
+        return Semantics(
+            label: 'Not sent',
+            child: const Icon(Icons.error_outline_rounded,
+                size: 15, color: BrokaColors.danger));
     }
   }
 }
@@ -282,6 +324,12 @@ const staleSendAfter = Duration(seconds: 20);
 /// status column per message: one timestamp comparison gives every message
 /// in the thread its state, with no per-message writes and no extra query
 /// as the thread grows.
+///
+/// [inFlight]: the phone still has this send queued or going (2026-11-09).
+/// It reads "Sending" however long that takes - ten photos go one after
+/// another, and on a slow connection the last one waits minutes for its
+/// turn. The age rule below made it "Not sent" while it waited, and tapping
+/// it then queued the same photo a second time.
 MessageReceipt receiptFor({
   required DateTime? sentAt,
   required DateTime? counterpartDeliveredAt,
@@ -289,9 +337,12 @@ MessageReceipt receiptFor({
   bool viaAi = false,
   bool pending = false,
   bool failed = false,
+  bool inFlight = false,
   DateTime? now,
 }) {
   if (failed) return MessageReceipt.failed;
+
+  if (pending && inFlight) return MessageReceipt.sending;
 
   if (pending || sentAt == null) {
     // A pending bubble that has sat there too long is not "sending", it is

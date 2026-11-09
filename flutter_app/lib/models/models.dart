@@ -42,7 +42,7 @@ class Message {
   // Used to filter AI-mode messages out of the direct-chat view.
   final bool   viaAi;
   final String id;
-  final String msgType;     // "text" | "voice" | "image" | "call"
+  final String msgType;     // "text" | "voice" | "image" | "file" | "call"
   final String? mediaUrl;
   final int?    durationSecs;
   final String? callType;   // "audio" | "video" - set when msgType == "call"
@@ -85,6 +85,11 @@ class Message {
   // compact preview the bubble renders from (safe fallback when deleted).
   final String? replyToMessageId;
   final Map<String, dynamic>? replyPreview;
+  // A shared document (msgType "file"): its name, size in bytes and type,
+  // shown before it is downloaded from mediaUrl.
+  final String? fileName;
+  final int? fileSize;
+  final String? fileMime;
 
   const Message({
     required this.role,
@@ -106,6 +111,9 @@ class Message {
     this.deleted = false,
     this.replyToMessageId,
     this.replyPreview,
+    this.fileName,
+    this.fileSize,
+    this.fileMime,
   });
 
   factory Message.fromJson(Map<String, dynamic> j) => Message(
@@ -129,6 +137,9 @@ class Message {
     deleted:         (j['deleted'] as bool?) ?? j['msg_type'] == 'deleted',
     replyToMessageId: j['reply_to_message_id'] as String?,
     replyPreview: (j['reply_preview'] as Map?)?.cast<String, dynamic>(),
+    fileName:        j['file_name']        as String?,
+    fileSize:        (j['file_size']       as num?)?.toInt(),
+    fileMime:        j['file_mime']        as String?,
     createdAt:       j['created_at'] != null
         ? parseBackendUtc(j['created_at'] as String)
         : null,
@@ -157,6 +168,9 @@ class Message {
     'deleted': deleted,
     if (replyToMessageId != null) 'reply_to_message_id': replyToMessageId,
     if (replyPreview != null) 'reply_preview': replyPreview,
+    if (fileName != null) 'file_name': fileName,
+    if (fileSize != null) 'file_size': fileSize,
+    if (fileMime != null) 'file_mime': fileMime,
   };
 }
 

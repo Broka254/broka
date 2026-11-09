@@ -18,6 +18,10 @@
 // immediately - see _scheduleReconnect(). Once connected, a best-effort
 // connection-path check (direct/STUN/TURN) runs once via getStats() -
 // see ConnectionDiagnostics and _reportDiagnosticsOnceConnected().
+//
+// Answering without "Connecting…" (2026-11-09, CALLING.md): a voice call
+// ringing on the in-app screen of an Android phone is negotiated while it
+// rings - see prepareRinging() and the block of fields it opens.
 
 import 'dart:async';
 import 'dart:convert';
@@ -100,7 +104,10 @@ const Map<CallState, Set<CallState>> _kAllowedTransitions = {
   // reachable from idle, which is simply the truth: a call can end before
   // it ever starts.
   CallState.idle:       {CallState.connecting, CallState.ended, CallState.failed},
-  CallState.connecting: {CallState.calling, CallState.ringing, CallState.failed, CallState.ended},
+  // connecting -> connected: a callee whose call was negotiated while it
+  // rang is connected as its microphone opens, with no offer to wait for.
+  CallState.connecting: {CallState.calling, CallState.ringing, CallState.connected,
+                         CallState.failed, CallState.ended},
   CallState.calling:    {CallState.connected, CallState.failed, CallState.ended},
   CallState.ringing:    {CallState.connected, CallState.failed, CallState.ended},
   CallState.connected:  {CallState.recovering, CallState.failed, CallState.ended},
@@ -208,11 +215,10 @@ class WebRtcService {
   bool               _muted    = false;
   bool               _speaker  = false;
   bool               _videoEnabled = true;
-  bool               _offerSent = false;
 
   // Signaling recovery (Section 5): cached once we successfully
   // setLocalDescription, so a fresh 'ready' after a WS reconnect can
-  // resend the SAME sdp instead of either assuming _offerSent means
+  // resend the SAME sdp instead of assuming that an offer sent means
   // "the callee actually received it" (it doesn't - only that we tried)
   // or silently doing nothing. Cleared implicitly by _remoteDescriptionSet
   // becoming true - once negotiation actually completes, there's nothing
@@ -369,6 +375,117 @@ class WebRtcService {
   // For ConnectionDiagnostics.timeToConnect - set once, when start() begins.
   DateTime? _connectingStartedAt;
 
+  // ── Answering without "Connecting…" (CALLING.md, 2026-11-09) ─────────────
+  // After Accept, the callee's phone used to open its socket, join, wait
+  // for `ready`, take the offer, answer, and only then run ICE and DTLS:
+  // five or six round trips on mobile data, 3-5 seconds of "Connecting…".
+  // Now, while a voice call rings on the in-app screen, this phone waits in
+  // the call's room (/calls/ws/{room}/ringing, a "standby" socket) and the
+  // call is negotiated then: the caller sends its offer on `ringing_ready`,
+  // this phone answers with no microphone open, and the connection comes up
+  // while it rings. Nothing can be heard either way before Accept - this
+  // phone has no microphone track and plays nothing it receives, and the
+  // caller's microphone is held (its track disabled) until the server's
+  // `ready` names this phone as the one that answered. Accept is one frame
+  // on a socket that is already there.
+  //
+  // Whatever goes wrong on the way - the socket, the connection, a server
+  // without the route or with it switched off (close 4010) - drops back to
+  // the old way without a word: Accept then joins the call as it always
+  // did. Nothing here may change the call's state while it rings: the call
+  // screen stops the ringtone on any change (VoipCallScreen.onStateChange).
+
+  /// Whether a phone may answer while ringing: Android's in-app ringing
+  /// screen. Null asks the platform; tests set it.
+  @visibleForTesting
+  static bool? debugPreconnectSupported;
+
+  /// Stand-ins for the native peer connection, the microphone and the
+  /// signalling socket, for the tests of the above.
+  @visibleForTesting
+  static Future<RTCPeerConnection> Function(Map<String, dynamic> config)?
+      debugCreatePeerConnection;
+  @visibleForTesting
+  static Future<MediaStream> Function(Map<String, dynamic> constraints)?
+      debugGetUserMedia;
+  @visibleForTesting
+  static WebSocketChannel Function(Uri uri)? debugConnectSocket;
+
+  static bool get _preconnectSupported =>
+      debugPreconnectSupported ?? (!kIsWeb && Platform.isAndroid);
+
+  static Future<RTCPeerConnection> _nativePc(Map<String, dynamic> config) {
+    final seam = debugCreatePeerConnection;
+    return seam != null ? seam(config) : createPeerConnection(config);
+  }
+
+  static Future<MediaStream> _openMedia(Map<String, dynamic> constraints) {
+    final seam = debugGetUserMedia;
+    return seam != null
+        ? seam(constraints)
+        : navigator.mediaDevices.getUserMedia(constraints);
+  }
+
+  static WebSocketChannel _openSocket(Uri uri) {
+    final seam = debugConnectSocket;
+    return seam != null ? seam(uri) : WebSocketChannel.connect(uri);
+  }
+
+  // Callee.
+  bool _preconnectStarted = false;
+  // In the room while it rings, not answered yet.
+  bool _standby = false;
+  // This phone's id for what it negotiated while ringing: the server names
+  // it in `ready`, so the caller knows the phone that answered is this one.
+  String? _peerId;
+  // The caller's audio, received while ringing, plays only after Accept.
+  bool _holdRemote = false;
+  final List<MediaStreamTrack> _heldRemoteTracks = [];
+  // Accepted, and the microphone is still opening: the call is connected
+  // once it is on, not before.
+  bool _attachingMedia = false;
+  // The offer this phone last answered.
+  String? _answeredOfferId;
+  // Offers are answered one at a time (_queueOffer).
+  Future<void> _offerQueue = Future<void>.value();
+  int _offersInHand = 0;
+  String? _offerIdBeforePc;
+
+  // Caller.
+  // The callee's phone the offer went to while it rang.
+  String? _standbyPeer;
+  // The microphone held until that phone answers.
+  bool _mediaHeld = false;
+  // The server's `ready`: the callee has joined the call. Until then the
+  // call is unanswered - whatever was negotiated with a ringing phone.
+  bool _calleeJoined = false;
+  // Names the current offer; an answer naming another is stale.
+  String? _offerId;
+  int _offerSeq = 0;
+  // A peer connection being replaced (_resetPreconnect).
+  Future<void>? _resetting;
+
+  // Both.
+  bool _transportUp = false;
+  RTCPeerConnectionState? _pcState;
+  // Bumped whenever the peer connection is replaced: callbacks of the one
+  // before go quiet.
+  int _pcGen = 0;
+  Map<String, dynamic>? _pcConfig;
+
+  /// A connected peer connection is still only the call being prepared:
+  /// the callee's phone still rings (or its microphone is opening), or the
+  /// caller waits for that phone to answer.
+  bool get _preconnecting =>
+      isCaller ? _mediaHeld : (_standby || _attachingMedia);
+
+  @visibleForTesting
+  bool get debugStandby => _standby;
+  @visibleForTesting
+  bool get debugMediaHeld => _mediaHeld;
+  @visibleForTesting
+  String? get debugPeerId => _peerId;
+
   // ── Public API ────────────────────────────────────────────────────────────
 
   /// What the call needs from the network, fetched ahead of start() - the
@@ -385,12 +502,170 @@ class WebRtcService {
   void prepare() {
     final iceConfig = _iceConfigFuture ??= _fetchIceConfiguration();
     _preparedPc ??= iceConfig
-        .then<RTCPeerConnection?>((config) => createPeerConnection(config))
+        .then<RTCPeerConnection?>((config) => _nativePc(config))
         .catchError((Object e) {
       // start() makes one then, as it did before.
       debugPrint('WebRTC: could not prepare the peer connection: $e');
       return null;
     });
+  }
+
+  /// The callee's in-app ringing screen: what prepare() does, and the call
+  /// negotiated while it rings (see the block above), where this phone can.
+  /// Nothing is heard or shown before start(); a phone that can't, or a
+  /// server that won't, answers the old way on Accept.
+  void prepareRinging() {
+    prepare();
+    if (isCaller || isVideo || _preconnectStarted || !_preconnectSupported) return;
+    if (_state != CallState.idle) return;
+    _preconnectStarted = true;
+    _standby = true;
+    _holdRemote = true;
+    _peerId = _newPeerId();
+    unawaited(_openStandby());
+  }
+
+  static String _newPeerId() =>
+      'p${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}'
+      '${Random().nextInt(0x7fffffff).toRadixString(36)}';
+
+  /// The peer connection, with no microphone, then the ringing socket.
+  Future<void> _openStandby() async {
+    final gen = _generation;
+    try {
+      final config = await (_iceConfigFuture ??= _fetchIceConfiguration());
+      if (gen != _generation || !_standby) return;
+      final pc = await _newPc(config);
+      if (pc == null) return;
+      if (gen != _generation || !_standby) {
+        try { await pc.close(); } catch (_) {}
+        return;
+      }
+      _pc = pc;
+      debugPrint('WebRTC: STANDBY_JOINING room=$roomId peer=$_peerId');
+      await _connectWs(ringing: true);
+    } catch (e) {
+      debugPrint('WebRTC: could not wait in the call while it rings: $e');
+      if (gen == _generation) _abandonPreconnect();
+    }
+  }
+
+  /// Back to the old way: the ringing socket and its connection go, and
+  /// Accept joins the call as it did before. No state change - the phone
+  /// is still ringing.
+  void _abandonPreconnect() {
+    if (!_standby) return;
+    debugPrint('WebRTC: STANDBY_ABANDONED room=$roomId - answering the old way');
+    _standby = false;
+    _peerId = null;
+    // The socket's own close must not read as a dropped call to reconnect.
+    _wsEpoch++;
+    _wsWatchdogTimer?.cancel();
+    final ws = _ws;
+    _ws = null;
+    try { ws?.sink.close(); } catch (_) {}
+    _pcGen++;
+    final pc = _pc;
+    _pc = null;
+    if (pc != null) unawaited(pc.close().catchError((Object _) {}));
+    _remoteDescriptionSet = false;
+    _lastLocalAnswer = null;
+    _answeredOfferId = null;
+    _offerBeforePc = null;
+    _offerIdBeforePc = null;
+    _pendingIce.clear();
+    _transportUp = false;
+    _pcState = null;
+    _heldRemoteTracks.clear();
+    // The old way connects after Accept: nothing of it is held.
+    _holdRemote = false;
+  }
+
+  /// Accept, on a phone that waited in the room: one `accept` frame joins
+  /// the call, and the microphone goes onto the connection made while it
+  /// rang. Connected as soon as it is on, when the connection is already up.
+  Future<void> _startPreconnected() async {
+    final gen = _generation;
+    _connectingStartedAt = DateTime.now();
+    _standby = false;
+    _attachingMedia = true;
+    debugPrint('WebRTC: CALL_ACCEPTED room=$roomId role=callee (negotiated while it rang)');
+    _setState(CallState.connecting);
+    try {
+      _ws?.sink.add(jsonEncode({'type': 'accept', 'room_id': roomId}));
+    } catch (e) {
+      // The socket is going: its reconnect joins the call the old way.
+      debugPrint('WebRTC: could not send accept: $e');
+    }
+    try {
+      debugPrint('WebRTC: LOCAL_MEDIA_REQUESTED room=$roomId');
+      await _initMedia();
+      if (gen != _generation) return;
+      debugPrint('WebRTC: LOCAL_MEDIA_READY room=$roomId');
+      onLocalMediaReady?.call();
+      await _attachMicrophone();
+      if (gen != _generation) return;
+      _attachingMedia = false;
+      _releaseRemoteMedia();
+      if (_transportUp) {
+        _onPeerConnected();
+      } else {
+        // Negotiated, or about to be: the connection comes up on its own,
+        // within the connect timeout `ringing` arms.
+        _setState(CallState.ringing);
+      }
+    } catch (e) {
+      _attachingMedia = false;
+      if (gen == _generation) _fail('Could not start call: $e');
+    }
+  }
+
+  /// The microphone onto the call. An answer made while it rang left the
+  /// audio sender empty (_answerWithMicrophoneSlot): the track goes there,
+  /// and no second negotiation is needed. Before any offer it goes in as
+  /// any call's microphone does, and the offer is answered with it.
+  Future<void> _attachMicrophone() async {
+    final pc = _pc;
+    final local = _local;
+    if (pc == null || local == null) return;
+    final audio = local.getAudioTracks();
+    if (audio.isEmpty) return;
+    final mic = audio.first;
+    try {
+      for (final t in await pc.getTransceivers()) {
+        final kind = t.receiver.track?.kind;
+        if (kind != null && kind != 'audio') continue;
+        if (t.sender.track != null) return;
+        await t.sender.replaceTrack(mic);
+        if (await t.getDirection() == TransceiverDirection.RecvOnly) {
+          await t.setDirection(TransceiverDirection.SendRecv);
+        }
+        debugPrint('WebRTC: LOCAL_AUDIO_TRACK_ATTACHED room=$roomId (answered while ringing)');
+        return;
+      }
+      await pc.addTrack(mic, local);
+      debugPrint('WebRTC: LOCAL_AUDIO_TRACK_ADDED room=$roomId');
+    } catch (e) {
+      debugPrint('WebRTC: could not put the microphone on the call: $e');
+    }
+  }
+
+  /// The caller's audio, held while it rang, plays.
+  void _releaseRemoteMedia() {
+    _holdRemote = false;
+    for (final t in _heldRemoteTracks) {
+      try { t.enabled = true; } catch (_) {}
+    }
+    _heldRemoteTracks.clear();
+  }
+
+  /// Caller: the microphone held - or let go - for a phone that is still
+  /// ringing. Mute still applies on top.
+  void _holdMedia(bool held) {
+    _mediaHeld = held;
+    for (final t in _local?.getAudioTracks() ?? const <MediaStreamTrack>[]) {
+      try { t.enabled = !held && !_muted; } catch (_) {}
+    }
   }
 
   Future<Map<String, dynamic>>? _iceConfigFuture;
@@ -407,6 +682,12 @@ class WebRtcService {
   /// Start: get mic/camera → open WebSocket → create peer connection.
   /// Caller then sends an offer; callee waits for one.
   Future<void> start() async {
+    if (!isCaller && _standby) {
+      // Waited in the room while it rang: answered on that socket. Not
+      // there yet (Accept within a second of the ring), the old way.
+      if (_pc != null && _ws != null) return _startPreconnected();
+      _abandonPreconnect();
+    }
     final gen = _generation;
     _connectingStartedAt = DateTime.now();
     debugPrint('WebRTC: ${isCaller ? "CALL_INITIATED" : "CALL_ACCEPTED"} room=$roomId role=${isCaller ? "caller" : "callee"} type=$callType');
@@ -457,8 +738,10 @@ class WebRtcService {
         unawaited(_localOffer());
       } else {
         final early = _offerBeforePc;
+        final earlyId = _offerIdBeforePc;
         _offerBeforePc = null;
-        if (early != null) await _handleOffer(early);
+        _offerIdBeforePc = null;
+        if (early != null) _queueOffer(early, isRestart: false, offerId: earlyId);
       }
     } catch (e) {
       if (gen == _generation) _fail('Could not start call: $e');
@@ -480,11 +763,17 @@ class WebRtcService {
     // close racing an add() on the same turn can discard the queued frame -
     // which the peer experiences as the call simply going quiet until its
     // own timeout fires, rather than ending cleanly.
-    try {
-      _ws?.sink.add(jsonEncode({'type': 'hangup', 'room_id': roomId}));
-      await Future<void>.delayed(const Duration(milliseconds: 60));
-    } catch (e) {
-      debugPrint('WebRTC: could not send hangup: $e');
+    //
+    // Not from a phone still ringing: it hasn't joined the call, and the
+    // server only closes its socket on it - a decline is recorded through
+    // POST /calls/log-result, which tells the caller.
+    if (!_standby) {
+      try {
+        _ws?.sink.add(jsonEncode({'type': 'hangup', 'room_id': roomId}));
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+      } catch (e) {
+        debugPrint('WebRTC: could not send hangup: $e');
+      }
     }
     await _cleanup();
     _setState(CallState.ended);
@@ -492,7 +781,8 @@ class WebRtcService {
 
   void toggleMute() {
     _muted = !_muted;
-    _local?.getAudioTracks().forEach((t) => t.enabled = !_muted);
+    // A microphone held for a phone still ringing stays held.
+    _local?.getAudioTracks().forEach((t) => t.enabled = !_muted && !_mediaHeld);
   }
 
   /// Flips between loudspeaker and earpiece. Returns the route actually in
@@ -716,7 +1006,8 @@ class WebRtcService {
 
   // ── WebSocket signaling ───────────────────────────────────────────────────
 
-  Future<void> _connectWs() async {
+  /// [ringing]: the callee's standby socket, while its phone rings.
+  Future<void> _connectWs({bool ringing = false}) async {
     const raw  = ApiService.baseUrl;
     final base = raw.startsWith('https://')
         ? raw.replaceFirst('https://', 'wss://')
@@ -724,8 +1015,11 @@ class WebRtcService {
     // Short-lived, room-scoped call_token (from POST /calls/initiate or
     // GET /calls/pending/{listingId} / /calls/{roomId}/token) - not the
     // normal long-lived access token, which used to sit in this URL where
-    // it could end up in proxy/server access logs.
-    final uri = Uri.parse('$base/calls/ws/$roomId?token=$callToken');
+    // it could end up in proxy/server access logs. `peer` names what this
+    // phone negotiated while ringing, for the server's `ready`.
+    final peer = _peerId;
+    final uri = Uri.parse('$base/calls/ws/$roomId${ringing ? '/ringing' : ''}'
+        '?token=$callToken${peer == null ? '' : '&peer=$peer'}');
 
     // Retire the previous socket explicitly before standing up a new one.
     // Bumping the epoch is what makes the old subscription's callbacks
@@ -737,7 +1031,7 @@ class WebRtcService {
       try { previous.sink.close(); } catch (_) {}
     }
 
-    final ws = WebSocketChannel.connect(uri);
+    final ws = _openSocket(uri);
     _ws = ws;
     ws.stream.listen(
       (raw) => _onSignal(raw, epoch),
@@ -774,9 +1068,10 @@ class WebRtcService {
     _armWsWatchdog();
   }
 
-  /// Caller: the callee has answered and joined (our offer went out to
-  /// them). From here a slow start is negotiation, not "no answer".
-  bool get peerJoined => _offerSent;
+  /// Caller: the callee has answered and joined (the server's `ready`).
+  /// From here a slow start is negotiation, not "no answer". Not an offer
+  /// having gone out: that now happens while their phone still rings.
+  bool get peerJoined => _calleeJoined;
 
   /// A signalling frame as if the server had sent it - for tests.
   @visibleForTesting
@@ -832,35 +1127,25 @@ class WebRtcService {
           // was before the drop.
           if (isVideo && !_videoEnabled) _sendVideoState();
           if (isCaller) {
-            _peerInRoom = true;
-            if (!_remoteDescriptionSet) {
-              // The offer - made while their phone rang, or now - and the
-              // candidates gathered for it. Again after a signalling
-              // reconnect, if the callee never answered (most likely it
-              // never reached them): the SAME sdp, never a fresh one.
-              unawaited(_deliverOffer());
-            } else if (_awaitingRestartAnswer && _lastLocalOffer != null) {
-              // A restart or a camera being added was offered and its answer
-              // never came back - lost with the socket that just reconnected.
-              _ws?.sink.add(jsonEncode({
-                'type': 'offer', 'room_id': roomId, 'sdp': _lastLocalOffer!.sdp,
-                'restart': true,
-              }));
-              debugPrint('WebRTC: RESTART_OFFER_SENT room=$roomId (resend after reconnect)');
-            }
-            // else: negotiation finished before this 'ready' arrived (e.g. a
-            // late-arriving duplicate); nothing to resend.
+            unawaited(_onCallerReady(m['peer'] as String?));
           } else if (_lastLocalAnswer != null) {
             // Callee side: we already answered once - resend in case it
             // never reached the caller before signaling dropped.
-            _ws?.sink.add(jsonEncode({
-              'type': 'answer', 'room_id': roomId, 'sdp': _lastLocalAnswer!.sdp,
-            }));
-            debugPrint('WebRTC: ANSWER_SENT room=$roomId (resend after reconnect)');
+            _resendAnswer();
           }
           break;
+        case 'ringing_ready':
+          // Server-authored: a phone of the callee's is in the room while
+          // it rings - negotiate with it now.
+          if (isCaller) unawaited(_onRingingReady(m['peer'] as String?));
+          break;
+        case 'ringing_left':
+          // Server-authored: that phone's socket went before it answered.
+          if (isCaller) _onRingingLeft(m['peer'] as String?);
+          break;
         case 'offer':
-          _handleOffer(m['sdp'] as String, isRestart: m['restart'] == true);
+          _queueOffer(m['sdp'] as String,
+              isRestart: m['restart'] == true, offerId: m['offer_id'] as String?);
           break;
         case 'renegotiate':
           // The callee turned its camera on and needs an offer that carries
@@ -868,7 +1153,8 @@ class WebRtcService {
           if (isCaller && _remoteDescriptionSet) unawaited(_renegotiate());
           break;
         case 'answer':
-          _handleAnswer(m['sdp'] as String, isRestart: m['restart'] == true);
+          _handleAnswer(m['sdp'] as String,
+              isRestart: m['restart'] == true, offerId: m['offer_id'] as String?);
           break;
         case 'ice':
           _addIce(m['candidate'] as Map<String, dynamic>);
@@ -887,8 +1173,9 @@ class WebRtcService {
           break;
         case 'callee_ringing':
           // Server-authored, never relayed: the callee's phone has the
-          // call. Only meaningful while we're still waiting for an answer.
-          if (isCaller && !_remoteDescriptionSet &&
+          // call. Only meaningful while we're still waiting for an answer -
+          // not answered yet, however far a ringing phone has negotiated.
+          if (isCaller && !_calleeJoined &&
               _state != CallState.ended && _state != CallState.failed) {
             onPeerRinging?.call();
           }
@@ -911,6 +1198,11 @@ class WebRtcService {
           _setState(CallState.ended);
           break;
         case 'busy':
+          // Turned away while it rings: the old way, on Accept.
+          if (_standby) {
+            _abandonPreconnect();
+            break;
+          }
           if (_reconnectAttempts > 0 && _reconnectAttempts < _maxReconnectAttempts) {
             // Mid-reconnect: the server may not have reaped our previous
             // socket yet. Failing the call outright here would throw away
@@ -925,6 +1217,10 @@ class WebRtcService {
           onError?.call('Other party is busy');
           break;
         case 'error':
+          if (_standby) {
+            _abandonPreconnect();
+            break;
+          }
           _fail(m['message'] as String? ?? 'Unknown signaling error');
           break;
       }
@@ -998,6 +1294,14 @@ class WebRtcService {
       _setState(CallState.ended);
       return;
     }
+    // A ringing phone's socket: refused (4010 - switched off, or no longer
+    // ringing), replaced by another phone of theirs (4009), or dropped.
+    // Not reconnected - Accept takes the old way.
+    if (_standby) {
+      debugPrint('WebRTC: STANDBY_CLOSED room=$roomId code=$code');
+      _abandonPreconnect();
+      return;
+    }
     _onWsDisrupted(null);
   }
 
@@ -1013,6 +1317,10 @@ class WebRtcService {
   void _onWsDisrupted(String? errorMsg) {
     debugPrint('WebRTC: ${errorMsg != null ? "WEBSOCKET_ERROR" : "WEBSOCKET_DISCONNECTED"} room=$roomId ${errorMsg ?? ""}');
     if (_state == CallState.ended || _state == CallState.failed) return;
+    if (_standby) {
+      _abandonPreconnect();
+      return;
+    }
     if (_reconnectAttempts >= _maxReconnectAttempts) {
       if (_state == CallState.connected) {
         // Signaling is gone for good, but the peer connection is still up
@@ -1187,22 +1495,39 @@ class WebRtcService {
   // rings (start), or on 'ready' if that had not finished.
   Future<RTCSessionDescription?>? _offerFuture;
 
-  Future<RTCSessionDescription?> _localOffer() => _offerFuture ??= _makeOffer();
+  /// The offer for the current peer connection. One that could not be made
+  /// is not kept: the next ask tries again. Kept, a failure - or an ask in
+  /// the moment a connection is being replaced - made every later delivery
+  /// fail the call with "Could not create call offer".
+  Future<RTCSessionDescription?> _localOffer() {
+    final cached = _offerFuture;
+    if (cached != null) return cached;
+    final made = _makeOffer();
+    _offerFuture = made;
+    unawaited(made.then((offer) {
+      if (offer == null && identical(_offerFuture, made)) _offerFuture = null;
+    }));
+    return made;
+  }
 
   Future<RTCSessionDescription?> _makeOffer() async {
     final gen = _generation;
+    final pcGen = _pcGen;
     try {
-      if (_pc == null) return null;
+      final pc = _pc;
+      if (pc == null) return null;
       debugPrint('WebRTC: OFFER_CREATED room=$roomId');
-      final offer = await _pc!.createOffer(
+      final offer = await pc.createOffer(
           {'offerToReceiveAudio': true, 'offerToReceiveVideo': isVideo});
-      if (gen != _generation || _pc == null) return null;
+      if (gen != _generation || pcGen != _pcGen) return null;
       final tuned = _tuneSdp(offer);
       // Starts ICE gathering: the candidates that come of it wait in
       // _localIceBeforePeer until the callee is in the room.
-      await _pc!.setLocalDescription(tuned);
-      if (gen != _generation) return null;
+      await pc.setLocalDescription(tuned);
+      if (gen != _generation || pcGen != _pcGen) return null;
       _lastLocalOffer = tuned; // cache for resend - see 'ready' handler in _onSignal
+      // The answer to this offer names it; one naming another is stale.
+      _offerId = '${++_offerSeq}-${Random().nextInt(0x7fffffff).toRadixString(36)}';
       debugPrint('WebRTC: OFFER_SET_LOCAL room=$roomId');
       return tuned;
     } catch (e, st) {
@@ -1212,25 +1537,33 @@ class WebRtcService {
       // rejection (which surfaced as "the app closes"). Delivery makes one
       // more attempt, then fails the call cleanly.
       debugPrint('WebRTC: offer failed: $e\n$st');
-      if (gen == _generation) _offerFuture = null;
       return null;
     }
   }
 
-  /// The callee is in the room: send the offer and the candidates gathered
-  /// for it while their phone rang.
+  /// Send the offer, and the candidates gathered for it while their phone
+  /// rang: to the callee who joined (`ready`), or to their phone still
+  /// ringing in the room (`ringing_ready`).
   Future<void> _deliverOffer() async {
     final gen = _generation;
-    final first = !_offerSent;
-    _offerSent = true;
-    // The callee has joined: from here the connect timeout applies.
-    if (first && _state == CallState.calling) _armConnectTimeout();
-    if (first) onPeerJoined?.call();
+    // A connection being replaced: the offer is the new one's.
+    final resetting = _resetting;
+    if (resetting != null) await resetting;
+    if (gen != _generation) return;
+    final pcGen = _pcGen;
     var offer = await _localOffer();
-    if (gen != _generation) return;
+    if (gen != _generation || pcGen != _pcGen) return;
     offer ??= await _localOffer();
-    if (gen != _generation) return;
+    if (gen != _generation || pcGen != _pcGen) return;
     if (offer == null) {
+      if (!_calleeJoined) {
+        // For a phone still ringing: nobody has answered, so nothing has
+        // failed yet. The offer is tried again when they do (`ready`).
+        debugPrint('WebRTC: no offer for the ringing phone - waiting for the answer');
+        _standbyPeer = null;
+        _holdMedia(false);
+        return;
+      }
       _fail('Could not create call offer');
       return;
     }
@@ -1238,13 +1571,159 @@ class WebRtcService {
     try {
       _ws!.sink.add(jsonEncode({
         'type': 'offer', 'room_id': roomId, 'sdp': offer.sdp,
+        if (_offerId != null) 'offer_id': _offerId,
       }));
-      debugPrint('WebRTC: OFFER_SENT room=$roomId${first ? '' : ' (resend after reconnect)'}');
+      debugPrint('WebRTC: OFFER_SENT room=$roomId'
+          '${_standbyPeer != null && !_calleeJoined ? ' (to their phone, still ringing)' : ''}');
       _flushLocalIce();
     } catch (e) {
       // The socket is going down; the reconnect's 'ready' sends it again.
       debugPrint('WebRTC: could not send offer: $e');
     }
+  }
+
+  /// Caller: a phone of the callee's waits in the room while it rings
+  /// (`ringing_ready`). The offer goes to it now, with this phone's
+  /// microphone held until it answers - so what used to follow Accept
+  /// happens while it rings. Voice calls only: no camera is opened, or
+  /// held, for a phone that hasn't answered.
+  Future<void> _onRingingReady(String? peer) async {
+    if (peer == null || peer.isEmpty || isVideo) return;
+    if (_calleeJoined || _state != CallState.calling) return;
+    if (_standbyPeer == peer) {
+      // The same phone again: the offer, unless it has answered it.
+      if (!_remoteDescriptionSet) unawaited(_deliverOffer());
+      return;
+    }
+    if (_standbyPeer != null) {
+      // Another phone of theirs: what was negotiated with the first is no
+      // use to it.
+      await _resetPreconnect(peerStillHere: true);
+      if (_calleeJoined || _state != CallState.calling) return;
+    }
+    _standbyPeer = peer;
+    _holdMedia(true);
+    _peerInRoom = true;
+    debugPrint('WebRTC: PRECONNECT_STARTED room=$roomId peer=$peer');
+    unawaited(_deliverOffer());
+  }
+
+  /// Caller: the ringing phone's socket went before it answered. What was
+  /// negotiated with it goes too; it, or another, answers the old way.
+  void _onRingingLeft(String? peer) {
+    if (_calleeJoined || peer == null || peer != _standbyPeer) return;
+    debugPrint('WebRTC: PRECONNECT_LEFT room=$roomId peer=$peer');
+    unawaited(_resetPreconnect(peerStillHere: false));
+  }
+
+  /// Caller: the server's `ready` - the callee has joined the call. When
+  /// it is the phone this call was negotiated with while it rang, the
+  /// microphone is let go and the call is through. Any other (another
+  /// phone, or one that started afresh) gets a new offer on a new
+  /// connection, as every call did before. Also fires again on a WS
+  /// reconnect (server re-sends 'ready' once room membership reaches 2
+  /// again), which is what makes resend-on-reconnect work: this is the ONE
+  /// signal both sides can use to notice "signaling just came back"
+  /// without a separate reconnect-specific message.
+  Future<void> _onCallerReady(String? peer) async {
+    final gen = _generation;
+    final first = !_calleeJoined;
+    _calleeJoined = true;
+    _peerInRoom = true;
+    // The callee has joined: from here the connect timeout applies, and
+    // it is no longer ringing.
+    if (first && _state == CallState.calling) _armConnectTimeout();
+    if (first) onPeerJoined?.call();
+    final negotiatedWith = _standbyPeer;
+    _standbyPeer = null;
+    _holdMedia(false);
+    if (negotiatedWith != null && peer != negotiatedWith) {
+      debugPrint('WebRTC: PRECONNECT_UNUSED room=$roomId - answered by '
+          '${peer == null ? 'a phone that joined afresh' : 'another phone'}');
+      await _resetPreconnect(peerStillHere: true);
+      if (gen != _generation) return;
+    } else if (negotiatedWith != null && _remoteDescriptionSet) {
+      debugPrint('WebRTC: PRECONNECT_USED room=$roomId transport=${_transportUp ? 'up' : _pcState}');
+      if (_transportUp) {
+        _onPeerConnected();
+      } else if (_pcState == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
+        // Up once, gone since: a fresh path before anyone waits on it.
+        unawaited(_attemptIceRestart());
+      }
+      // Otherwise still connecting: onConnectionState puts it through.
+      return;
+    }
+    if (!_remoteDescriptionSet) {
+      // The offer - made while their phone rang, or now - and the
+      // candidates gathered for it. Again after a signalling reconnect, if
+      // the callee never answered (most likely it never reached them): the
+      // SAME sdp, never a fresh one.
+      unawaited(_deliverOffer());
+    } else if (_awaitingRestartAnswer && _lastLocalOffer != null) {
+      // A restart or a camera being added was offered and its answer
+      // never came back - lost with the socket that just reconnected.
+      _ws?.sink.add(jsonEncode({
+        'type': 'offer', 'room_id': roomId, 'sdp': _lastLocalOffer!.sdp,
+        'restart': true,
+      }));
+      debugPrint('WebRTC: RESTART_OFFER_SENT room=$roomId (resend after reconnect)');
+    }
+    // else: negotiation finished before this 'ready' arrived (e.g. a
+    // late-arriving duplicate); nothing to resend.
+  }
+
+  /// Caller: a new peer connection, and a new offer made on it, in place of
+  /// one negotiated with a ringing phone that won't be the one on the call.
+  /// [peerStillHere]: someone is in the room to send the new one's
+  /// candidates to.
+  Future<void> _resetPreconnect({required bool peerStillHere}) {
+    final before = _resetting ?? Future<void>.value();
+    late final Future<void> run;
+    run = before.then((_) async {
+      final gen = _generation;
+      final config = _pcConfig;
+      _standbyPeer = null;
+      _holdMedia(false);
+      _transportUp = false;
+      _pcState = null;
+      _remoteDescriptionSet = false;
+      _lastLocalOffer = null;
+      _offerFuture = null;
+      _offerId = null;
+      _awaitingRestartAnswer = false;
+      _pendingIce.clear();
+      _localIceBeforePeer.clear();
+      _peerInRoom = peerStillHere;
+      _pcGen++;
+      final old = _pc;
+      _pc = null;
+      try { await old?.close(); } catch (_) {}
+      if (gen != _generation || config == null) return;
+      await _createPc(config);
+      if (gen != _generation) return;
+      // Its candidates gather while it waits, as the first one's did.
+      if (_state == CallState.calling) unawaited(_localOffer());
+      debugPrint('WebRTC: PRECONNECT_RESET room=$roomId');
+    }).catchError((Object e) {
+      debugPrint('WebRTC: could not replace the peer connection: $e');
+    }).whenComplete(() {
+      if (identical(_resetting, run)) _resetting = null;
+    });
+    _resetting = run;
+    return run;
+  }
+
+  /// Callee: this phone's answer again, for a caller that may not have it.
+  void _resendAnswer() {
+    final answer = _lastLocalAnswer;
+    if (answer == null) return;
+    try {
+      _ws?.sink.add(jsonEncode({
+        'type': 'answer', 'room_id': roomId, 'sdp': answer.sdp,
+        if (_answeredOfferId != null) 'offer_id': _answeredOfferId,
+      }));
+      debugPrint('WebRTC: ANSWER_SENT room=$roomId (resend)');
+    } catch (_) {}
   }
 
   // Caller: candidates gathered before the callee joined the room. The
@@ -1273,25 +1752,62 @@ class WebRtcService {
   @visibleForTesting
   String? get debugHeldOffer => _offerBeforePc;
 
-  Future<void> _handleOffer(String sdp, {bool isRestart = false}) async {
+  /// Offers are answered one at a time, in the order they came: two in
+  /// flight at once - the caller resending its offer on `ready` while this
+  /// phone was still answering it - set two answers on one connection, and
+  /// the second failed the call. Run at once when nothing is in hand, so a
+  /// held offer is held before the frame that brought it returns.
+  void _queueOffer(String sdp, {required bool isRestart, String? offerId}) {
+    Future<void> run() => _handleOffer(sdp, isRestart: isRestart, offerId: offerId);
+    final next = _offersInHand == 0 ? run() : _offerQueue.then((_) => run());
+    _offersInHand++;
+    _offerQueue = next.catchError((Object e) {
+      debugPrint('WebRTC: offer handling failed: $e');
+    }).whenComplete(() {
+      _offersInHand--;
+    });
+  }
+
+  Future<void> _handleOffer(String sdp, {bool isRestart = false, String? offerId}) async {
     final gen = _generation;
     // Duplicate-offer guard (Section 8): once the remote description is
     // already set, a second 'offer' (a duplicated/replayed signaling
     // message) must not re-run the answer flow from scratch. A genuine
     // ICE-restart offer (Section 6) is the one deliberate exception - it's
     // a legitimate renegotiation, not a duplicate, so it's allowed through.
+    // So is an offer naming another id: the caller started again, on a new
+    // connection of its own (its first failed while this phone rang, or it
+    // had negotiated with another phone), and this phone answers it on a
+    // new one too.
     if (_remoteDescriptionSet && !isRestart) {
-      debugPrint('WebRTC: ignoring duplicate offer');
-      return;
+      final newer = offerId != null && _answeredOfferId != null && offerId != _answeredOfferId;
+      if (!newer) {
+        debugPrint('WebRTC: ignoring duplicate offer');
+        // The caller resends its offer only while it has no answer: that
+        // one was lost on the way.
+        _resendAnswer();
+        return;
+      }
+      debugPrint('WebRTC: NEW_OFFER room=$roomId (the caller started again)');
+      if (!await _rebuildForNewOffer() || gen != _generation) return;
     }
     if (_pc == null) {
       // Ahead of our peer connection: answered once it exists (start).
-      if (!isRestart) _offerBeforePc = sdp;
+      if (!isRestart) {
+        _offerBeforePc = sdp;
+        _offerIdBeforePc = offerId;
+      }
       debugPrint('WebRTC: OFFER_HELD room=$roomId (peer connection not ready)');
       return;
     }
+    final pc = _pc!;
+    final pcGen = _pcGen;
+    bool stale() => gen != _generation || pcGen != _pcGen;
+    // Answered while it still rings: no state change for it (see the
+    // block above prepareRinging).
+    final whileRinging = _standby;
     try {
-      if (!isRestart) {
+      if (!isRestart && !whileRinging) {
         // A restart offer arrives mid-call - moving to `ringing` would be
         // wrong (we're not receiving a new incoming call, just
         // renegotiating an existing one). recovering -> connected is
@@ -1299,44 +1815,101 @@ class WebRtcService {
         // reconnects, not through a state change here.
         _setState(CallState.ringing);
       }
-      debugPrint('WebRTC: ${isRestart ? "ICE_RESTART_OFFER_RECEIVED" : "OFFER_RECEIVED"} room=$roomId');
-      if (_pc == null) return;
-      await _pc!.setRemoteDescription(RTCSessionDescription(sdp, 'offer'));
+      debugPrint('WebRTC: ${isRestart ? "ICE_RESTART_OFFER_RECEIVED" : "OFFER_RECEIVED"} room=$roomId'
+          '${whileRinging ? ' (while ringing)' : ''}');
+      await pc.setRemoteDescription(RTCSessionDescription(sdp, 'offer'));
       debugPrint('WebRTC: REMOTE_DESCRIPTION_SET room=$roomId (offer)');
-      if (gen != _generation || _pc == null) return;
+      if (stale()) return;
       _remoteDescriptionSet = true;
-      await _flushPendingIce();
-      if (gen != _generation || _pc == null) return;
-      final answer = await _pc!.createAnswer(
+      if (!isRestart) await _answerWithMicrophoneSlot(pc);
+      if (stale()) return;
+      final answer = await pc.createAnswer(
           {'offerToReceiveAudio': true, 'offerToReceiveVideo': isVideo});
       debugPrint('WebRTC: ANSWER_CREATED room=$roomId');
-      if (gen != _generation || _pc == null) return;
+      if (stale()) return;
       final tunedAnswer = _tuneSdp(answer);
-      await _pc!.setLocalDescription(tunedAnswer);
+      await pc.setLocalDescription(tunedAnswer);
+      if (stale()) return;
       _lastLocalAnswer = tunedAnswer; // cache for resend - see 'ready' handler in _onSignal
+      if (!isRestart) _answeredOfferId = offerId;
       debugPrint('WebRTC: ANSWER_SET_LOCAL room=$roomId');
-      // Negotiation is complete on this side, so the sender now has real
-      // encodings to cap. See _applyVideoBitrateCap.
-      await _applyVideoBitrateCap();
-      if (gen != _generation || _ws == null) return;
-      if (gen != _generation || _ws == null) return;
-      _ws!.sink.add(jsonEncode({
+      // The answer goes first: the caller can do nothing until it has it.
+      // The candidates it sent ahead, and the video bitrate cap, follow -
+      // they used to hold the answer back by a platform round trip each.
+      _ws?.sink.add(jsonEncode({
         'type': 'answer', 'room_id': roomId, 'sdp': tunedAnswer.sdp,
         // Echo the flag back so the offerer can tell this answer apart from
         // a replayed duplicate of the original one (see _handleAnswer).
         if (isRestart) 'restart': true,
+        if (!isRestart && offerId != null) 'offer_id': offerId,
       }));
       debugPrint('WebRTC: ANSWER_SENT room=$roomId');
+      await _flushPendingIce();
+      if (stale()) return;
+      // Negotiation is complete on this side, so the sender now has real
+      // encodings to cap. See _applyVideoBitrateCap.
+      await _applyVideoBitrateCap();
     } catch (e, st) {
       // Same fix as _makeOffer() above - see that method's comment.
-      if (gen == _generation) {
+      if (!stale()) {
         debugPrint('WebRTC: _handleOffer failed: $e\n$st');
-        _fail('Could not answer the call: $e');
+        if (_standby) {
+          // While it rings: Accept answers the old way.
+          _abandonPreconnect();
+        } else {
+          _fail('Could not answer the call: $e');
+        }
       }
     }
   }
 
-  Future<void> _handleAnswer(String sdp, {bool isRestart = false}) async {
+  /// Callee: before its microphone is open - the phone is ringing, or the
+  /// microphone is opening after Accept - an offer's audio would be
+  /// answered receive-only, and the microphone could then only join through
+  /// a second offer and answer. It is answered send-and-receive instead,
+  /// with nothing on the sender until _attachMicrophone puts the microphone
+  /// there. Voice calls; a classic answer, microphone already on, has
+  /// nothing receive-only to change.
+  Future<void> _answerWithMicrophoneSlot(RTCPeerConnection pc) async {
+    if (isCaller || isVideo) return;
+    try {
+      for (final t in await pc.getTransceivers()) {
+        final kind = t.receiver.track?.kind;
+        if (kind != null && kind != 'audio') continue;
+        if (await t.getDirection() == TransceiverDirection.RecvOnly) {
+          await t.setDirection(TransceiverDirection.SendRecv);
+          debugPrint('WebRTC: AUDIO_SLOT_OPENED room=$roomId (microphone joins on Accept)');
+        }
+      }
+    } catch (e) {
+      debugPrint('WebRTC: could not open the audio slot: $e');
+    }
+  }
+
+  /// Callee: a new peer connection for an offer that replaces the one this
+  /// phone answered (see _handleOffer). False when the call ended meanwhile.
+  Future<bool> _rebuildForNewOffer() async {
+    final gen = _generation;
+    final config = _pcConfig;
+    if (config == null) return false;
+    _pcGen++;
+    final old = _pc;
+    _pc = null;
+    _remoteDescriptionSet = false;
+    _lastLocalAnswer = null;
+    _answeredOfferId = null;
+    _transportUp = false;
+    _pcState = null;
+    _pendingIce.clear();
+    _heldRemoteTracks.clear();
+    try { await old?.close(); } catch (_) {}
+    if (gen != _generation) return false;
+    // With the microphone, when it is open: _newPc adds it.
+    await _createPc(config);
+    return gen == _generation && _pc != null;
+  }
+
+  Future<void> _handleAnswer(String sdp, {bool isRestart = false, String? offerId}) async {
     final gen = _generation;
     // Duplicate-answer guard (Section 8) - same reasoning as _handleOffer,
     // and now with the same ICE-restart exception _handleOffer has always
@@ -1344,21 +1917,32 @@ class WebRtcService {
     // restart offer we are actually waiting on: either the peer echoed our
     // `restart` flag back, or we know we're mid-restart. Without this the
     // restart handshake could never complete - see _awaitingRestartAnswer.
-    final restartAnswer = isRestart || _awaitingRestartAnswer;
+    // An answer naming an offer is an answer to that first offer, never to
+    // a restart: a resent one, arriving mid-restart, would otherwise be set
+    // in its place.
+    final restartAnswer = isRestart || (_awaitingRestartAnswer && offerId == null);
     if (_remoteDescriptionSet && !restartAnswer) {
       debugPrint('WebRTC: ignoring duplicate answer');
       return;
     }
+    // An answer to an offer of a connection since replaced - negotiated
+    // with a phone that left, say - or to no offer at all.
+    if (!restartAnswer && offerId != null && offerId != _offerId) {
+      debugPrint('WebRTC: ignoring an answer to an earlier offer');
+      return;
+    }
+    final pc = _pc;
+    if (pc == null) return;
+    final pcGen = _pcGen;
     try {
       debugPrint('WebRTC: ${restartAnswer ? "ICE_RESTART_ANSWER_RECEIVED" : "ANSWER_RECEIVED"} room=$roomId');
-      if (_pc == null) return;
-      await _pc!.setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
+      await pc.setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
       debugPrint('WebRTC: REMOTE_DESCRIPTION_SET room=$roomId (answer)');
-      if (gen != _generation) return;
+      if (gen != _generation || pcGen != _pcGen) return;
       _remoteDescriptionSet = true;
       _awaitingRestartAnswer = false;
       await _flushPendingIce();
-      if (gen != _generation) return;
+      if (gen != _generation || pcGen != _pcGen) return;
       // Caller side: the answer completes negotiation, so this is the first
       // moment the video sender has real encodings. See
       // _applyVideoBitrateCap.
@@ -1368,8 +1952,10 @@ class WebRtcService {
         unawaited(_renegotiate());
       }
     } catch (e, st) {
-      // Same fix as _makeOffer() above - see that method's comment.
-      if (gen == _generation) {
+      // Same fix as _makeOffer() above - see that method's comment. Not
+      // for a connection closed under it (_resetPreconnect): the call
+      // carries on on its replacement.
+      if (gen == _generation && pcGen == _pcGen) {
         debugPrint('WebRTC: _handleAnswer failed: $e\n$st');
         _fail('Could not complete the call connection: $e');
       }
@@ -1593,14 +2179,24 @@ class WebRtcService {
   }
 
   Future<void> _createPc(Map<String, dynamic> iceConfig) async {
+    final pc = await _newPc(iceConfig);
+    if (pc != null) _pc = pc;
+  }
+
+  /// A peer connection with this phone's tracks and every handler on it,
+  /// or null when the call (or this connection) was replaced meanwhile.
+  Future<RTCPeerConnection?> _newPc(Map<String, dynamic> iceConfig) async {
     final gen = _generation;
+    final pcGen = ++_pcGen;
+    _pcConfig = iceConfig;
+    bool stale() => gen != _generation || pcGen != _pcGen;
     // Published as _pc only once its tracks and handlers are in place: the
     // callee's socket is open while this runs (start), and an offer handled
     // against a connection with no microphone track yet would be answered
     // receive-only - a call in which the other side hears nothing.
-    final pc = await _takePreparedPc() ?? await createPeerConnection(iceConfig);
+    final pc = await _takePreparedPc() ?? await _nativePc(iceConfig);
     debugPrint('WebRTC: PEER_CONNECTION_CREATED room=$roomId');
-    if (gen != _generation) { try { await pc.close(); } catch (_) {} return; }
+    if (stale()) { try { await pc.close(); } catch (_) {} return null; }
 
     // Add local audio (+ video, for video calls) tracks. addTrack is async
     // and returns the sender - previously its Future was dropped on the
@@ -1612,7 +2208,7 @@ class WebRtcService {
       await pc.addTrack(t, _local!);
       debugPrint('WebRTC: ${t.kind == "video" ? "LOCAL_VIDEO_TRACK_ADDED" : "LOCAL_AUDIO_TRACK_ADDED"} room=$roomId');
     }
-    if (gen != _generation) { try { await pc.close(); } catch (_) {} return; }
+    if (stale()) { try { await pc.close(); } catch (_) {} return null; }
     // NOT capping the bitrate here. Encodings don't exist until the
     // transceiver is negotiated - see _applyVideoBitrateCap's doc comment.
     // It is applied from the two places where negotiation has just
@@ -1628,7 +2224,7 @@ class WebRtcService {
       // a plausible contributor to the reported crash. Both operations
       // here are synchronous, so a plain try/catch is sufficient - no
       // await needed.
-      if (gen != _generation) return;
+      if (stale()) return;
       if (c.candidate == null) return;
       try {
         final frame = jsonEncode({
@@ -1655,28 +2251,45 @@ class WebRtcService {
     // to `connected` (Section 13/Phase 10: WS/ICE-gathering/etc. state
     // changes are diagnostic-only below, never call _setState()).
     pc.onConnectionState = (s) {
-      if (gen != _generation) return; // stale callback from a torn-down call
+      if (stale()) return; // stale callback from a torn-down call or connection
       try {
         debugPrint('WebRTC: PEER_CONNECTION_STATE room=$roomId state=$s');
+        _pcState = s;
         switch (s) {
           case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
-            _disconnectGraceTimer?.cancel();
-            _disconnectGraceTimer = null;
-            _iceRestartAttempts = 0; // reset - this is either the first connect or a successful recovery
-            _setState(CallState.connected);
-            debugPrint('WebRTC: CALL_CONNECTED room=$roomId');
-            _startTimer();
-            _startQualitySampling();
-            onRemoteStreamConnected?.call();
-            _reportDiagnosticsOnceConnected();
-            _reportWebRtcState('connected');
+            _transportUp = true;
+            if (_preconnecting) {
+              // Up while their phone rings, or while this one's microphone
+              // opens: put through once it is answered (_onCallerReady,
+              // _startPreconnected) - not now, and nothing told the server.
+              debugPrint('WebRTC: PRECONNECTED room=$roomId (held until answered)');
+              break;
+            }
+            _onPeerConnected();
             break;
           case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
+            _transportUp = false;
+            if (_preconnecting) {
+              // Failed while it rang: not the call failing - nobody has
+              // answered. Accept takes the old way.
+              debugPrint('WebRTC: PRECONNECT_FAILED room=$roomId');
+              if (isCaller) {
+                unawaited(_resetPreconnect(peerStillHere: false));
+              } else if (_standby) {
+                _abandonPreconnect();
+              } else {
+                // Accepted, the microphone still opening: the call failed.
+                _reportWebRtcState('failed');
+                _fail('WebRTC connection failed');
+              }
+              break;
+            }
             debugPrint('WebRTC: CALL_FAILED room=$roomId reason=peer_connection_failed');
             _reportWebRtcState('failed');
             _fail('WebRTC connection failed');
             break;
           case RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
+            _transportUp = false;
             if (_state == CallState.connected) {
               // Don't fail immediately - ICE frequently self-heals from a
               // brief disconnect (Wi-Fi/cell handoff, momentary NAT
@@ -1709,15 +2322,15 @@ class WebRtcService {
     // move CallState, exactly to avoid the failure mode Section 13/Phase
     // 10 call out explicitly.
     pc.onIceGatheringState = (s) {
-      if (gen != _generation) return;
+      if (stale()) return;
       debugPrint('WebRTC: ICE_GATHERING_STATE room=$roomId state=$s');
     };
     pc.onIceConnectionState = (s) {
-      if (gen != _generation) return;
+      if (stale()) return;
       debugPrint('WebRTC: ICE_CONNECTION_STATE room=$roomId state=$s');
     };
     pc.onSignalingState = (s) {
-      if (gen != _generation) return;
+      if (stale()) return;
       debugPrint('WebRTC: signaling state = $s');
     };
 
@@ -1725,10 +2338,17 @@ class WebRtcService {
     // audio and video tracks together, so attaching it to the renderer here
     // is correct regardless of which specific track fired the event.
     pc.onTrack = (event) {
-      if (gen != _generation) return;
+      if (stale()) return;
       try {
         final isVideoTrack = event.track.kind == 'video';
         debugPrint('WebRTC: ${isVideoTrack ? "REMOTE_VIDEO_TRACK_RECEIVED" : "REMOTE_AUDIO_TRACK_RECEIVED"} room=$roomId');
+        if (_holdRemote) {
+          // The caller's audio, arriving while this phone still rings:
+          // silent until Accept (_releaseRemoteMedia).
+          event.track.enabled = false;
+          _heldRemoteTracks.add(event.track);
+          return;
+        }
         if (event.streams.isEmpty) return;
         // Any remote media at all means the call is up.
         onRemoteStreamConnected?.call();
@@ -1742,7 +2362,26 @@ class WebRtcService {
       }
     };
 
-    _pc = pc;
+    return pc;
+  }
+
+  /// The connection is up and the call answered: the call is connected.
+  /// Once per connection - a callee put through as its microphone opened
+  /// would otherwise start the clock, the sampling and the diagnostics a
+  /// second time when the connection's own callback caught up.
+  void _onPeerConnected() {
+    if (_state == CallState.connected) return;
+    _disconnectGraceTimer?.cancel();
+    _disconnectGraceTimer = null;
+    _iceRestartAttempts = 0; // reset - this is either the first connect or a successful recovery
+    _setState(CallState.connected);
+    if (_state != CallState.connected) return; // refused (the call is over)
+    debugPrint('WebRTC: CALL_CONNECTED room=$roomId');
+    _startTimer();
+    _startQualitySampling();
+    onRemoteStreamConnected?.call();
+    _reportDiagnosticsOnceConnected();
+    _reportWebRtcState('connected');
   }
 
   /// The other side's picture. On a voice call this is them having turned
@@ -1945,7 +2584,7 @@ class WebRtcService {
     // works normally.
     final wantVideo = isVideo && !_cameraDenied;
 
-    _local = await navigator.mediaDevices.getUserMedia({
+    _local = await _openMedia({
       'audio': {
         'echoCancellation': true,
         'noiseSuppression': true,
@@ -2239,11 +2878,22 @@ class WebRtcService {
     try { await Helper.setSpeakerphoneOn(false); } catch (_) {}
     await _setAudioMode(inCall: false);
     _pc = null; _local = null; _ws = null;
+    _pcGen++;
     _iceCredentialsExpireAt = null;
     _iceConfigFuture = null;
     _offerFuture = null;
     _offerBeforePc = null;
+    _offerIdBeforePc = null;
     _peerInRoom = false;
+    // Answering while it rings (see prepareRinging).
+    _standby = false;
+    _holdRemote = false;
+    _heldRemoteTracks.clear();
+    _attachingMedia = false;
+    _standbyPeer = null;
+    _mediaHeld = false;
+    _transportUp = false;
+    _pcState = null;
     _localIceBeforePeer.clear();
     _renegotiationQueued = false;
     _pendingIce.clear();
@@ -2277,8 +2927,10 @@ class WebRtcService {
     // the callee's phone stopped ringing. For the caller it starts when the
     // offer goes out (_deliverOffer): the callee has answered and joined, and
     // from there 30s really is a stuck negotiation. The no-answer window is
-    // the call screen's (and the server's).
-    if (s == CallState.ringing || (s == CallState.calling && _offerSent)) {
+    // the call screen's (and the server's). Since 2026-11-09 an offer can go
+    // to a phone still ringing: the clock starts at `ready`, when the
+    // callee has joined (_onCallerReady), not at the offer.
+    if (s == CallState.ringing || (s == CallState.calling && _calleeJoined)) {
       _armConnectTimeout();
     } else {
       _disarmConnectTimeout();

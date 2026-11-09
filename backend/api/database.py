@@ -531,7 +531,7 @@ class NegotiationMessage(Base):
     # via_ai: True when the human's message was sent through the AI broker route,
     # False when it was sent as a plain direct-chat message.
     via_ai         = Column(Boolean, default=False, nullable=True)
-    # msg_type: "text" (default) | "voice" | "image" | "call"
+    # msg_type: "text" (default) | "voice" | "image" | "file" | "call"
     msg_type       = Column(String, default="text", nullable=True)
     # media_url: storage URL for voice notes and images.
     media_url      = Column(Text, nullable=True)
@@ -571,6 +571,12 @@ class NegotiationMessage(Base):
     # without another lookup - and without exposing private Zeno contents,
     # since only the already-visible direct-chat preview is stored here.
     reply_snapshot = Column(Text, nullable=True)
+    # A shared document (msg_type "file"): what the chat shows of it without
+    # downloading it. The bytes are a ChatFile row (api/models/chat_file.py)
+    # named by media_url; content is the optional caption. NULL otherwise.
+    file_name      = Column(String(255), nullable=True)
+    file_size      = Column(Integer, nullable=True)
+    file_mime      = Column(String(127), nullable=True)
 
     # (listing_id, buyer_id) is the thread-identity pair filtered on
     # throughout negotiate.py (history, inbox, deal-status) and
@@ -1476,7 +1482,7 @@ async def _apply_optional_statements(conn, statements) -> None:
         await conn.execute(text(prepared))
 
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 SCHEMA_REVISIONS = (
     (1, "legacy_schema_adoption"),
     (2, "durable_payment_intents_and_callbacks"),
@@ -1504,6 +1510,11 @@ SCHEMA_REVISIONS = (
     # already-migrated database wait for the explicit release step rather
     # than serving reports against missing tables.
     (12, "production_service_costs"),
+    # Documents in direct chats: the chat_files table (create_all) and
+    # NegotiationMessage.file_name/file_size/file_mime (the ALTERs). Without
+    # the revision a replica could serve history against a database missing
+    # the new columns - every chat would fail to load.
+    (13, "chat_attachments"),
 )
 
 # Tables/columns that must exist before an API process is safe to serve
@@ -1743,6 +1754,7 @@ async def _init_db_impl():
         ("api.models.marketing", ("MarketingCampaign", "MarketingCreative", "MarketingCampaignEvent")),
         ("api.models.external_escrow", ("ExternalEscrow",)),
         ("api.models.media", ("MediaAsset", "MediaBlob")),
+        ("api.models.chat_file", ("ChatFile",)),
         ("api.models.listing_payment", ("ListingPayment",)),
         ("api.models.subscription", ("Subscription", "SubscriptionPayment", "FeatureUsage")),
         ("api.models.store_billing", ("StoreSubscription", "StorePayment", "StoreBillingMeta")),
@@ -2012,6 +2024,11 @@ async def _init_db_impl():
             "ALTER TABLE negotiation_messages ADD COLUMN store_id VARCHAR",
             "ALTER TABLE thread_read_state ADD COLUMN store_id VARCHAR",
             "ALTER TABLE thread_read_state ALTER COLUMN listing_id DROP NOT NULL",
+            # Documents in direct chats (rev 13): what the chat shows of a
+            # file message. The bytes are chat_files rows, from create_all().
+            "ALTER TABLE negotiation_messages ADD COLUMN file_name VARCHAR(255)",
+            "ALTER TABLE negotiation_messages ADD COLUMN file_size INTEGER",
+            "ALTER TABLE negotiation_messages ADD COLUMN file_mime VARCHAR(127)",
             # Zeno conversation durability (2026-11): one row per
             # (owner, mode, listing). The expression unique index in
             # index_patches enforces it - PostgreSQL treats NULL listing

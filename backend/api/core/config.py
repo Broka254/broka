@@ -360,6 +360,15 @@ class Settings:
     call_token_expire_minutes: int = field(default_factory=lambda: int(
         os.getenv("CALL_TOKEN_EXPIRE_MINUTES", "5")
     ))
+    # Answering without "Connecting…" (CALLING.md): a ringing phone whose
+    # app can do it joins the call's room while it rings
+    # (/calls/ws/{room}/ringing) and the call is negotiated then, with both
+    # microphones held until Accept. Off, those sockets are refused (close
+    # 4010) and every phone answers the way it did before - a switch that
+    # needs no app release if a phone model misbehaves.
+    call_ringing_preconnect: bool = field(default_factory=lambda: os.getenv(
+        "CALL_RINGING_PRECONNECT", "true"
+    ).strip().lower() in ("1", "true", "yes", "on"))
 
     # ── Security ──────────────────────────────────────────────────────────────
     zac_secret: str = field(default_factory=lambda: os.getenv(

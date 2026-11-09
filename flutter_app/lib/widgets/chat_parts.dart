@@ -3,9 +3,9 @@
 // Zeno's screen, the Zeno negotiation room and the one-on-one chat each drew
 // their own composer, send button and "typing" state, and each drifted: an
 // opaque blue bar under one, a gold-to-blue send button on another, "Zeno is
-// composing..." in italic gold on the third. These are the Zeno screen's
-// versions (Home's search pill, the brand gradient), shared, so the three
-// read as one app.
+// composing..." in italic gold on the third. These are shared, so the three
+// read as one app: the composer card (2026-11-09; it was Home's search
+// pill), the brand gradient, Zeno's thinking waves.
 import 'package:flutter/material.dart';
 
 import '../features/buy_agent/presentation/widgets/agent_hud.dart' show AgentThinkingWave;
@@ -14,66 +14,172 @@ import '../main.dart' show BrokaColors;
 /// Zeno's colours - the brand gradient Home's Zeno CTA and the splash use.
 const List<Color> kChatGradient = [BrokaColors.neonPurple, BrokaColors.neonBlue];
 
-/// Home's search pill as a chat composer: the same fill, outline and focus
-/// glow, so typing a message looks like typing anywhere else in BROKA.
-class ChatComposerPill extends StatelessWidget {
-  const ChatComposerPill({super.key, required this.focused, required this.child});
+/// The chat composer (2026-11-09): a rounded card with the message on top
+/// and a row of actions under it - the way DeepSeek's and ChatGPT's read.
+/// It replaced a single pill that held its icons inside the text line:
+/// they shrank the text, and a photo button, a microphone and a send
+/// button competed for the same few millimetres beside it.
+///
+/// [leading] are labelled chips (Photos, Document, Make an offer), the
+/// shortcuts a person looks for; [trailing] the round buttons - attach,
+/// the microphone, and the send button that takes its place once there is
+/// something to send. [top] sits above the text: a photo waiting to go.
+class ChatComposerCard extends StatelessWidget {
+  const ChatComposerCard({
+    super.key,
+    required this.focused,
+    required this.field,
+    this.top,
+    this.leading = const [],
+    this.trailing = const [],
+  });
 
   final bool focused;
-  final Widget child;
+  final Widget field;
+  final Widget? top;
+  final List<Widget> leading;
+  final List<Widget> trailing;
 
   @override
   Widget build(BuildContext context) => AnimatedContainer(
     duration: const Duration(milliseconds: 160),
-    constraints: const BoxConstraints(minHeight: 50),
+    padding: const EdgeInsets.fromLTRB(14, 6, 8, 8),
     decoration: BoxDecoration(
-      color: BrokaColors.bgCard.withOpacity(0.92),
-      borderRadius: BorderRadius.circular(26),
+      color: BrokaColors.bgCard.withOpacity(0.94),
+      borderRadius: BorderRadius.circular(24),
       border: Border.all(
-        color: BrokaColors.neonBlue.withOpacity(focused ? 0.85 : 0.45),
-        width: focused ? 1.6 : 1.2,
+        color: BrokaColors.neonBlue.withOpacity(focused ? 0.8 : 0.32),
+        width: focused ? 1.4 : 1.0,
       ),
-      boxShadow: focused
-          ? [BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.18), blurRadius: 14)]
-          : null,
+      boxShadow: [
+        BoxShadow(color: Colors.black.withOpacity(0.28), blurRadius: 16, offset: const Offset(0, 4)),
+        if (focused)
+          BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.16), blurRadius: 14),
+      ],
     ),
-    child: child,
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (top != null) top!,
+        Padding(padding: const EdgeInsets.only(right: 6), child: field),
+        const SizedBox(height: 4),
+        Row(children: [
+          // Scrolls rather than overflows: two chips on a 320dp phone at a
+          // large text size still fit beside the buttons, and a third one
+          // would scroll instead of breaking the row.
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(children: [
+                for (var i = 0; i < leading.length; i++) ...[
+                  if (i > 0) const SizedBox(width: 6),
+                  leading[i],
+                ],
+              ]),
+            ),
+          ),
+          for (final t in trailing) ...[const SizedBox(width: 6), t],
+        ]),
+      ],
+    ),
   );
 }
 
-/// An icon inside the composer pill - attach a photo, record, make an offer.
-class ChatComposerAction extends StatelessWidget {
-  const ChatComposerAction({
+/// A labelled shortcut in the composer's action row: an icon and a word,
+/// in the accent's tint (DeepSeek's "Think" and "Search" chips).
+class ChatComposerChip extends StatelessWidget {
+  const ChatComposerChip({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.tooltip,
+    required this.onTap,
+    this.color = BrokaColors.neonBlue,
+    this.active = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final String tooltip;
+  final VoidCallback? onTap;
+  final Color color;
+
+  /// On (a mode that is in force).
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: tooltip,
+    child: Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Container(
+          height: 34,
+          padding: const EdgeInsets.symmetric(horizontal: 11),
+          decoration: BoxDecoration(
+            color: color.withOpacity(active ? 0.26 : 0.12),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: color.withOpacity(active ? 0.8 : 0.42)),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, size: 16, color: color),
+            const SizedBox(width: 6),
+            Text(label,
+                maxLines: 1,
+                style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w600)),
+          ]),
+        ),
+      ),
+    ),
+  );
+}
+
+/// A round outlined button in the composer's action row: attach, the
+/// microphone - the "+" and the voice button of DeepSeek's composer.
+class ChatComposerIconButton extends StatelessWidget {
+  const ChatComposerIconButton({
     super.key,
     required this.icon,
     required this.tooltip,
     required this.onTap,
     this.active = false,
-    this.leading = true,
   });
 
   final IconData icon;
   final String tooltip;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
-  /// Lit (the voice card is open, say).
+  /// Lit (voice mode is open, say).
   final bool active;
-
-  /// Which end of the pill it sits at, for its padding.
-  final bool leading;
 
   @override
   Widget build(BuildContext context) => Tooltip(
     message: tooltip,
-    child: InkResponse(
-      onTap: onTap,
-      radius: 22,
-      child: Padding(
-        padding: leading
-            ? const EdgeInsets.fromLTRB(14, 13, 6, 13)
-            : const EdgeInsets.fromLTRB(6, 13, 14, 13),
-        child: Icon(icon,
-            size: 22, color: active ? BrokaColors.neonBlue : BrokaColors.textMid),
+    child: Material(
+      color: Colors.transparent,
+      shape: const CircleBorder(),
+      child: InkWell(
+        onTap: onTap,
+        customBorder: const CircleBorder(),
+        child: Container(
+          width: 38,
+          height: 38,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: active ? BrokaColors.neonBlue.withOpacity(0.18) : null,
+            border: Border.all(
+              color: active
+                  ? BrokaColors.neonBlue
+                  : BrokaColors.textHigh.withOpacity(0.55),
+              width: 1.4,
+            ),
+          ),
+          child: Icon(icon,
+              size: 20, color: active ? BrokaColors.neonBlue : BrokaColors.textHigh),
+        ),
       ),
     ),
   );
@@ -89,11 +195,15 @@ class ChatSendButton extends StatelessWidget {
     required this.visible,
     required this.onTap,
     this.busy = false,
+    this.size = 50,
   });
 
   final bool visible;
   final VoidCallback? onTap;
   final bool busy;
+
+  /// Its diameter: 50 beside a bar, 38 in the composer card's action row.
+  final double size;
 
   @override
   Widget build(BuildContext context) {
@@ -106,7 +216,7 @@ class ChatSendButton extends StatelessWidget {
         child: Align(alignment: Alignment.centerRight, widthFactor: room, child: child),
       ),
       child: Padding(
-        padding: const EdgeInsets.only(left: 8),
+        padding: EdgeInsets.only(left: size < 50 ? 4 : 8),
         child: _button(shown),
       ),
     );
@@ -126,8 +236,8 @@ class ChatSendButton extends StatelessWidget {
           child: GestureDetector(
             onTap: (busy || !visible) ? null : onTap,
             child: Container(
-              width: 50,
-              height: 50,
+              width: size,
+              height: size,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 gradient: const LinearGradient(
@@ -149,7 +259,7 @@ class ChatSendButton extends StatelessWidget {
                           height: 18,
                           child: CircularProgressIndicator(
                               strokeWidth: 2, color: Colors.white)))
-                  : const Icon(Icons.arrow_upward_rounded, color: Colors.white, size: 22),
+                  : Icon(Icons.arrow_upward_rounded, color: Colors.white, size: size < 50 ? 20 : 22),
             ),
           ),
         ),

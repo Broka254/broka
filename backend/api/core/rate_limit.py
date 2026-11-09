@@ -170,6 +170,8 @@ if _settings.is_test:
     zeno_chat_limiter      = _make_limiter("zeno_chat",      limit=1000, window_seconds=60)
     image_upload_limiter   = _make_limiter("image_upload",   limit=1000, window_seconds=60)
     image_upload_daily_limiter = _make_limiter("image_upload_day", limit=100000, window_seconds=86400)
+    chat_media_limiter       = _make_limiter("chat_media",     limit=1000, window_seconds=60)
+    chat_media_daily_limiter = _make_limiter("chat_media_day", limit=100000, window_seconds=86400)
     store_name_check_limiter = _make_limiter("store_name_check", limit=1000, window_seconds=60)
     store_counter_limiter    = _make_limiter("store_counter",    limit=1000, window_seconds=60)
     marketing_generation_limiter = _make_limiter("marketing_generate", limit=1000, window_seconds=3600)
@@ -211,6 +213,14 @@ else:
     # listings' worth of photos plus retries; a seller who really needs
     # more in a day is rare enough to handle by hand.
     image_upload_daily_limiter = _make_limiter("image_upload_day", limit=300, window_seconds=86400)
+    # POST /media/upload - photos, voice notes and documents sent in a
+    # direct chat - keyed by user. Nothing limited it, and every upload is
+    # decoded (a photo), stored in the database and pushed to the other
+    # side. Sending a batch of ten photos takes ten; 60/min leaves room for
+    # retries on a bad connection, and 600 a day is far past a person's
+    # chatting.
+    chat_media_limiter       = _make_limiter("chat_media",     limit=60,  window_seconds=60)
+    chat_media_daily_limiter = _make_limiter("chat_media_day", limit=600, window_seconds=86400)
     # GET /stores/name-available, keyed by user: the setup wizard checks as
     # the owner types (debounced). 60/min is plenty for that and stops the
     # endpoint being used to enumerate every store link.

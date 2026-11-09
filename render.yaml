@@ -269,6 +269,8 @@ services:
         sync: false          # Server-side only - never returned to Flutter (GET /calls/turn-credentials)
       - key: CLOUDFLARE_ACCOUNT_ID
         sync: false          # Only needed if a future administrative Cloudflare call requires it
+      - key: CALL_RINGING_PRECONNECT
+        value: "true"        # Calls negotiated while they ring (CALLING.md); "false" switches it off without an app release
 
 databases:
   - name: broka-db

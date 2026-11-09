@@ -464,11 +464,16 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       _answer(roomId);
       CallKitService.instance.reportOutgoingCall(
           roomId: roomId, peerName: _peerName, isVideo: _isVideo);
+      // The relay's credentials and the peer connection (its TURN
+      // allocation) come up while the microphone opens, not after it.
+      _svc.prepare();
       _svc.start();
     } else {
       // While it rings, fetch what the call will need from the network (the
-      // relay's credentials), so Accept goes straight to connecting.
-      _svc.prepare();
+      // relay's credentials), so Accept goes straight to connecting - and,
+      // on a phone that can, negotiate the call itself while it rings, so
+      // Accept is answered at once (WebRtcService.prepareRinging).
+      _svc.prepareRinging();
       // Callee: ring until Accept/Decline (or a safety timeout) - see
       // RingtoneService for why this is centralised rather than duplicated.
       RingtoneService.instance.play(

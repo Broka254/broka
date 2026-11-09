@@ -156,7 +156,7 @@ void main() {
       expect(find.byType(ChatAmbientBackground), findsNothing);
       expect(find.text('NEGOTIATION'), findsOneWidget);
       expect(find.byType(BrokaHeaderButton), findsNWidgets(2)); // direct chat, voice
-      expect(find.byType(ChatComposerPill), findsOneWidget);
+      expect(find.byType(ChatComposerCard), findsOneWidget);
       expect(find.text('Zeno is composing...'), findsNothing);
       // BROKA holds no payments while they are paused: the header no longer
       // says "Escrow protected", and the pay chip doesn't promise security.
@@ -239,7 +239,7 @@ void main() {
       expect(find.byKey(const Key('pay-now')), findsNothing);
       expect(find.byType(EscrowCallout), findsNothing);
       expect(find.textContaining('escrow'), findsNothing);
-      expect(find.byType(ChatComposerPill), findsOneWidget);
+      expect(find.byType(ChatComposerCard), findsOneWidget);
     });
   });
 
@@ -266,7 +266,7 @@ void main() {
       expect(find.text('Zeno, guide me'), findsOneWidget);
       expect(find.textContaining('Pay securely'), findsNothing);
       expect(find.byTooltip('Ask Zeno'), findsOneWidget);
-      expect(find.byType(ChatComposerPill), findsOneWidget);
+      expect(find.byType(ChatComposerCard), findsOneWidget);
 
       // The direct thread only - Zeno's room stays private.
       expect(find.text('Is it still available?'), findsOneWidget);
