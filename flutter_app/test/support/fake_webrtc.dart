@@ -147,7 +147,9 @@ class FakeTransceiver extends RTCRtpTransceiver {
 }
 
 class FakePeerConnection extends RTCPeerConnection {
-  final List<FakeTransceiver> transceivers = [];
+  /// Its transceivers, in the order they were made. (Not `transceivers`:
+  /// the interface has a getter by that name.)
+  final List<FakeTransceiver> slots = [];
   final List<RTCIceCandidate> candidates = [];
   RTCSessionDescription? localDescription;
   RTCSessionDescription? remoteDescription;
@@ -168,7 +170,7 @@ class FakePeerConnection extends RTCPeerConnection {
   @override
   Future<RTCSessionDescription> createAnswer(
       [Map<String, dynamic> constraints = const {}]) async {
-    answeredDirections = [for (final t in transceivers) t.direction];
+    answeredDirections = [for (final t in slots) t.direction];
     return RTCSessionDescription('v=0 answer ${identityHashCode(this)}', 'answer');
   }
 
@@ -182,26 +184,26 @@ class FakePeerConnection extends RTCPeerConnection {
     remoteDescription = description;
     // An offer's audio, on a connection without a microphone track: a
     // receive-only transceiver, as unified-plan WebRTC makes.
-    if (description.type == 'offer' && transceivers.isEmpty) {
-      transceivers.add(FakeTransceiver(FakeSender(null), TransceiverDirection.RecvOnly));
+    if (description.type == 'offer' && slots.isEmpty) {
+      slots.add(FakeTransceiver(FakeSender(null), TransceiverDirection.RecvOnly));
     }
   }
 
   @override
   Future<RTCRtpSender> addTrack(MediaStreamTrack track, [MediaStream? stream]) async {
     final sender = FakeSender(track);
-    transceivers.add(FakeTransceiver(sender, TransceiverDirection.SendRecv,
+    slots.add(FakeTransceiver(sender, TransceiverDirection.SendRecv,
         kind: track.kind ?? 'audio'));
     return sender;
   }
 
   @override
   Future<List<RTCRtpTransceiver>> getTransceivers() async =>
-      List<RTCRtpTransceiver>.of(transceivers);
+      List<RTCRtpTransceiver>.of(slots);
 
   @override
   Future<List<RTCRtpSender>> getSenders() async =>
-      [for (final t in transceivers) t.sender];
+      [for (final t in slots) t.sender];
 
   @override
   Future<void> addCandidate(RTCIceCandidate candidate) async {

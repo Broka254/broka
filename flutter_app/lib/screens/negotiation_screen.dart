@@ -2549,7 +2549,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         return SafeArea(
           child: Padding(
             padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
+            // Scrolls on a short phone with the keyboard up, rather than
+            // overflowing the sheet.
+            child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
               const SizedBox(height: 8),
               Container(width: 40, height: 4,
                 decoration: BoxDecoration(
@@ -2653,7 +2655,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
                   ),
                 ),
               ),
-            ]),
+            ])),
           ),
         );
       }),
@@ -2773,7 +2775,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         return SafeArea(
           child: Padding(
             padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
+            // Scrolls on a short phone with the keyboard up, rather than
+            // overflowing the sheet.
+            child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
               const SizedBox(height: 8),
               Container(width: 40, height: 4,
                 decoration: BoxDecoration(
@@ -2851,7 +2855,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
                   ),
                 ),
               ),
-            ]),
+            ])),
           ),
         );
       }),

@@ -87,7 +87,7 @@ void main() {
       final pc = pcs.single;
       expect(pc.answeredDirections, [TransceiverDirection.SendRecv],
           reason: 'room for the microphone, so Accept needs no second negotiation');
-      expect(pc.transceivers.single.sender.track, isNull,
+      expect(pc.slots.single.sender.track, isNull,
           reason: 'no microphone while it rings');
 
       final theirAudio = pc.deliverRemoteAudio();
@@ -102,7 +102,7 @@ void main() {
       await settle();
       expect(sent('accept'), hasLength(1));
       expect(uris, hasLength(1), reason: 'answered on the socket already there');
-      expect(pc.transceivers.single.sender.track, same(mic));
+      expect(pc.slots.single.sender.track, same(mic));
       expect(theirAudio.enabled, isTrue);
       expect(states, [CallState.connecting, CallState.connected]);
       expect(pcs, hasLength(1), reason: 'the connection made while it rang');
@@ -119,7 +119,7 @@ void main() {
       await settle();
       final pc = pcs.single;
       expect(pc.answeredDirections, [TransceiverDirection.SendRecv]);
-      expect(pc.transceivers.single.sender.track, same(mic));
+      expect(pc.slots.single.sender.track, same(mic));
       expect(svc.state, CallState.ringing, reason: 'waiting for the connection, under the connect timeout');
       pc.reportState(RTCPeerConnectionState.RTCPeerConnectionStateConnected);
       expect(svc.state, CallState.connected);
@@ -149,7 +149,7 @@ void main() {
       // The connection made after Accept carries the microphone and plays
       // the caller: nothing of the abandoned one is held.
       final pc = pcs.last;
-      expect(pc.transceivers.single.sender.track, same(mic));
+      expect(pc.slots.single.sender.track, same(mic));
       expect(pc.deliverRemoteAudio().enabled, isTrue);
       await svc.dispose();
     });
