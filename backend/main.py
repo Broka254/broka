@@ -276,6 +276,10 @@ app.include_router(ai_broker_router,  prefix="/negotiate",  tags=["AI Broker v3"
 app.include_router(admin_router,      prefix="/admin",      tags=["Admin v3"])
 from api.domains.admin.alerts_revenue import router as admin_additions_router
 app.include_router(admin_additions_router, prefix="/admin", tags=["Admin v3"])
+# Founder intelligence (pulse, demand/supply, funnel, cohorts, sellers,
+# insights) and the daily/weekly/monthly report archive.
+from api.domains.admin.intelligence import router as admin_intelligence_router
+app.include_router(admin_intelligence_router, prefix="/admin", tags=["Admin - Intelligence"])
 # Production cost tracking. Mounted at /admin/revenue/costs, a more specific
 # prefix than /admin/revenue, whose handler lives in alerts_revenue.py above.
 app.include_router(

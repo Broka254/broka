@@ -302,6 +302,13 @@ async def _periodic_sweep_loop(interval_seconds: int = 300) -> None:
                     await run_cost_maintenance()
                 except Exception as exc:
                     logger.error("[sweep] service-cost maintenance failed: %s", exc)
+                try:
+                    # Founder briefs for the day, week and month that just
+                    # closed, written once per period (api/core/admin_reports.py).
+                    from api.core.admin_reports import generate_due_reports
+                    await generate_due_reports()
+                except Exception as exc:
+                    logger.error("[sweep] founder report generation failed: %s", exc)
         await asyncio.sleep(interval_seconds)
 
 
