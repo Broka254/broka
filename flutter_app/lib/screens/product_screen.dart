@@ -440,6 +440,22 @@ class _ProductScreenState extends State<ProductScreen> {
     );
   }
 
+  /// A complaint about this listing or its seller, with both attached so the
+  /// admin queue opens on the right listing and trader rather than a
+  /// description of them.
+  Future<void> _reportProblem(Listing l) async {
+    final authed =
+        await requireAuth(context, reason: 'to report a problem with this listing');
+    if (!authed || !mounted) return;
+    Navigator.pushNamed(context, '/feedback', arguments: {
+      'kind': 'complaint',
+      'category': 'listing',
+      'relatedListingId': l.id,
+      if (l.sellerId != null) 'relatedUserId': l.sellerId,
+      'contextLabel': '${l.name} · ${l.formattedPrice}',
+    });
+  }
+
   /// Like and Save as big, labelled actions under the photo — where a
   /// buyer is already looking — not two 22px glyphs squeezed into the
   /// header beside the sale badge. Each is a full-width-half pill, 52dp
@@ -1535,16 +1551,36 @@ class _ProductScreenState extends State<ProductScreen> {
             const SizedBox(width: 12),
             _ctaButton(l),
           ]),
-        if (!_isAuction)
-          TextButton(
-            key: const Key('product-report-sold-out'),
-            onPressed: _reportingSoldOut ? null : () => _reportSoldOut(l),
-            style: TextButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-                padding: const EdgeInsets.symmetric(vertical: 2)),
-            child: const Text('No longer available? Mark it sold out',
-                style: TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
-          ),
+        // The two "something is wrong with this listing" actions side by
+        // side; a Wrap, so a narrow phone at a large text size puts them on
+        // two lines instead of overflowing the bar.
+        Wrap(
+          alignment: WrapAlignment.center,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 2,
+          children: [
+            if (!_isAuction)
+              TextButton(
+                key: const Key('product-report-sold-out'),
+                onPressed: _reportingSoldOut ? null : () => _reportSoldOut(l),
+                style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(vertical: 2)),
+                child: const Text('No longer available? Mark it sold out',
+                    style: TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
+              ),
+            TextButton.icon(
+              key: const Key('product-report'),
+              onPressed: () => _reportProblem(l),
+              style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2)),
+              icon: const Icon(Icons.flag_outlined, size: 14, color: BrokaColors.textMid),
+              label: const Text('Report a problem',
+                  style: TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
+            ),
+          ],
+        ),
       ]),
     ),
   );

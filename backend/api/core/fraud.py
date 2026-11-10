@@ -36,6 +36,11 @@ W_DISPUTE    = 20   # max points from low dispute rate
 W_VERIFIED   = 15   # max points from verification status
 W_RATING     = 15   # max points from peer rating
 W_RAPID_TX   = 10   # max points from no rapid-transaction pattern
+# What an administrator's flag costs (POST /admin/users/{id}/flag). The
+# recomputation below applies it too, for as long as the flag stands: it
+# used to ignore is_flagged, so the 24-hour fraud sweep, the next deal or a
+# "recompute trust" click put a flagged user straight back to "trusted".
+FLAG_PENALTY = 30
 
 
 async def compute_trust_score(user_id: str, db: AsyncSession) -> int:
@@ -132,6 +137,10 @@ async def compute_trust_score(user_id: str, db: AsyncSession) -> int:
     if rapid_deals <= 3:     score += W_RAPID_TX
     elif rapid_deals <= 6:   score += int(W_RAPID_TX * 0.5)
     # >6 deals in 24h → 0 pts (suspicious rapid-transaction pattern)
+
+    # 7. An administrator's flag, while it stands.
+    if getattr(user, "is_flagged", False):
+        score -= FLAG_PENALTY
 
     final_score = max(0, min(100, score))
 

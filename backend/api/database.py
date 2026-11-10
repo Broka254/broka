@@ -1482,7 +1482,7 @@ async def _apply_optional_statements(conn, statements) -> None:
         await conn.execute(text(prepared))
 
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 SCHEMA_REVISIONS = (
     (1, "legacy_schema_adoption"),
     (2, "durable_payment_intents_and_callbacks"),
@@ -1515,6 +1515,10 @@ SCHEMA_REVISIONS = (
     # the revision a replica could serve history against a database missing
     # the new columns - every chat would fail to load.
     (13, "chat_attachments"),
+    # Founder reports archive (api/models/admin_report.py). A new table only,
+    # from create_all(); the revision keeps a replica from serving the
+    # reports endpoints against a database that has no admin_reports yet.
+    (14, "admin_reports"),
 )
 
 # Tables/columns that must exist before an API process is safe to serve
@@ -1772,6 +1776,7 @@ async def _init_db_impl():
         ("api.models.payment_callback", ("PaymentCallback",)),
         ("api.models.legal", ("LegalAcceptance",)),
         ("api.models.feedback", ("UserFeedback",)),
+        ("api.models.admin_report", ("AdminReport",)),
         (
             "api.models.service_communication",
             (

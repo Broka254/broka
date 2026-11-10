@@ -543,4 +543,38 @@ void main() {
       expect(tester.takeException(), isNull, reason: 'after scroll $i');
     }
   });
+
+  group('reporting a problem', () {
+    testWidgets('a buyer reports the listing with it and its seller attached', (tester) async {
+      RouteSettings? report;
+      await tester.pumpWidget(MaterialApp(
+        onGenerateRoute: (s) {
+          if (s.name == '/') {
+            return MaterialPageRoute(
+              settings: RouteSettings(name: '/product', arguments: _listing()),
+              builder: (_) => const ProductScreen(animateBackground: false),
+            );
+          }
+          if (s.name == '/feedback') report = s;
+          return MaterialPageRoute(builder: (_) => Scaffold(body: Text('route ${s.name}')));
+        },
+      ));
+      await tester.pumpAndSettle();
+      expect(find.text('Report a problem'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('product-report')));
+      await tester.pumpAndSettle();
+      expect(report, isNotNull);
+      final args = report!.arguments! as Map;
+      expect(args['kind'], 'complaint');
+      expect(args['category'], 'listing');
+      expect(args['relatedListingId'], 'listing-1');
+      expect(args['relatedUserId'], 'seller-1');
+      expect(args['contextLabel'], contains('iPhone 13 128GB'));
+    });
+
+    testWidgets("the seller's own listing has no report button", (tester) async {
+      await open(tester, _listing(sellerId: 'buyer-1'));
+      expect(find.byKey(const Key('product-report')), findsNothing);
+    });
+  });
 }

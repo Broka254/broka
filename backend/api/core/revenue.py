@@ -38,6 +38,7 @@ whole KES — all converted to integer minor units (KES cents).
 """
 from __future__ import annotations
 
+import bisect
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -83,11 +84,23 @@ def _bucket_start(value: datetime, bucket: str) -> datetime:
     return value.replace(day=1)
 
 
+MAX_BUCKETS = 500
+
+
 def _iter_buckets(start: datetime, end: datetime, bucket: str):
+    """[start, end) as consecutive bucket intervals.
+
+    A range needing more than MAX_BUCKETS is refused (ValueError, a 422 at
+    the endpoints). It used to stop at 500 buckets without saying so: two
+    years by day returned a series ending in mid-2025 while the totals
+    covered the whole range, so the chart silently disagreed with them."""
     cursor = _bucket_start(start, bucket)
     out = []
-    guard = 0
-    while cursor < end and guard < 500:
+    while cursor < end:
+        if len(out) >= MAX_BUCKETS:
+            raise ValueError(
+                f"this range needs more than {MAX_BUCKETS} {bucket} buckets; "
+                "choose a shorter range or a longer bucket")
         if bucket == "day":
             nxt = cursor + timedelta(days=1)
         elif bucket == "week":
@@ -98,7 +111,21 @@ def _iter_buckets(start: datetime, end: datetime, bucket: str):
             nxt = cursor.replace(year=cursor.year + 1, month=1, day=1)
         out.append((cursor, nxt))
         cursor = nxt
-        guard += 1
+    return out
+
+
+def bucket_sums(rows: list[tuple[datetime, int]], buckets) -> list[int]:
+    """Sum of amounts per bucket, in one pass over rows sorted by time.
+
+    The per-bucket scan this replaces read every row once per bucket - a
+    year of daily buckets over the payment rows was 365 full passes."""
+    ordered = sorted(rows, key=lambda r: r[0])
+    stamps = [stamp for stamp, _ in ordered]
+    out = []
+    for b_start, b_end in buckets:
+        lo = bisect.bisect_left(stamps, b_start)
+        hi = bisect.bisect_left(stamps, b_end)
+        out.append(sum(amount for _, amount in ordered[lo:hi]))
     return out
 
 
@@ -135,6 +162,8 @@ async def revenue_report(
     if bucket not in ("day", "week", "month"):
         raise ValueError("bucket must be one of day, week, month")
     start, end = _parse_range(from_raw, to_raw)
+    # Before any query: a range with too many buckets is refused outright.
+    buckets = _iter_buckets(start, end, bucket)
 
     # Each stream keeps per-row (timestamp, amount_minor) pairs so the
     # bucket series below is a second pass over the same rows — one query
@@ -340,28 +369,20 @@ async def revenue_report(
         costs_total += fee_total
         estimated_total += fee_estimated_total
 
-    series = []
-    for b_start, b_end in _iter_buckets(start, end, bucket):
-        income_minor = sum(
-            amount
-            for entry in streams.values()
-            for stamp, amount in entry["rows"]
-            if b_start <= stamp < b_end
-        )
-        costs_minor = sum(
-            amount
-            for entry in kinds.values()
-            for stamp, amount in entry["rows"]
-            if b_start <= stamp < b_end
-        )
-        series.append(
-            {
-                "bucket_start": b_start.isoformat() + "Z",
-                "income_minor": income_minor,
-                "costs_minor": costs_minor,
-                "profit_minor": income_minor - costs_minor,
-            }
-        )
+    income_by_bucket = bucket_sums(
+        [row for entry in streams.values() for row in entry["rows"]], buckets)
+    costs_by_bucket = bucket_sums(
+        [row for entry in kinds.values() for row in entry["rows"]], buckets)
+    series = [
+        {
+            "bucket_start": b_start.isoformat() + "Z",
+            "income_minor": income_minor,
+            "costs_minor": costs_minor,
+            "profit_minor": income_minor - costs_minor,
+        }
+        for (b_start, _), income_minor, costs_minor in zip(
+            buckets, income_by_bucket, costs_by_bucket)
+    ]
 
     profit = income_total - costs_total
     margin = round(profit / income_total * 100, 2) if income_total else 0.0

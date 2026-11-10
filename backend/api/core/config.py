@@ -699,6 +699,26 @@ class Settings:
         "MPESA_STORE_CALLBACK_URL", ""
     ).strip())
 
+    # ── Founder intelligence and reports (api/core/intelligence.py,
+    # api/core/admin_reports.py) ─────────────────────────────────────────────
+    # The 5-minute sweep writes the daily, weekly and monthly briefs once each
+    # period closes, and posts the weekly/monthly ones to the Alert Centre.
+    # Off: no report is written by the sweep (administrators can still
+    # generate one from the dashboard).
+    admin_reports_enabled: bool = field(default_factory=lambda: os.getenv(
+        "ADMIN_REPORTS_ENABLED", "true"
+    ).strip().lower() in ("1", "true", "yes", "on"))
+    # Where report days begin. The founders read "yesterday" and "this week"
+    # in Kenya time (EAT, UTC+3, no daylight saving), not in the UTC the
+    # database stores; -12..14 like any real offset.
+    report_tz_offset_hours: int = field(default_factory=lambda: max(-12, min(14, int(
+        os.getenv("REPORT_TZ_OFFSET_HOURS", "3") or 3))))
+    # What BROKA costs to run each month before any variable cost (hosting,
+    # domain): the break-even line the dashboard measures income against.
+    # LAUNCH_DISCOUNT_MODEL.md: KES 773 (Railway 648 + domain 125).
+    platform_fixed_monthly_cost_kes: int = field(default_factory=lambda: max(0, int(
+        os.getenv("PLATFORM_FIXED_MONTHLY_COST_KES", "773") or 0)))
+
     # ── Fraud thresholds ──────────────────────────────────────────────────────
     fraud_new_account_days: int = 7
     fraud_rapid_tx_window_hours: int = 24

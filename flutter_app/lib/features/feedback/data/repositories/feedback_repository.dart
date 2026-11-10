@@ -47,11 +47,40 @@ class FeedbackRepository {
     }
   }
 
-  Future<Result<FeedbackPage>> mine({int limit = 50, int offset = 0}) async {
+  /// One of the user's own submissions, fresh from the server - the detail
+  /// sheet reads it so a reply that arrived since the list loaded shows.
+  Future<Result<FeedbackSubmission>> get(String id) async {
+    try {
+      final data = await _client.get('/feedback/${Uri.encodeComponent(id)}');
+      final map = data is Map<String, dynamic>
+          ? data
+          : data is Map
+              ? Map<String, dynamic>.from(data)
+              : <String, dynamic>{};
+      final parsed = FeedbackSubmission.fromJson(map);
+      if (parsed == null) {
+        return const Failure('Something went wrong. Please try again.');
+      }
+      return Success(parsed);
+    } on ApiException catch (e) {
+      return Failure(_messageFor(e), statusCode: e.statusCode, code: e.code);
+    } catch (e) {
+      return Failure(userFacingError(e));
+    }
+  }
+
+  Future<Result<FeedbackPage>> mine({
+    int limit = 50,
+    int offset = 0,
+    String? kind,
+    String? status,
+  }) async {
     try {
       final data = await _client.get('/feedback', queryParams: {
         'limit': '$limit',
         'offset': '$offset',
+        if (kind != null) 'kind': kind,
+        if (status != null) 'status': status,
       });
       if (data is! Map<String, dynamic> && data is! Map) {
         return const Failure('Something went wrong. Please try again.');

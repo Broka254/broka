@@ -182,6 +182,14 @@ services:
                              # on (startup backfill; the opening fee is still owed).
       - key: MPESA_STORE_CALLBACK_URL
         sync: false          # Optional. Unset = /stores/billing/callback/<MPESA_CALLBACK_SECRET>
+      - key: ADMIN_REPORTS_ENABLED
+        value: "true"        # The sweep writes daily/weekly/monthly founder briefs once each
+                             # period closes (api/core/admin_reports.py).
+      - key: REPORT_TZ_OFFSET_HOURS
+        value: "3"           # Report days and weeks start at local midnight: Kenya, EAT = UTC+3.
+      - key: PLATFORM_FIXED_MONTHLY_COST_KES
+        value: "773"         # Fixed monthly running cost the dashboard's break-even meter uses
+                             # (LAUNCH_DISCOUNT_MODEL.md).
       - key: ECONFIRM_FALLBACK_EMAIL_DOMAIN
         value: "broka.co.ke"   # E-Confirm needs both parties' emails; a user without one is
                                # sent as user-<id>@this domain (domains/escrow/service.py).
