@@ -91,10 +91,10 @@ Counts: admin 80, optional 6, public 61, token 6, user 183.
 | GET | `/admin/disputes/{dispute_id}` | admin | `admin_dispute_detail` (backend/api/domains/admin/alerts_revenue.py:336) |
 | GET | `/admin/event-catalog` | admin | `get_event_catalog` (backend/api/domains/admin/router.py:2100) |
 | GET | `/admin/event-metrics` | admin | `get_event_metrics` (backend/api/domains/admin/router.py:2081) |
-| GET | `/admin/feedback` | admin | `list_feedback` (backend/api/domains/feedback/router.py:463) |
-| GET | `/admin/feedback/stats` | admin | `feedback_stats` (backend/api/domains/feedback/router.py:538) |
-| GET | `/admin/feedback/{feedback_id}` | admin | `get_feedback` (backend/api/domains/feedback/router.py:652) |
-| PATCH | `/admin/feedback/{feedback_id}` | admin | `triage_feedback` (backend/api/domains/feedback/router.py:668) |
+| GET | `/admin/feedback` | admin | `list_feedback` (backend/api/domains/feedback/router.py:483) |
+| GET | `/admin/feedback/stats` | admin | `feedback_stats` (backend/api/domains/feedback/router.py:558) |
+| GET | `/admin/feedback/{feedback_id}` | admin | `get_feedback` (backend/api/domains/feedback/router.py:672) |
+| PATCH | `/admin/feedback/{feedback_id}` | admin | `triage_feedback` (backend/api/domains/feedback/router.py:688) |
 | GET | `/admin/finance-integrity` | admin | `finance_integrity` (backend/api/domains/admin/router.py:1306) |
 | GET | `/admin/fraud-events` | admin | `get_fraud_events` (backend/api/domains/admin/router.py:2007) |
 | POST | `/admin/fraud-events/{event_id}/resolve` | admin | `resolve_fraud_event` (backend/api/domains/admin/router.py:1611) |
@@ -234,9 +234,9 @@ Counts: admin 80, optional 6, public 61, token 6, user 183.
 | GET | `/featured/my-listings` | user | `get_my_listings` (backend/api/routers/featured.py:77) |
 | GET | `/featured/plans` | public | `get_plans` (backend/api/routers/featured.py:71) |
 | GET | `/featured/status/{listing_id}` | user | `boost_status` (backend/api/routers/featured.py:296) |
-| GET | `/feedback` | user | `list_my_feedback` (backend/api/domains/feedback/router.py:404) |
-| POST | `/feedback` | user | `submit_feedback` (backend/api/domains/feedback/router.py:373) |
-| GET | `/feedback/{feedback_id}` | user | `get_my_feedback` (backend/api/domains/feedback/router.py:432) |
+| GET | `/feedback` | user | `list_my_feedback` (backend/api/domains/feedback/router.py:405) |
+| POST | `/feedback` | user | `submit_feedback` (backend/api/domains/feedback/router.py:374) |
+| GET | `/feedback/{feedback_id}` | user | `get_my_feedback` (backend/api/domains/feedback/router.py:433) |
 | GET | `/health` | public | `health` (backend/main.py:541) |
 | GET | `/listings/` | public | `list_listings` (backend/api/domains/listings/router.py:196) |
 | POST | `/listings/` | user | `create_listing` (backend/api/domains/listings/router.py:259) |
@@ -1458,6 +1458,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `discovery_destinations_test.dart` — Covers the four non-category destinations on Home's discovery rail Trending, the Auction House, Traders and Stores - after the alignment pa…
 - `escrow_actions_test.dart` — Buyer protection dialogs (2026-10-02): paying in parts, releasing with the delivery check first, asking for a refund.
 - `feedback_and_announcement_time_test.dart` — Announcement date/time wording and feedback model parsing.
+- `feedback_screen_test.dart` — The redesigned Feedback & complaints screen: a complaint opened from a listing carries the listing and its seller to the team, each submiss…
 - `home_buy_agent_watch_test.dart` — Home's "Zeno is watching for you" card can stop the watch (buying-agent review, 2026-09-26).
 - `home_collapsing_scroll_test.dart` — Covers the Home collapsing-scroll architecture (2026-09-18 brief).
 - `home_inbox_badge_test.dart` — Home's Inbox tab shows how many messages are unread (2026-10-02).

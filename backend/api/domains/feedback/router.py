@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Literal, Optional
 
@@ -459,6 +460,25 @@ def _overdue_condition(now: datetime):
     )
 
 
+def _like_escape(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _search_condition(term: str):
+    """Subject text, or the reference the app shows the reporter.
+
+    The app labels each submission "#3F2A9C" - the first six hex digits of
+    its id - so a user can quote it to support; pasting that reference (with
+    or without the #) finds the submission. % and _ are literal, not
+    wildcards.
+    """
+    condition = UserFeedback.subject.ilike(f"%{_like_escape(term)}%", escape="\\")
+    reference = term.lstrip("#").strip().lower()
+    if re.fullmatch(r"[0-9a-f]{6,8}", reference):
+        condition = or_(condition, UserFeedback.id.like(f"{reference}%"))
+    return condition
+
+
 @admin_router.get("", response_model=FeedbackAdminPageOut)
 async def list_feedback(
     kind: Optional[str] = Query(None),
@@ -497,7 +517,7 @@ async def list_feedback(
             raise HTTPException(status_code=422, detail="invalid severity")
         conditions.append(UserFeedback.severity == severity)
     if search and search.strip():
-        conditions.append(UserFeedback.subject.ilike(f"%{search.strip()}%"))
+        conditions.append(_search_condition(search.strip()))
     if user_id:
         conditions.append(UserFeedback.user_id == user_id)
     if related_user_id:

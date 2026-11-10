@@ -239,3 +239,22 @@ async def test_resolving_a_complaint_closes_its_alert_and_tells_the_user(client,
     [alert] = await _alerts()
     assert alert.status == "resolved"
     assert pushes[-1]["title"] == "Your complaint has been resolved"
+
+
+@pytest.mark.asyncio
+async def test_search_finds_the_reference_the_app_shows_and_treats_wildcards_literally(client):
+    admin, reporter = await _user(admin=True), await _user()
+    target = await _file(client, reporter, subject="Phone never arrived")
+    percent = await _file(client, reporter, subject="Refund of 100% promised")
+    # The app shows the reporter "#" + the first six hex digits, upper case.
+    reference = "#" + target["id"].replace("-", "")[:6].upper()
+
+    r = await client.get("/admin/feedback", params={"search": reference}, headers=_auth(admin))
+    assert r.status_code == 200, r.text
+    assert [i["id"] for i in r.json()["items"]] == [target["id"]]
+    r = await client.get("/admin/feedback", params={"search": reference[1:].lower()}, headers=_auth(admin))
+    assert [i["id"] for i in r.json()["items"]] == [target["id"]]
+
+    # "%" is a character to find, not "match everything".
+    r = await client.get("/admin/feedback", params={"search": "%"}, headers=_auth(admin))
+    assert [i["id"] for i in r.json()["items"]] == [percent["id"]]
