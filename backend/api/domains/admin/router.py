@@ -41,7 +41,7 @@ from api.core.client_ip import client_ip_or_none
 from api.core.money import money_decimal
 from api.core.observability import request_id_var
 from api.core.permissions import Permission, require_permission
-from api.core.fraud import compute_trust_score, trust_band
+from api.core.fraud import FLAG_PENALTY, compute_trust_score, trust_band
 
 _log = logging.getLogger(__name__)
 
@@ -674,13 +674,19 @@ async def service_health(
     def configured(*values) -> bool:
         return all(bool(value) for value in values)
 
+    mpesa_keys = configured(settings.mpesa_consumer_key, settings.mpesa_consumer_secret)
     provider_specs = [
         (
             "mpesa",
-            configured(settings.mpesa_consumer_key, settings.mpesa_consumer_secret),
-            "Daraja credentials and callback secret"
-            + (" are configured" if settings.mpesa_callback_secret else
-               " are configured; callback secret is not"),
+            mpesa_keys,
+            # Each half reports itself: the old text said "credentials and
+            # callback secret are configured" when the keys were missing,
+            # and "... are configured; callback secret is not" when only
+            # the secret was.
+            ("Daraja consumer key and secret are configured" if mpesa_keys
+             else "Daraja consumer key or secret is not configured")
+            + ("; callback secret is configured" if settings.mpesa_callback_secret
+               else "; callback secret is not configured"),
         ),
         (
             "econfirm",
@@ -1815,7 +1821,11 @@ async def flag_user(
     # Idempotent: clicking flag twice used to subtract another 30 points.
     if not user.is_flagged:
         user.is_flagged = True
-        user.trust_score = max(0, (user.trust_score or 100) - 30)
+        # NULL is the unscored default (100); 0 is a real score. `or 100`
+        # read a score of 0 as unscored, so flagging the riskiest user
+        # raised them to 70.
+        current = user.trust_score if user.trust_score is not None else 100
+        user.trust_score = max(0, current - FLAG_PENALTY)
     await record_audit(
         db, admin.id, "user_flagged", "user", user_id,
         detail=(body.reason if body else None) or "flagged by administrator",
@@ -1857,6 +1867,12 @@ async def recompute_trust(
     admin: User = Depends(require_permission(Permission.MANAGE_USERS)),
     db: AsyncSession = Depends(get_db),
 ):
+    # compute_trust_score answers 50 for an unknown id, so without this a
+    # typo returned 200 and wrote an audit row about a user who does not
+    # exist. flag/unflag/promote already 404.
+    exists_ = (await db.execute(select(User.id).where(User.id == user_id))).scalar_one_or_none()
+    if exists_ is None:
+        raise HTTPException(status_code=404, detail="User not found")
     score = await compute_trust_score(user_id, db)
     await record_audit(
         db, admin.id, "user_trust_recomputed", "user", user_id,
@@ -1998,8 +2014,13 @@ async def get_fraud_events(
     q = (select(FraudEvent)
          .order_by(desc(FraudEvent.created_at), desc(FraudEvent.id))
          .limit(limit).offset(offset))
-    if resolved is not None:
-        q = q.where(FraudEvent.resolved == resolved)
+    if resolved is True:
+        q = q.where(FraudEvent.resolved == True)  # noqa: E712
+    elif resolved is False:
+        # `resolved` is nullable with an ORM-only default: a NULL row is
+        # unresolved. `= false` hid it from the open queue while the user
+        # page (admin_user_detail) counted it as open.
+        q = q.where(or_(FraudEvent.resolved.is_(None), FraudEvent.resolved == False))  # noqa: E712
     r = await db.execute(q)
     events = r.scalars().all()
     return [
@@ -2096,14 +2117,26 @@ async def get_event_catalog(
 
 @router.post("/media/backfill")
 async def run_media_backfill(
+    request: Request,
     rows_per_kind: int = Query(50, ge=1, le=500),
     admin: User = Depends(require_permission(Permission.ADMIN_SUMMARY)),
+    db: AsyncSession = Depends(get_db),
 ):
     """Run one media backfill pass now (the 5-minute sweep runs smaller
     ones on its own) and report what is left."""
     from api.domains.media.backfill import pending_counts, run_backfill_pass
     done = await run_backfill_pass(rows_per_kind=rows_per_kind, time_budget=60.0)
-    return {"converted": done, "remaining": await pending_counts()}
+    remaining = await pending_counts()
+    # It rewrites listing, store and profile media and uploads files: an
+    # administrative mutation like any other, so it leaves an audit row.
+    await record_audit(
+        db, admin.id, "media_backfill_run", "media", "backfill",
+        detail=json.dumps({"rows_per_kind": rows_per_kind, "converted": done},
+                          separators=(",", ":"), default=str),
+        ip_address=client_ip_or_none(request),
+    )
+    await db.commit()
+    return {"converted": done, "remaining": remaining}
 
 
 @router.get("/diagnostics/client-ip")

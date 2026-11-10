@@ -10,13 +10,14 @@ endpoints can never disagree.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+import bisect
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.core.revenue import _bucket_start, _iter_buckets, _parse_range
+from api.core.revenue import _iter_buckets, _parse_range
 from api.core.timeutil import to_naive_utc
 
 
@@ -27,8 +28,8 @@ async def timeseries_report(
     to_raw: Optional[str] = None,
     bucket: str = "day",
 ) -> dict:
-    from api.database import Deal, DealStatus, Listing, User
-    from api.models.dispute import CaseState, DisputeCase
+    from api.database import Deal, Listing, User
+    from api.models.dispute import DisputeCase
 
     if bucket not in ("day", "week", "month"):
         raise ValueError("bucket must be one of day, week, month")
@@ -53,16 +54,19 @@ async def timeseries_report(
             )
         )
     ).all()
-    agreed = [to_naive_utc(c) for c, _, _ in deal_rows if c is not None]
-    # GMV counts deals that were actually agreed (not negotiating/cancelled):
-    # anything past negotiation had a meeting of minds on the price.
-    gmv = [
+    # Deals actually agreed (not negotiating/cancelled): anything past
+    # negotiation had a meeting of minds on the price. Both series use this
+    # rule - "deals_agreed" used to count every deal row, so a cancelled or
+    # still-negotiating deal showed up as agreed while GMV left it out.
+    agreed_rows = [
         (to_naive_utc(c), float(p or 0))
         for c, p, s in deal_rows
         if c is not None
         and getattr(s, "value", s)
         not in ("negotiating", "cancelled", None)
     ]
+    agreed = [stamp for stamp, _ in agreed_rows]
+    gmv = agreed_rows
 
     dispute_rows = (
         await db.execute(
@@ -86,32 +90,28 @@ async def timeseries_report(
         for point in revenue["series"]
     }
 
+    # One sort and a binary search per bucket boundary, instead of a scan
+    # of every row for every bucket (a year by day was 365 passes).
     def _points(stamps: list[datetime]) -> list[dict]:
+        ordered = sorted(stamps)
         return [
             {
                 "t": b_start.isoformat() + "Z",
-                "v": sum(1 for stamp in stamps if b_start <= stamp < b_end),
+                "v": bisect.bisect_left(ordered, b_end) - bisect.bisect_left(ordered, b_start),
             }
             for b_start, b_end in buckets
         ]
 
     def _money_points(pairs: list[tuple[datetime, float]]) -> list[dict]:
-        return [
-            {
-                "t": b_start.isoformat() + "Z",
-                "v": int(
-                    round(
-                        sum(
-                            amount
-                            for stamp, amount in pairs
-                            if b_start <= stamp < b_end
-                        )
-                        * 100
-                    )
-                ),
-            }
-            for b_start, b_end in buckets
-        ]
+        ordered = sorted(pairs, key=lambda pair: pair[0])
+        stamps = [stamp for stamp, _ in ordered]
+        out = []
+        for b_start, b_end in buckets:
+            lo = bisect.bisect_left(stamps, b_start)
+            hi = bisect.bisect_left(stamps, b_end)
+            total = sum(amount for _, amount in ordered[lo:hi])
+            out.append({"t": b_start.isoformat() + "Z", "v": int(round(total * 100))})
+        return out
 
     def _iso(value: datetime) -> str:
         return value.isoformat() + "Z"
