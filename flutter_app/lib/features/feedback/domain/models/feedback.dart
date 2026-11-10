@@ -73,6 +73,51 @@ const Map<String, String> kFeedbackCategories = {
   'other': 'Other',
 };
 
+/// What each severity means to the person choosing it, and how soon the
+/// team answers (backend intelligence.COMPLAINT_SLA_HOURS).
+const Map<String, String> kFeedbackSeverityHints = {
+  'low': 'Whenever you can - a reply within 5 days',
+  'normal': 'A reply within 3 days',
+  'high': 'Costing me money or a sale - a reply within a day',
+  'urgent': 'Happening now, or someone is at risk - a reply within 4 hours',
+};
+
+String feedbackSeverityLabel(String severity) {
+  switch (severity) {
+    case 'low':
+      return 'Low';
+    case 'high':
+      return 'High';
+    case 'urgent':
+      return 'Urgent';
+    case 'normal':
+    default:
+      return 'Normal';
+  }
+}
+
+/// Where a submission is on its way to an answer: received, seen by a
+/// person, being worked on, done. Closed counts as done.
+int feedbackStage(FeedbackStatus status) {
+  switch (status) {
+    case FeedbackStatus.open:
+      return 0;
+    case FeedbackStatus.acknowledged:
+      return 1;
+    case FeedbackStatus.inProgress:
+      return 2;
+    case FeedbackStatus.resolved:
+    case FeedbackStatus.closed:
+      return 3;
+  }
+}
+
+String? _nonBlank(Object? raw) {
+  if (raw is! String) return null;
+  final s = raw.trim();
+  return s.isEmpty ? null : s;
+}
+
 class FeedbackSubmission {
   const FeedbackSubmission({
     required this.id,
@@ -87,6 +132,9 @@ class FeedbackSubmission {
     this.resolvedAt,
     this.createdAt,
     this.updatedAt,
+    this.relatedListingId,
+    this.relatedDealId,
+    this.relatedUserId,
   });
 
   final String id;
@@ -101,12 +149,24 @@ class FeedbackSubmission {
   final DateTime? resolvedAt;
   final DateTime? createdAt;
   final DateTime? updatedAt;
+  final String? relatedListingId;
+  final String? relatedDealId;
+  final String? relatedUserId;
 
   bool get isComplaint => kind == FeedbackKind.complaint;
   bool get isClosed =>
       status == FeedbackStatus.resolved || status == FeedbackStatus.closed;
+  bool get hasReply => adminResponse != null;
 
   String get categoryLabel => kFeedbackCategories[category] ?? 'General';
+  String get severityLabel => feedbackSeverityLabel(severity);
+  int get stage => feedbackStage(status);
+
+  /// A short reference the user can quote to the team ("#3F2A9C").
+  String get reference {
+    final compact = id.replaceAll('-', '').toUpperCase();
+    return '#${compact.length > 6 ? compact.substring(0, 6) : compact}';
+  }
 
   static FeedbackSubmission? fromJson(Map<String, dynamic> j) {
     final id = j['id'] as String?;
@@ -131,6 +191,9 @@ class FeedbackSubmission {
       resolvedAt: parseBackendUtc(j['resolved_at'] as String?),
       createdAt: parseBackendUtc(j['created_at'] as String?),
       updatedAt: parseBackendUtc(j['updated_at'] as String?),
+      relatedListingId: _nonBlank(j['related_listing_id']),
+      relatedDealId: _nonBlank(j['related_deal_id']),
+      relatedUserId: _nonBlank(j['related_user_id']),
     );
   }
 }

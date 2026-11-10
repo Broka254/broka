@@ -475,6 +475,12 @@ class NotificationService {
       await showAnnouncementFromPush(data);
       return;
     }
+    if (data['type'] == 'feedback_update') {
+      // A reply to the user's complaint or feedback. FCM draws nothing
+      // while the app is in front, so the reply would go unnoticed.
+      await showFeedbackUpdateFromPush(data);
+      return;
+    }
     if (data['type'] != 'incoming_call') return;
     final roomId = data['roomId'] as String?;
     if (roomId == null || roomId.isEmpty) return;
@@ -1084,6 +1090,44 @@ class NotificationService {
     }
   }
 
+  /// The team's reply to one of the user's submissions, drawn on the
+  /// Updates channel while the app is in front (Android draws it by itself
+  /// otherwise, from the push's notification block). One notification per
+  /// submission: a second reply replaces the first.
+  Future<void> showFeedbackUpdateFromPush(Map<String, dynamic> data) async {
+    if (!_ready) return;
+    final id = _nonEmpty(data['feedbackId']);
+    if (id == null) return;
+    final title = _nonEmpty(data['title']) ?? 'BROKA replied to you';
+    final body = _nonEmpty(data['body']) ?? 'Open Feedback & complaints to read it.';
+    final tag = 'feedback_$id';
+    try {
+      await _plugin.show(
+        0,
+        title,
+        body,
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            _updatesChannel.id,
+            _updatesChannel.name,
+            channelDescription: _updatesChannel.description,
+            importance: Importance.high,
+            priority: Priority.high,
+            category: AndroidNotificationCategory.message,
+            tag: tag,
+            icon: smallIcon,
+            color: _accent,
+            styleInformation: BigTextStyleInformation(body),
+          ),
+          iOS: DarwinNotificationDetails(threadIdentifier: tag),
+        ),
+        payload: jsonEncode({'type': 'feedback_update', 'feedbackId': id}),
+      );
+    } catch (e) {
+      debugPrint('[Notifications] showFeedbackUpdate failed: $e');
+    }
+  }
+
   /// Take one announcement's notification down - it has been opened, so
   /// what it announced is being read.
   Future<void> cancelAnnouncement(String communicationId) async {
@@ -1208,6 +1252,19 @@ class NotificationService {
       // The catch-up summary for an offline stretch: the Inbox is where
       // everything it counts is read.
       if (topRouteName(nav) != '/inbox') nav.pushNamed('/inbox');
+      return;
+    }
+    if (type == 'feedback_update') {
+      // The BROKA team replied to, started on or resolved one of the
+      // user's own submissions (backend feedback/router.py): their
+      // Feedback & complaints screen, which lists it with the reply. Only
+      // the type is read from the untrusted payload; the screen fetches
+      // the user's own rows. Guests sign in first - the history is theirs.
+      if (!ApiService.isLoggedIn) {
+        nav.pushNamed('/auth');
+        return;
+      }
+      if (topRouteName(nav) != '/feedback') nav.pushNamed('/feedback');
       return;
     }
     if (type == 'service_communication') {
