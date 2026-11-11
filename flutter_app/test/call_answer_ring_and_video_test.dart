@@ -274,38 +274,6 @@ void main() {
       await close(tester);
     });
 
-    testWidgets('the caller hears it ring once their phone rings, until they answer',
-        (tester) async {
-      RingbackService.debugSupported = true;
-      permissions = (_) => Completer<Object?>().future; // still setting up
-      final svc = await open(tester, {'isCaller': true, 'callerRole': 'seller'});
-      expect(RingbackService.instance.isPlaying, isFalse,
-          reason: 'still setting up - the call is not placed yet');
-
-      svc.onPeerRinging!();
-      await tester.pump();
-      expect(RingbackService.instance.isPlaying, isTrue);
-      expect(RingbackService.instance.tone, CallerTone.ringback);
-      for (var i = 0; i < 40 && !players.any((c) => c.method == 'setSourceUrl'); i++) {
-        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
-      }
-      final source = players.lastWhere((c) => c.method == 'setSourceUrl');
-      expect((source.arguments as Map)['url'], endsWith('ringback.wav'));
-      // On the call's own audio: a player's context is applied to the whole
-      // phone, and the default one takes a call out of communication mode.
-      final context = players.lastWhere((c) => c.method == 'setAudioContext').arguments as Map;
-      expect(context['audioMode'], 3, reason: 'MODE_IN_COMMUNICATION, as the call');
-      expect(context['isSpeakerphoneOn'], isFalse, reason: 'a voice call starts on the earpiece');
-
-      svc.onPeerAnswered!();
-      await tester.pump();
-      expect(RingbackService.instance.isPlaying, isFalse, reason: 'they answered');
-      await close(tester);
-      // The mock player never reports the sound loaded: let audioplayers'
-      // own 30-second wait for it run out.
-      await tester.pump(const Duration(seconds: 31));
-    });
-
     Future<String> lastSource(WidgetTester tester) async {
       for (var i = 0; i < 40 && !players.any((c) => c.method == 'setSourceUrl'); i++) {
         await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
@@ -314,19 +282,30 @@ void main() {
           as String;
     }
 
-    testWidgets('placed, the call sounds like calling; it rings only once their phone does',
-        (tester) async {
+    // Both sounds in one test: the ringback's player, and audioplayers' own
+    // setup, live for the whole file and belong to the test that first used
+    // them - their futures never complete under a later test's clock.
+    testWidgets('placed, the call sounds like calling; it rings once their phone rings, '
+        'until they answer', (tester) async {
       // 2026-11-11: it rang from the moment the call was placed (2026-10-12),
       // so a phone that was off, offline or never got the push sounded the
       // same as one ringing in a pocket. Now "Calling…" has its own soft pip,
       // and the ring, the ripples and the ringing icon wait for their phone.
       RingbackService.debugSupported = true;
-      permissions = (_) => Completer<Object?>().future;
+      permissions = (_) => Completer<Object?>().future; // still setting up
       final svc = await open(tester, {'isCaller': true, 'callerRole': 'seller'});
+      expect(RingbackService.instance.isPlaying, isFalse,
+          reason: 'still setting up - the call is not placed yet');
+
       svc.onStateChange!(CallState.calling);
       await tester.pump();
       expect(RingbackService.instance.tone, CallerTone.calling);
       expect(await lastSource(tester), endsWith('calling.wav'));
+      // On the call's own audio: a player's context is applied to the whole
+      // phone, and the default one takes a call out of communication mode.
+      final context = players.lastWhere((c) => c.method == 'setAudioContext').arguments as Map;
+      expect(context['audioMode'], 3, reason: 'MODE_IN_COMMUNICATION, as the call');
+      expect(context['isSpeakerphoneOn'], isFalse, reason: 'a voice call starts on the earpiece');
       expect(find.text('Calling…'), findsOneWidget);
       expect(find.text("Reaching their phone - they'll see you called if they can't answer"),
           findsOneWidget);
@@ -352,7 +331,7 @@ void main() {
       expect(find.text('Connecting…'), findsOneWidget);
       await close(tester);
       // The mock player never reports a sound loaded: let audioplayers' own
-      // 30-second waits run out.
+      // 30-second waits (one per sound) run out.
       await tester.pump(const Duration(seconds: 31));
     });
 

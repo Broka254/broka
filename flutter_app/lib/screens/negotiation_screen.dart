@@ -5545,8 +5545,18 @@ class _PhotoAlbumBubbleState extends State<_PhotoAlbumBubble> {
   Widget build(BuildContext context) {
     final photos = widget.photos;
     final width = min(MediaQuery.of(context).size.width * 0.68, 300.0);
+    final frame = (widget.isMe ? myBubbleDecoration(tailRight: false) : theirBubbleDecoration())
+        .copyWith(
+      borderRadius: const BorderRadius.all(Radius.circular(16)),
+      border: widget.highlighted ? Border.all(color: BrokaColors.gold, width: 1.5) : null,
+    );
+    // The tiles fill the frame's inside: what is left of [width] once the
+    // frame's edge is drawn (their card's 1dp border, the highlight's 1.5dp
+    // - a Container pads its child by its border). Sized to [width] itself,
+    // the tiles overflowed every album of theirs by 2dp.
+    final inner = width - (frame.border?.dimensions.horizontal ?? 0.0);
     const gap = 2.0;
-    final half = (width - gap) / 2;
+    final half = (inner - gap) / 2;
     final Widget grid;
     if (photos.length == 2) {
       grid = Row(children: [
@@ -5556,7 +5566,7 @@ class _PhotoAlbumBubbleState extends State<_PhotoAlbumBubble> {
       ]);
     } else if (photos.length == 3) {
       grid = Column(mainAxisSize: MainAxisSize.min, children: [
-        _tile(0, width, width * 0.6),
+        _tile(0, inner, inner * 0.6),
         const SizedBox(height: gap),
         Row(children: [
           _tile(1, half, half),
@@ -5581,11 +5591,6 @@ class _PhotoAlbumBubbleState extends State<_PhotoAlbumBubble> {
     }
     final receipt = albumReceipt(photos.map(widget.receiptOf));
     final caption = photos.first.content.trim();
-    final frame = (widget.isMe ? myBubbleDecoration(tailRight: false) : theirBubbleDecoration())
-        .copyWith(
-      borderRadius: const BorderRadius.all(Radius.circular(16)),
-      border: widget.highlighted ? Border.all(color: BrokaColors.gold, width: 1.5) : null,
-    );
     return Container(
       key: const Key('photo-album'),
       width: width + 6,

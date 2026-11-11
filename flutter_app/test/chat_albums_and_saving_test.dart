@@ -173,17 +173,14 @@ void main() {
           ),
         );
 
+    /// Frames only, never real time: the chat's voice-note player listens to
+    /// audioplayers' event streams, which no test answers, and with real
+    /// time let through their "no such plugin" replies land inside the test
+    /// and fail it. Nothing here needs it - with no real file I/O the photo
+    /// vault never opens, and a photo is saved from the bytes the chat has.
     Future<void> settle(WidgetTester tester) async {
       for (int i = 0; i < 8; i++) {
         await tester.pump(const Duration(milliseconds: 100));
-      }
-    }
-
-    /// Reads and writes of real files move outside the test's fake clock.
-    Future<void> settleIo(WidgetTester tester, {int rounds = 20}) async {
-      for (var i = 0; i < rounds; i++) {
-        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
-        await tester.pump(const Duration(milliseconds: 50));
       }
     }
 
@@ -242,7 +239,7 @@ void main() {
       expect(find.text('2 of 5'), findsOneWidget);
 
       await tester.tap(find.byKey(const Key('photo-save')));
-      await settleIo(tester);
+      await settle(tester);
       final saved = gallery.single;
       expect(saved.method, 'saveImage');
       final bytes = (saved.arguments as Map)['bytes'] as Uint8List;
@@ -259,7 +256,7 @@ void main() {
       await settle(tester);
       expect(find.text('Save to phone'), findsOneWidget);
       await tester.tap(find.byKey(const Key('message-save-photo')));
-      await settleIo(tester);
+      await settle(tester);
       expect(gallery.map((c) => c.method), ['saveImage']);
       expect(find.text("Saved to your phone's gallery"), findsOneWidget);
     });
