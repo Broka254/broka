@@ -285,6 +285,7 @@ void main() {
       svc.onPeerRinging!();
       await tester.pump();
       expect(RingbackService.instance.isPlaying, isTrue);
+      expect(RingbackService.instance.tone, CallerTone.ringback);
       for (var i = 0; i < 40 && !players.any((c) => c.method == 'setSourceUrl'); i++) {
         await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
       }
@@ -305,20 +306,74 @@ void main() {
       await tester.pump(const Duration(seconds: 31));
     });
 
-    testWidgets('the caller hears it ring as soon as the call is placed', (tester) async {
-      // A phone answering from a closed app often never says it is ringing
-      // (callee_ringing): the caller used to hold a silent phone throughout.
+    Future<String> lastSource(WidgetTester tester) async {
+      for (var i = 0; i < 40 && !players.any((c) => c.method == 'setSourceUrl'); i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+      }
+      return (players.lastWhere((c) => c.method == 'setSourceUrl').arguments as Map)['url']
+          as String;
+    }
+
+    testWidgets('placed, the call sounds like calling; it rings only once their phone does',
+        (tester) async {
+      // 2026-11-11: it rang from the moment the call was placed (2026-10-12),
+      // so a phone that was off, offline or never got the push sounded the
+      // same as one ringing in a pocket. Now "Calling…" has its own soft pip,
+      // and the ring, the ripples and the ringing icon wait for their phone.
       RingbackService.debugSupported = true;
       permissions = (_) => Completer<Object?>().future;
       final svc = await open(tester, {'isCaller': true, 'callerRole': 'seller'});
       svc.onStateChange!(CallState.calling);
       await tester.pump();
-      expect(RingbackService.instance.isPlaying, isTrue);
+      expect(RingbackService.instance.tone, CallerTone.calling);
+      expect(await lastSource(tester), endsWith('calling.wav'));
+      expect(find.text('Calling…'), findsOneWidget);
+      expect(find.text("Reaching their phone - they'll see you called if they can't answer"),
+          findsOneWidget);
+      expect(find.byKey(const Key('call-ringing-icon')), findsNothing);
+
+      // A phone that has the call says so within seconds; one that does not
+      // may be off.
+      await tester.pump(VoipCallScreen.ringConfirmWait + const Duration(seconds: 1));
+      expect(find.text("Their phone hasn't rung yet - it may be off or offline"), findsOneWidget);
+
+      players.clear();
+      svc.onPeerRinging!();
+      await tester.pump();
+      expect(RingbackService.instance.tone, CallerTone.ringback);
+      expect(await lastSource(tester), endsWith('ringback.wav'));
+      expect(find.text('Ringing…'), findsOneWidget);
+      expect(find.text('Their phone is ringing'), findsOneWidget);
+      expect(find.byKey(const Key('call-ringing-icon')), findsOneWidget);
+
       svc.onPeerAnswered!();
       await tester.pump();
       expect(RingbackService.instance.isPlaying, isFalse, reason: 'they answered');
+      expect(find.text('Connecting…'), findsOneWidget);
       await close(tester);
+      // The mock player never reports a sound loaded: let audioplayers' own
+      // 30-second waits run out.
       await tester.pump(const Duration(seconds: 31));
+    });
+
+    testWidgets("a call no push could carry says their phone rings only with BROKA open",
+        (tester) async {
+      // POST /calls/initiate answers how it reached their phone; the screen
+      // ignored it, and a call that could not ring anywhere looked like any
+      // other.
+      permissions = (_) => Completer<Object?>().future;
+      await open(tester, {
+        'roomId': '',
+        'callToken': '',
+        'callSetup': Future<Map<String, dynamic>?>.value(
+            {'status': 'no_token', 'room_id': 'room-1', 'call_token': 't'}),
+        'isCaller': true,
+        'callerRole': 'seller',
+      });
+      expect(find.text('Calling…'), findsOneWidget);
+      expect(find.text("They can't be notified - their phone rings only if BROKA is open"),
+          findsOneWidget);
+      await close(tester);
     });
   });
 }

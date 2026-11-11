@@ -49,6 +49,7 @@ import '../services/chat_media_vault.dart';
 import '../services/counterparty_profile_cache.dart';
 import '../services/zeno_voice_controller.dart';
 import '../core/errors/user_facing_error.dart';
+import '../core/navigation/app_route_observer.dart';
 import '../utils/backend_time.dart';
 
 // ── Message model extensions ──────────────────────────────────────────────────
@@ -549,6 +550,28 @@ List<List<ChatMessage>> groupPhotoAlbums(List<ChatMessage> messages) {
   return rows;
 }
 
+const _receiptLadder = [
+  MessageReceipt.failed,
+  MessageReceipt.sending,
+  MessageReceipt.sent,
+  MessageReceipt.relayed,
+  MessageReceipt.delivered,
+  MessageReceipt.read,
+];
+
+/// An album's state, on its corner: its least far along photo's. One not
+/// sent says so for the album; "Seen" only once every photo has been.
+MessageReceipt? albumReceipt(Iterable<MessageReceipt?> receipts) {
+  MessageReceipt? lowest;
+  for (final r in receipts) {
+    if (r == null) continue;
+    if (lowest == null || _receiptLadder.indexOf(r) < _receiptLadder.indexOf(lowest)) {
+      lowest = r;
+    }
+  }
+  return lowest;
+}
+
 bool _isAlbumPhoto(ChatMessage m) =>
     m.msgType == 'image' && !m.deleted && !m.isBroker && !m.viaAi &&
     (m.mediaUrl ?? '').isNotEmpty;
@@ -588,7 +611,7 @@ class NegotiationScreen extends StatefulWidget {
 }
 
 class _NegotiationScreenState extends State<NegotiationScreen>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, RouteAware {
   Listing?          _listing;
   // A store-general conversation has no listing. It shares every part of
   // this screen with listing chats, but its server thread is keyed by
@@ -622,11 +645,31 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   Timer?            _wsPingTimer;
   Timer?            _wsReconnectTimer;
   int               _wsReconnectAttempt = 0;
+  // When the socket last said anything (a frame, or its handshake). The
+  // server pings every 25 seconds and answers each of the app's pings, so a
+  // socket silent for [_wsSilentLimit] is dead without knowing it
+  // (_replaceSilentSocket).
+  DateTime          _wsLastFrameAt = DateTime.now();
+  static const      _wsSilentLimit = Duration(seconds: 60);
+  // Whether a socket has been up on this screen: a reconnect catches up
+  // through the history too (what changed while it was down).
+  bool              _wsWasUp = false;
+  // A message push for this conversation (NotificationService.threadPushes).
+  StreamSubscription<String>? _threadPushSub;
+
+  // The chat's own route, to tell whether anything is drawn over it.
+  ModalRoute<Object?>? _route;
 
   // Whether the app is on screen. A chat left open behind the phone's home
   // screen still receives messages, which is "delivered" - it used to keep
   // marking them read, every 30 seconds, with nobody looking.
   bool _appVisible = true;
+
+  /// The user is looking at this conversation: the app in front, and
+  /// nothing - a call, Zeno's room, a product, a photo - opened over it.
+  /// What arrives while something covers the chat is delivered, not seen:
+  /// it used to be marked seen with the user on a call or another screen.
+  bool get _onScreen => _appVisible && (_route?.isCurrent ?? true);
 
   // Sends go out one at a time, in the order they were typed - so a quick
   // second message can't overtake the first - while the composer stays
@@ -780,6 +823,12 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != null && !identical(route, _route)) {
+      if (_route != null) appRouteObserver.unsubscribe(this);
+      _route = route;
+      appRouteObserver.subscribe(this, route);
+    }
     if (!_routeArgsRead) {
       _routeArgsRead = true;
       final args = ModalRoute.of(context)?.settings.arguments;
@@ -877,6 +926,17 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     unawaited(_restoreMediaOutbox());
     _loadHistory();
     _connectWebSocket();
+    // A message push for this conversation while it is open: the server
+    // has something the socket may not have brought - fetch it now rather
+    // than when a dead socket is noticed.
+    _threadPushSub?.cancel();
+    _threadPushSub = NotificationService.instance.threadPushes.listen((tag) {
+      final threadId = _threadId;
+      if (!mounted || threadId == null) return;
+      if (tag != NotificationService.threadTag(threadId, _buyerId)) return;
+      _pollNow();
+      unawaited(_pollNewMessages());
+    });
     _loadCounterpartyInfo();
     _refreshZenoUnreadCount();
     // Nothing on screen to keep current while the app is in the background:
@@ -916,6 +976,13 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     });
   }
 
+  /// Back on the chat from what was opened over it: what arrived meanwhile
+  /// has been seen now.
+  @override
+  void didPopNext() {
+    if (_hasThread && mounted) unawaited(_syncReadState());
+  }
+
   // Fallback-poll pace (see _startThread).
   int _quietPolls = 0;
   int _pollWait = 0;
@@ -944,6 +1011,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     if (!_wsConnected) {
       _wsReconnectAttempt = 0;
       _connectWebSocket();
+    } else if (_ws != null && _socketSilentTooLong) {
+      // The phone slept or changed networks: the socket still looks open.
+      _replaceSilentSocket(_ws!);
     }
     _pollNow();
     unawaited(_pollNewMessages());
@@ -1157,6 +1227,8 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     if (_role == 'seller' && _buyerId != null) {
       url += '&buyer_id=$_buyerId';
     }
+    final since = _socketReplaySince();
+    if (since != null) url += '&since=${Uri.encodeQueryComponent(since)}';
 
     // The socket being replaced must not report its own closing as this
     // one's: every handler below checks it is still the current socket.
@@ -1184,9 +1256,16 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     ws.ready.then((_) {
       if (!mounted || !identical(_ws, ws)) return;
       _wsReconnectAttempt = 0;
+      _wsLastFrameAt = DateTime.now();
       setState(() => _wsConnected = true);
       // Back online: anything typed while offline goes out on its own.
       _flushFailed();
+      // Back after a drop: what was edited, taken back or sent while the
+      // socket was down comes through the history (an unchanged thread is
+      // an empty 304). The socket replays only messages newer than the
+      // last one this phone has.
+      if (_wsWasUp) unawaited(_pollNewMessages());
+      _wsWasUp = true;
     }).catchError((_) {
       // The stream's onError/onDone below reports it and reconnects.
     });
@@ -1201,10 +1280,58 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     _wsPingTimer?.cancel();
     _wsPingTimer = Timer.periodic(const Duration(seconds: 25), (_) {
       if (!identical(_ws, ws) || !_wsConnected) return;
+      if (_socketSilentTooLong) {
+        _replaceSilentSocket(ws);
+        return;
+      }
       try {
         ws.sink.add(jsonEncode({'type': 'ping'}));
       } catch (_) {}
     });
+  }
+
+  bool get _socketSilentTooLong =>
+      DateTime.now().difference(_wsLastFrameAt) > _wsSilentLimit;
+
+  /// The socket's `since` (backend negotiate_ws): a second before the
+  /// newest message from the other side this phone has, so a reconnect
+  /// replays what it missed and not the last fifty messages again. Their
+  /// newest, not mine: one of mine is confirmed by its send's answer and
+  /// proves nothing about what reached this phone. Nothing from them yet
+  /// replays as before.
+  String? _socketReplaySince() {
+    DateTime? newest;
+    for (final m in _messages) {
+      final at = m.createdAt;
+      if (m.id.isEmpty || at == null || m.role == _role) continue;
+      if (newest == null || at.isAfter(newest)) newest = at;
+    }
+    return newest?.toUtc().subtract(const Duration(seconds: 1)).toIso8601String();
+  }
+
+  /// A socket that has said nothing - not even the server's ping - for
+  /// [_wsSilentLimit] is dead without knowing it: a phone that sleeps or
+  /// moves between networks keeps a half-open connection for minutes. While
+  /// it did, the chat counted itself connected, ran no poll, and the other
+  /// side's messages waited until Android gave up on the connection - the
+  /// "takes long to arrive" of 2026-11-11. Drop it, catch up through the
+  /// history, and open a new one (in the background, on return).
+  void _replaceSilentSocket(WebSocketChannel ws) {
+    if (!identical(_ws, ws)) return;
+    debugPrint('[DirectChat] socket silent for over ${_wsSilentLimit.inSeconds}s - reconnecting');
+    _ws = null;
+    _wsPingTimer?.cancel();
+    try {
+      ws.sink.close();
+    } catch (_) {}
+    _clearRemoteTyping();
+    _resetOutgoingTyping();
+    if (!mounted) return;
+    setState(() => _wsConnected = false);
+    _wsReconnectAttempt = 0;
+    _pollNow();
+    unawaited(_pollNewMessages());
+    if (_appVisible) _connectWebSocket();
   }
 
   // ── Typing presence ────────────────────────────────────────────────────
@@ -1328,6 +1455,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     } catch (_) {
       return;
     }
+    _wsLastFrameAt = DateTime.now();
     if (!_wsConnected) setState(() => _wsConnected = true);
     _wsReconnectAttempt = 0;
     switch (data['type']) {
@@ -1735,13 +1863,14 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   }
 
   /// Tells the backend this side has the thread - read if the chat is on
-  /// screen, only delivered if the app is in the background - and refreshes
+  /// screen, only delivered if the app is in the background or something is
+  /// open over the chat (_onScreen) - and refreshes
   /// the other side's watermarks (the ticks on my own messages). Called
   /// whenever I load/receive messages while this screen is open, plus every
   /// 30s via _presenceRefreshTimer.
   Future<void> _syncReadState() async {
     if (!_hasThread) return;
-    if (_appVisible) {
+    if (_onScreen) {
       unawaited(ApiService.markThreadRead(_listing?.id,
           storeId: _storeId, buyerId: _buyerId));
     } else {
@@ -2142,7 +2271,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     final canDelete = own && !m.deleted &&
         _withinWindow(m.createdAt, const Duration(hours: 48));
     final canReply = !m.deleted && m.msgType != 'deleted';
-    if (!canEdit && !canDelete && !canReply) return;
+    // Either side's photo (2026-11-11): one someone sent could not be kept.
+    final canSave = !m.deleted && m.msgType == 'image' && (m.mediaUrl ?? '').isNotEmpty;
+    if (!canEdit && !canDelete && !canReply && !canSave) return;
 
     final choice = await showModalBottomSheet<String>(
       context: context,
@@ -2168,6 +2299,13 @@ class _NegotiationScreenState extends State<NegotiationScreen>
             title: const Text('Reply', style: TextStyle(color: BrokaColors.textHigh)),
             onTap: () => Navigator.pop(ctx, 'reply'),
           ),
+        if (canSave)
+          ListTile(
+            key: const Key('message-save-photo'),
+            leading: const Icon(Icons.download_rounded, color: BrokaColors.neonBlue),
+            title: const Text('Save to phone', style: TextStyle(color: BrokaColors.textHigh)),
+            onTap: () => Navigator.pop(ctx, 'save'),
+          ),
         if (canEdit)
           ListTile(
             leading: const Icon(Icons.edit_rounded, color: BrokaColors.neonGreen),
@@ -2188,6 +2326,11 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     if (choice == 'reply') {
       setState(() => _replyTo = m);
       _composerFocus.requestFocus();
+    } else if (choice == 'save') {
+      final said = await _savePhotoToPhone(m.mediaUrl!,
+          messageId: m.id.isEmpty ? null : m.id, clientId: m.clientId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(said)));
     } else if (choice == 'edit') {
       await _editMessage(m);
     } else if (choice == 'delete') {
@@ -3358,6 +3501,8 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    appRouteObserver.unsubscribe(this);
+    _threadPushSub?.cancel();
     _sendStopTyping();
     _typingDebounce?.cancel();
     _typingHeartbeat?.cancel();
@@ -3506,8 +3651,8 @@ class _NegotiationScreenState extends State<NegotiationScreen>
             width: 36, height: 36,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              gradient: const LinearGradient(colors: kChatGradient),
-              border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.45), width: 1.2)),
+              gradient: const LinearGradient(colors: kChatCalmGradient),
+              border: Border.all(color: BrokaColors.border, width: 1.2)),
             clipBehavior: Clip.antiAlias,
             child: (_headerPhotoSource != null && _headerPhotoSource!.isNotEmpty)
                 ? BrokaImage(_headerPhotoSource,
@@ -3570,9 +3715,13 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         // with the shop, and there is no listing for Zeno to negotiate on.
         if (!_isStoreThread) ...[
           Stack(clipBehavior: Clip.none, children: [
+            // Drawn like the call buttons beside it (2026-11-11): lit, it
+            // was the brightest thing in the header, and "active" on a
+            // header button means a setting that is on. The room switch
+            // under the header names Zeno's room; the badge says when
+            // Zeno has something new.
             BrokaHeaderButton(
               icon: Icons.auto_awesome_rounded,
-              active: true,
               tooltip: 'Ask Zeno',
               onTap: _openZenoAi,
             ),
@@ -4251,6 +4400,8 @@ class _ChatBubble extends StatelessWidget {
         isPlaying: isPlaying,
         onTap: () => onPlayTap(message.mediaUrl!),
         isMe: isMe,
+        // Inside quotedMedia's bubble, that bubble is its frame.
+        framed: !hasQuote && !highlighted,
       ));
     } else if (isAlbum) {
       // Photos sent together, in one frame - each still its own message:
@@ -4461,10 +4612,13 @@ class _VoiceBubble extends StatelessWidget {
   final bool   isPlaying;
   final VoidCallback onTap;
   final bool   isMe;
+  /// Drawn in a bubble of its own - not when one with a quote holds it.
+  final bool   framed;
 
   const _VoiceBubble({
     required this.url, required this.duration,
     required this.isPlaying, required this.onTap, required this.isMe,
+    this.framed = true,
   });
 
   @override
@@ -4473,39 +4627,47 @@ class _VoiceBubble extends StatelessWidget {
     final m = (secs ~/ 60).toString().padLeft(1, '0');
     final s = (secs % 60).toString().padLeft(2, '0');
 
+    // In the bubble's own colours, as text and photos are (2026-11-11): mine
+    // was a flat Material blue with a violet edge, unlike anything else I
+    // send.
+    final ink = isMe ? Colors.white : BrokaColors.gold;
+    final decoration = (isMe ? myBubbleDecoration() : theirBubbleDecoration()).copyWith(
+      borderRadius: BorderRadius.only(
+        topLeft:     Radius.circular(isMe ? 14 : 4),
+        topRight:    Radius.circular(isMe ? 4 : 14),
+        bottomLeft:  const Radius.circular(14),
+        bottomRight: const Radius.circular(14)),
+    );
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        padding: framed
+            ? const EdgeInsets.symmetric(horizontal: 14, vertical: 10)
+            : const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
         constraints: const BoxConstraints(minWidth: 140),
-        decoration: BoxDecoration(
-          color: isMe ? const Color(0xFF1565C0) : BrokaColors.bgCard,
-          borderRadius: BorderRadius.only(
-            topLeft:     Radius.circular(isMe ? 14 : 4),
-            topRight:    Radius.circular(isMe ? 4 : 14),
-            bottomLeft:  const Radius.circular(14),
-            bottomRight: const Radius.circular(14)),
-          border: Border.all(color: BrokaColors.gold.withOpacity(0.3))),
+        decoration: framed ? decoration : null,
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Container(
             width: 36, height: 36,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: BrokaColors.gold.withOpacity(0.2)),
+              color: ink.withOpacity(isMe ? 0.18 : 0.16)),
             child: Icon(
               isPlaying ? Icons.stop_rounded : Icons.play_arrow_rounded,
-              color: BrokaColors.gold, size: 20),
+              color: ink, size: 20),
           ),
           const SizedBox(width: 10),
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('Voice Note',
-                style: TextStyle(color: BrokaColors.textMid, fontSize: 11)),
+            Text('Voice Note',
+                style: TextStyle(
+                    color: isMe ? Colors.white.withOpacity(0.75) : BrokaColors.textMid,
+                    fontSize: 11)),
             Text('$m:$s',
-                style: const TextStyle(color: BrokaColors.textHigh,
+                style: TextStyle(color: isMe ? Colors.white : BrokaColors.textHigh,
                     fontSize: 13, fontWeight: FontWeight.w700)),
           ]),
           const SizedBox(width: 8),
-          const Icon(Icons.mic_rounded, color: BrokaColors.gold, size: 14),
+          Icon(Icons.mic_rounded, color: ink.withOpacity(0.8), size: 14),
         ]),
       ),
     );
@@ -5266,27 +5428,6 @@ class _PhotoAlbumBubble extends StatefulWidget {
   final ValueChanged<ChatMessage>? onUnsentTap;
   final ValueChanged<ChatMessage>? onLongPress;
 
-  static const _ladder = [
-    MessageReceipt.failed,
-    MessageReceipt.sending,
-    MessageReceipt.sent,
-    MessageReceipt.relayed,
-    MessageReceipt.delivered,
-    MessageReceipt.read,
-  ];
-
-  /// An album's state: its least far along photo's. One not sent says so
-  /// for the album; "Seen" only once every photo has been.
-  @visibleForTesting
-  static MessageReceipt? combinedReceipt(Iterable<MessageReceipt?> receipts) {
-    MessageReceipt? lowest;
-    for (final r in receipts) {
-      if (r == null) continue;
-      if (lowest == null || _ladder.indexOf(r) < _ladder.indexOf(lowest)) lowest = r;
-    }
-    return lowest;
-  }
-
   @override
   State<_PhotoAlbumBubble> createState() => _PhotoAlbumBubbleState();
 }
@@ -5438,7 +5579,7 @@ class _PhotoAlbumBubbleState extends State<_PhotoAlbumBubble> {
         ]),
       ]);
     }
-    final receipt = _PhotoAlbumBubble.combinedReceipt(photos.map(widget.receiptOf));
+    final receipt = albumReceipt(photos.map(widget.receiptOf));
     final caption = photos.first.content.trim();
     final frame = (widget.isMe ? myBubbleDecoration(tailRight: false) : theirBubbleDecoration())
         .copyWith(

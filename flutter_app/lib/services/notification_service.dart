@@ -192,9 +192,8 @@ class NotificationService {
   static const String messageReadActionId = 'msg_read';
 
   /// Reply (typed into the notification itself, Android's inline reply) and
-  /// Mark as read. Not const: the input's constructor is not guaranteed to
-  /// be across plugin versions.
-  static final List<AndroidNotificationAction> _messageActions = [
+  /// Mark as read.
+  static const List<AndroidNotificationAction> _messageActions = [
     AndroidNotificationAction(
       messageReplyActionId, 'Reply',
       inputs: <AndroidNotificationActionInput>[
@@ -202,7 +201,7 @@ class NotificationService {
       ],
       cancelNotification: true,
     ),
-    const AndroidNotificationAction(
+    AndroidNotificationAction(
       messageReadActionId, 'Mark as read',
       cancelNotification: true,
     ),

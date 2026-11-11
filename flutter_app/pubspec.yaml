@@ -75,6 +75,8 @@ flutter:
     - assets/audio/ringtone.mp3
     # What the caller hears while the other phone rings (RingbackService).
     - assets/audio/ringback.wav
+    # ...and before it does: a soft pip while the call is "Calling…".
+    - assets/audio/calling.wav
     # The Terms of Use and Service (TermsScreen; TERMS.md at the root).
     - assets/legal/terms.md
     # The app Privacy Policy (PrivacyScreen). Placeholder until the approved

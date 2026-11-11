@@ -54,6 +54,9 @@ class GlobalPollerService {
   GlobalPollerService._() {
     NotificationService.instance.isThreadOnScreen =
         _isThreadOnScreenById;
+    // Read or answered from its notification: the Inbox badge catches up
+    // now, not at the next sweep.
+    NotificationService.instance.onThreadRead = nudge;
   }
   static final GlobalPollerService instance = GlobalPollerService._();
 

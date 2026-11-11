@@ -161,6 +161,54 @@ void main() {
       expect(cancelled, isEmpty);
     });
 
+    test('a phone just woken keeps telling the server it rings until it gets through',
+        () async {
+      // 2026-11-11: two tries back to back, and on a phone woken from Doze
+      // the network is often not back for either - the caller read
+      // "Calling…" through the whole ring of a phone that was ringing.
+      final delays = NotificationService.persistentAlertRetryDelays;
+      NotificationService.persistentAlertRetryDelays = const [
+        Duration(milliseconds: 1),
+        Duration(milliseconds: 1),
+      ];
+      addTearDown(() => NotificationService.persistentAlertRetryDelays = delays);
+      var alertCalls = 0;
+      route = (req) {
+        if (req.url.path == '/calls/room-1/alerted') {
+          alertCalls++;
+          return alertCalls < 4
+              ? _json({'detail': 'temporarily unavailable'}, 503)
+              : _json({'status': 'ringing'});
+        }
+        return _json({'status': 'ok'});
+      };
+      await withClient(() => NotificationService.handleBackgroundMessage(callPush()));
+      expect(alertCalls, 4, reason: 'the two at once, then one after each wait');
+      expect(shown, hasLength(1));
+      expect(cancelled, isEmpty);
+    });
+
+    test('it stops trying once the call is settled on this phone', () async {
+      final delays = NotificationService.persistentAlertRetryDelays;
+      NotificationService.persistentAlertRetryDelays = const [
+        Duration(milliseconds: 1),
+        Duration(milliseconds: 1),
+      ];
+      addTearDown(() => NotificationService.persistentAlertRetryDelays = delays);
+      var alertCalls = 0;
+      route = (req) {
+        if (req.url.path == '/calls/room-1/alerted') {
+          alertCalls++;
+          // Declined here while the first two tries were failing.
+          if (alertCalls == 2) ActiveCall.instance.settle('room-1');
+          return _json({'detail': 'temporarily unavailable'}, 503);
+        }
+        return _json({'status': 'ok'});
+      };
+      await withClient(() => NotificationService.handleBackgroundMessage(callPush()));
+      expect(alertCalls, 2, reason: 'no ring left to claim');
+    });
+
     test('an incomplete payload rings nothing and claims nothing', () async {
       await withClient(() => NotificationService.handleBackgroundMessage(
           {'type': 'incoming_call', 'callerName': 'Ann'}));
