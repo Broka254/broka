@@ -203,6 +203,34 @@ async def tokens_for(db: AsyncSession, user_id: str, kind: str = "fcm") -> list[
     return tokens
 
 
+async def device_signed_in(db: AsyncSession, user_id: str, fingerprint: str) -> bool:
+    """Whether the phone with this token fingerprint is still signed in as
+    `user_id` - a push device of theirs, or the legacy column's token while
+    no other account owns it (tokens_for's rule).
+
+    What a notification's Reply / Mark as read checks (api/security.py
+    create_thread_token): a phone signed out of the account, or handed to
+    someone else, must not go on answering as them from a notification left
+    in its shade.
+    """
+    if not user_id or not fingerprint:
+        return False
+    tokens = list((await db.execute(
+        select(PushDevice.token).where(PushDevice.user_id == user_id)
+    )).scalars().all())
+    for kind in KINDS:
+        legacy = (await db.execute(
+            select(_legacy_column(kind)).where(User.id == user_id)
+        )).scalar_one_or_none()
+        if legacy and legacy not in tokens:
+            owner = (await db.execute(
+                select(PushDevice.user_id).where(PushDevice.token == legacy)
+            )).scalar_one_or_none()
+            if owner is None:
+                tokens.append(legacy)
+    return any(token_fingerprint(t) == fingerprint for t in tokens)
+
+
 async def forget(token: str, reason: str = "unregistered") -> None:
     """FCM says this token is permanently dead (app uninstalled, data
     cleared, token rotated): stop pushing to it, everywhere."""
@@ -230,6 +258,7 @@ async def push_user(
     send: Optional[Callable[..., Awaitable]] = None,
     db: Optional[AsyncSession] = None,
     tokens: Optional[list[str]] = None,
+    data_for_token: Optional[Callable[[str], dict]] = None,
     **send_kwargs,
 ) -> int:
     """Send one FCM notification to every phone `user_id` is signed in on.
@@ -238,6 +267,10 @@ async def push_user(
     `tokens` narrows the send to phones the caller has already chosen: a
     message push tells only the phones that have not been told about that
     message yet. None looks them up, which is what every other caller wants.
+
+    `data_for_token` gives each phone its own data - a message push binds
+    its Reply / Mark as read token to the phone it goes to. None sends
+    `data` to every phone.
 
     The phones are pushed concurrently: a call rings on all of them at
     once, and one slow FCM round trip doesn't hold up the next phone.
@@ -266,8 +299,21 @@ async def push_user(
         return 0
 
     sender = send or _default_sender()
+
+    def _data(token: str) -> dict:
+        if data_for_token is None:
+            return data
+        try:
+            return data_for_token(token)
+        except Exception as exc:
+            # The phone still gets the notification, without what the
+            # per-phone data would have added.
+            logger.warning("[push] per-phone data failed user=%s token=%s type=%s",
+                           user_id, token_fingerprint(token), type(exc).__name__)
+            return data
+
     results = await asyncio.gather(
-        *(sender(token=t, title=title, body=body, data=data, **send_kwargs) for t in tokens),
+        *(sender(token=t, title=title, body=body, data=_data(t), **send_kwargs) for t in tokens),
         return_exceptions=True,
     )
     sent = 0

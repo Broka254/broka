@@ -163,3 +163,18 @@ def file_fields(message) -> dict:
         "file_size": getattr(message, "file_size", None) if is_file else None,
         "file_mime": getattr(message, "file_mime", None) if is_file else None,
     }
+
+
+def message_media_fields(message) -> dict:
+    """What every message payload carries about its attachment - the
+    socket, /history, the upload's own answer: a document's name, size and
+    type (file_fields), and the album a photo was sent in, which is how
+    both phones draw photos sent together in one frame. The album goes
+    with the photo's words when it is unsent: a tombstone belongs to no
+    album."""
+    is_photo = ((getattr(message, "msg_type", None) or "") == "image"
+                and getattr(message, "deleted_at", None) is None)
+    return {
+        **file_fields(message),
+        "album_id": getattr(message, "album_id", None) if is_photo else None,
+    }

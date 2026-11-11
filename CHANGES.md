@@ -1,3 +1,184 @@
+# Messages that arrive sooner, the delivered tick, Reply and Mark as read on notifications, photo albums, saving photos, calmer chat colours, and calls you can hear ringing (2026-11-11)
+
+Asked for: a sent message took long to reach the other person; of sent,
+delivered and seen, only sent and seen ever showed; parts of the chat
+(the photo frames and others) were too bright; photos sent together
+should sit in one frame, as on WhatsApp; received photos should be
+savable; a message notification should offer Reply and Mark as read
+without opening the app; the caller should be able to tell whether the
+other phone is really ringing, and the callee should get the ringing
+call. And any weakness found on the way fixed.
+
+**Messages arrive sooner**
+
+- A message went to the thread's open chat sockets one at a time, with no
+  time limit, and the send's own request waited for all of them. One dead
+  socket held the message back from every other phone and left the sender
+  on "Sending" until TCP gave up. Now every socket is written at once, each
+  with 5 seconds (`CHAT_WS_SEND_TIMEOUT_SECONDS`); one that misses it is
+  closed with 4000 and its phone reconnects (`media._broadcast`).
+- Each open chat socket held a database connection for as long as the
+  chat stayed open: its session sat in a transaction after the history
+  replay. The pool holds 30 (`DB_POOL_SIZE` 10 + `DB_MAX_OVERFLOW` 20), so
+  with thirty chats open every other request - a sent message included -
+  queued for a connection. The socket releases its session after the
+  replay.
+- Every connect and reconnect replayed the thread's last 50 messages,
+  photos as base64: megabytes on mobile data ahead of anything new. The app
+  now opens the socket with `since` (a second before the newest message it
+  has from the other person) and the server replays only what is newer. A
+  reconnect also fetches the history, so edits and unsends made meanwhile
+  arrive (an unchanged thread answers 304).
+- A half-open socket - the phone slept, or moved between Wi-Fi and mobile
+  data - kept the chat "connected" for minutes, with no fallback poll
+  running, while the other person's messages waited. The server pings every
+  25 seconds; a socket that has said nothing for 60 is now treated as dead:
+  the chat catches up through the history and opens a new one. Coming back
+  to the app makes the same check.
+- A message push for the conversation that is open makes the chat fetch at
+  once, in case its socket missed it.
+
+**Sent, delivered, seen**
+
+- "Delivered" from a phone whose app was closed was posted from the push's
+  background isolate with the saved access token. Those last 15 minutes,
+  so it had usually expired: the post failed, the tick stayed single, and
+  it jumped straight to seen when the chat was opened. Every message push
+  now carries a thread token (below), and the phone reports the delivery
+  with it - `POST /negotiate/notification/delivered`, no session needed.
+  Without one (an older server) the saved session is used as it is, and is
+  never renewed from the background: renewing there raced the app's own
+  renewal for the same refresh token, and could sign the user out.
+- A push whose newest message was Zeno's never counted the other person's
+  messages that came with it as delivered. The push carries `directUnread`,
+  and those are now.
+- The first watermark of a thread, written twice at once (the push's
+  receipt and the Inbox sweep), broke the table's unique key: one write
+  answered 500, and on a chat socket it left the session unusable, so the
+  history replay after it failed too. The write retries once against the
+  row that won (`_touch_watermark`), and the socket rolls back after a
+  failed receipt.
+- Messages were marked seen while something covered the chat - a call,
+  Zeno's room, a product, the photo viewer, a menu. They are delivered
+  until the user is back on the chat (`RouteAware`).
+
+**Reply and Mark as read on a message notification**
+
+- Android notifications for the other person's messages have Reply (typed
+  into the notification) and Mark as read. Neither opens the app. Zeno's
+  room's notifications have neither.
+- Both are sent with the thread token the push carries: one conversation,
+  the side its holder is on, and the phone it was pushed to, for 7 days
+  (`THREAD_TOKEN_EXPIRE_HOURS`). The server checks that phone is still
+  signed in to the account and the account is still on that side of the
+  conversation, so signing out ends what a notification left in the shade
+  can do. Routes: `POST /negotiate/notification/{delivered,read,reply}`.
+- A reply is a direct message like any other - the same checks, broadcast,
+  push and contact-leak audit, the message rate limit keyed on the account,
+  and the phone's `client_msg_id` so a retry is stored once - and the
+  conversation is marked read. A notification the app drew itself (no
+  token) replies through the signed-in session.
+- A reply that could not be sent comes back as a notification with its
+  words: "Your reply was not sent".
+
+**Photos sent together are one album**
+
+- Photos sent in one go share an `album_id` (`negotiation_messages.album_id`,
+  schema revision 15; `POST /media/upload` takes it, for images only, and
+  only an id the app could have made).
+- Both phones draw an album in one frame: two side by side, three as one
+  wide over two, four or more as a square of four with "+N" on the last.
+  The first photo's caption is under it; its time and ticks (those of its
+  least far along photo) are on its corner. Each tile is still its own
+  message: tapped, it opens the viewer there; held, it offers that photo's
+  Reply, Save and Unsend; one that did not go is retried by itself.
+- Photos from before albums are grouped when one person sent them within
+  2 minutes of each other. A photo with a caption or a quote of its own
+  stands alone, so neither is hidden.
+- The viewer swipes through the album ("2 of 5"), and an album's push reads
+  "📷 3 photos".
+
+**Saving photos**
+
+- The viewer has Save, and holding a photo offers "Save to phone" - mine or
+  theirs. Android saves it to Pictures/BROKA through MediaStore
+  (`ChatGallery.kt`, channel `com.broka.app/gallery`); a WebP, as the server
+  stores chat photos, is saved as a JPEG. Android 9 and older ask for the
+  storage permission first (`WRITE_EXTERNAL_STORAGE`, up to API 28 only).
+  Other platforms open the share sheet.
+
+**Calmer chat colours**
+
+- My bubbles, photo and album frames, voice notes, the send button and the
+  room switch use the brand gradient a few shades deeper
+  (`kChatCalmGradient`, #5B3FC4 to #2F5FC8), with a soft shadow where a
+  blue glow bled round every bubble and photo. White text on it measures
+  5.8:1 or better; on the neon it was 3.7:1.
+- The composer's edge is the card's border until it is typed in; its chips
+  and round buttons are tinted rather than lit. The Zeno button is drawn
+  like the call buttons beside it, and the "You" under my photos is muted.
+- My voice notes are in my bubble's colours; they were a flat Material
+  blue. Zeno's room and Zeno's screen share these parts and look the same.
+
+**Calls: hearing whether it rings**
+
+- The caller heard the double ring from the moment the call was placed
+  (2026-10-12), whatever happened next: a phone that was off sounded the
+  same as one ringing in a pocket. "Calling…" now has its own soft pip, and
+  the ring starts when a phone of theirs reports that it rings (the
+  server's `callee_ringing`) - with "Ringing…", "Their phone is ringing", a
+  ringing icon in the state pill, and ripples from their face, which now
+  spread only while a phone rings. CALLING.md has the table.
+- After 10 seconds without that report the screen says "Their phone hasn't
+  rung yet - it may be off or offline".
+- `POST /calls/initiate` answers whether a push could go at all
+  (`no_token`, `fcm_disabled`, `push_failed`); the app ignored it. Such a
+  call now says "They can't be notified - their phone rings only if BROKA
+  is open".
+- The caller's own "connecting" (the microphone opening) read
+  "Connecting…" as if the call were up, while the other phone rang. It is
+  part of "Calling…" / "Ringing…" now.
+- A phone ringing from a push (the app closed, or in front) told the
+  server so at most twice, back to back. It now tries twice more, 2 and 5
+  seconds later, while the call still rings there and has not been
+  answered or declined on it (`persistentAlertRetryDelays`): a phone just
+  woken from Doze often had no network for the first two.
+- The server's "their phone rings" flag is also kept under its own Redis
+  key, so a session write racing `/alerted` cannot put it back to false -
+  the caller whose socket joined late then never heard `callee_ringing`.
+- iPhone VoIP pushes go out alongside the Android push instead of before
+  it: one after another, each with 10 seconds, they held the Android ring
+  back.
+- The pip and the ring play on the call's own route. The screen also reads
+  the route the call starts on: a video call showed "Earpiece" while on
+  the speaker, and its first tap turned the speaker off.
+
+**Setup only the owner can do.** The `GOOGLE_SERVICES_JSON` secret is
+empty in Xxavier-ml/broka (CI warns "No push notifications in this APK"),
+so the APKs it builds have no Firebase: calls ring, and messages arrive,
+only while BROKA is open. Everything here that rides on a push - Reply,
+Mark as read, the delivered tick from a closed app, a call ringing a
+closed app - needs that secret set, and `FIREBASE_SERVICE_ACCOUNT_JSON` on
+the backend (NOTIFICATIONS.md, "Setup that only the owner can do").
+
+Not done: iOS has no notification actions and still posts no `/alerted`
+(an iPhone reads "Calling…" until answered). Chat broadcasts stay
+per-process; production runs one instance. Dismissing a notification on
+the user's other phones when a thread is read is still open. None of this
+has been run on a phone: it is CI's unit and widget tests only.
+
+Tests: `backend/tests/test_notification_actions.py`,
+`backend/tests/test_chat_socket_and_albums.py`,
+`backend/tests/test_schema_migrations.py` (revision 15);
+`flutter_app/test/notification_actions_test.dart`,
+`flutter_app/test/chat_albums_and_saving_test.dart`, and new cases in
+`push_delivery_test.dart` (the ring acknowledgement's retries) and
+`call_answer_ring_and_video_test.dart` (the calling pip, the ring, the
+no-push message). Existing tests changed: `chat_attachments_test.dart`
+expects one album for three photos sent together, and
+`call_answer_ring_and_video_test.dart` no longer expects the ring the
+moment a call is placed.
+
 # Chat composer card, photo frames, several photos, documents, and calls answered at once (2026-11-09)
 
 Asked for: a chat input like DeepSeek's (the message on top, shortcuts and

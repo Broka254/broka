@@ -58,7 +58,7 @@ from api.core.message_visibility import (
     visible_to_role_clause,
 )
 from api.core.audit import record_audit
-from api.core.chat_files import file_fields
+from api.core.chat_files import message_media_fields
 from api.core.config import settings
 from api.domains.pricing.safe_payment import ai_payment_policy
 from api.core.circuit_breaker import deepseek_breaker, gemini_breaker, CircuitOpenError
@@ -448,6 +448,9 @@ class MessageOut(BaseModel):
     file_name:        Optional[str] = None
     file_size:        Optional[int] = None
     file_mime:        Optional[str] = None
+    # Photos sent together: the album the app draws them in, one frame
+    # (NegotiationMessage.album_id).
+    album_id:         Optional[str] = None
 
 
 # ── Individual AI callers ─────────────────────────────────────────────────────
@@ -4162,7 +4165,7 @@ async def get_history(
                                    call_type=call_type, created_at=created_at,
                                    is_agent_initiated=bool(getattr(m, "is_agent_initiated", False)),
                                    edited_at=edited_iso, deleted_at=deleted_iso, deleted=deleted,
-                                   **file_fields(m))
+                                   **message_media_fields(m))
                     )
 
         elif m.role == actual_role and (
@@ -4198,7 +4201,7 @@ async def get_history(
                                call_type=call_type, created_at=created_at,
                                client_msg_id=getattr(m, "client_msg_id", None),
                                edited_at=edited_iso, deleted_at=deleted_iso, deleted=deleted,
-                                   **file_fields(m))
+                                   **message_media_fields(m))
                 )
 
         elif actual_role == "seller" and m.role == "buyer":
@@ -4220,7 +4223,7 @@ async def get_history(
                                    msg_type=msg_type, media_url=media_url, duration_secs=duration,
                                    call_type=call_type, created_at=created_at,
                                    edited_at=edited_iso, deleted_at=deleted_iso, deleted=deleted,
-                                   **file_fields(m))
+                                   **message_media_fields(m))
                     )
 
         elif actual_role == "buyer" and m.role == "seller":
@@ -4236,7 +4239,7 @@ async def get_history(
                                    msg_type=msg_type, media_url=media_url, duration_secs=duration,
                                    call_type=call_type, created_at=created_at,
                                    edited_at=edited_iso, deleted_at=deleted_iso, deleted=deleted,
-                                   **file_fields(m))
+                                   **message_media_fields(m))
                     )
 
     # Attach quote-reply references without leaking private threads. The row
@@ -4524,26 +4527,39 @@ async def _touch_watermark(
         _trs_cond = (ThreadReadState.store_id == store_id)
     else:
         _trs_cond = (ThreadReadState.listing_id == listing_id)
-    existing = await db.execute(select(ThreadReadState).where(
-        _trs_cond,
-        ThreadReadState.buyer_id   == buyer_id,
-        ThreadReadState.role       == role,
-    ))
-    row = existing.scalar_one_or_none()
-    if row is None:
-        db.add(ThreadReadState(
-            listing_id=listing_id, store_id=store_id, buyer_id=buyer_id, role=role,
-            last_read_at=now if read else _dt(1970, 1, 1),
-            last_delivered_at=now if (delivered or read) else None,
-        ))
-    else:
-        if read and (row.last_read_at is None or now > row.last_read_at):
-            row.last_read_at = now
-        # Reading implies delivery - you can't read what never arrived.
-        if (delivered or read) and (
-                row.last_delivered_at is None or now > row.last_delivered_at):
-            row.last_delivered_at = now
-    await db.commit()
+    for attempt in range(2):
+        existing = await db.execute(select(ThreadReadState).where(
+            _trs_cond,
+            ThreadReadState.buyer_id   == buyer_id,
+            ThreadReadState.role       == role,
+        ).execution_options(populate_existing=True))
+        row = existing.scalar_one_or_none()
+        if row is None:
+            db.add(ThreadReadState(
+                listing_id=listing_id, store_id=store_id, buyer_id=buyer_id, role=role,
+                last_read_at=now if read else _dt(1970, 1, 1),
+                last_delivered_at=now if (delivered or read) else None,
+            ))
+        else:
+            if read and (row.last_read_at is None or now > row.last_read_at):
+                row.last_read_at = now
+            # Reading implies delivery - you can't read what never arrived.
+            if (delivered or read) and (
+                    row.last_delivered_at is None or now > row.last_delivered_at):
+                row.last_delivered_at = now
+        try:
+            await db.commit()
+            return now
+        except IntegrityError:
+            # This side's first watermark, written twice at once - a push's
+            # delivered receipt and the inbox sweep's land together. The
+            # loser's INSERT broke the unique constraint and answered 500,
+            # and on the chat socket it left the session failed, so the
+            # history replay after it raised too. The winner's row is there
+            # now: move it forward instead.
+            await db.rollback()
+            if attempt:
+                raise
     return now
 
 
@@ -4860,7 +4876,7 @@ async def get_store_history(
             deleted_at=(m.deleted_at.isoformat() + "Z") if getattr(m, "deleted_at", None) else None,
             deleted=deleted,
             reply_to_message_id=getattr(m, "reply_to_message_id", None),
-            **file_fields(m),
+            **message_media_fields(m),
         ))
     # Quote previews from send-time snapshots (same rule as /history).
     try:
@@ -4985,6 +5001,141 @@ async def get_store_read_status(
         db, None, effective_buyer_id, role, None, messages_only=True, store_id=store_id)
     out["zeno_unread"] = 0
     return out
+
+
+# ── Reply and Mark as read from a message notification ──────────────────────
+# A message push carries a thread token (api/security.py create_thread_token):
+# one conversation, the side its holder is on there, and the phone it went
+# to. These three answer to that token instead of an access token, because
+# they are sent from the notification - the app's background isolate, where
+# the access token has usually expired, and renewing it there raced the
+# app's own renewal for the same refresh token.
+
+class NotificationActionIn(BaseModel):
+    thread_token: str = Field(..., min_length=1, max_length=4096)
+
+
+class NotificationReplyIn(NotificationActionIn):
+    content: str = Field(..., max_length=CHAT_CONTENT_MAX_CHARS)
+    # The id the phone gave the reply: a retry after a lost answer returns
+    # the stored message instead of sending it twice (direct_message).
+    client_msg_id: Optional[str] = Field(default=None, max_length=64)
+
+
+async def _notification_thread(db: AsyncSession, token: str) -> dict:
+    """Who a notification's token speaks for, and in which thread - checked
+    against the database now, not only the token: the phone it was pushed
+    to must still be signed in to the account (signing out ends what a
+    notification left in the shade can do), and the account must still be
+    on that side of the conversation."""
+    from api.core import push_devices
+    from api.security import decode_thread_token
+
+    claims = decode_thread_token(token)
+    if claims is None:
+        raise HTTPException(status_code=401,
+                            detail="This notification has expired. Open BROKA to reply.")
+    user_id = claims["sub"]
+    if not await push_devices.device_signed_in(db, user_id, claims["dev"]):
+        raise HTTPException(status_code=401,
+                            detail="This phone is no longer signed in. Open BROKA to reply.")
+    role, buyer_id = claims["role"], claims["bid"]
+    listing_id = claims.get("lid") or None
+    store_id = claims.get("sid") or None
+    if store_id:
+        from api.models.store import Store
+        seller_id = (await db.execute(
+            select(Store.owner_id).where(Store.id == store_id, Store.deleted_at.is_(None))
+        )).scalar_one_or_none()
+        if seller_id is None:
+            raise HTTPException(status_code=404, detail="Store not found")
+    else:
+        seller_id = (await db.execute(
+            select(Listing.seller_id).where(Listing.id == listing_id)
+        )).scalar_one_or_none()
+        if seller_id is None:
+            raise HTTPException(status_code=404, detail="Listing not found")
+    on_that_side = (user_id == seller_id) if role == "seller" else (
+        user_id == buyer_id and user_id != seller_id)
+    if not on_that_side:
+        raise HTTPException(status_code=403, detail="Not your conversation")
+    return {"user_id": user_id, "role": role, "buyer_id": buyer_id,
+            "listing_id": listing_id, "store_id": store_id}
+
+
+async def _notification_receipt(db: AsyncSession, thread: dict, *, read: bool) -> _dt:
+    """Move this side's watermark and tell the other side's open chat, as
+    mark-delivered / mark-read do."""
+    now = await _touch_watermark(
+        db, thread["listing_id"], thread["buyer_id"], thread["role"],
+        delivered=True, read=read, store_id=thread["store_id"])
+    read_at = now if read else None
+    if thread["store_id"]:
+        try:
+            from api.routers.media import broadcast_store_receipt
+            await broadcast_store_receipt(
+                thread["store_id"], thread["buyer_id"], thread["role"],
+                exclude_uid=thread["user_id"], delivered_at=now, read_at=read_at)
+        except Exception as exc:
+            logger.debug("[negotiate] store receipt broadcast failed: %s", exc)
+    else:
+        await _announce_receipt(thread["listing_id"], thread["buyer_id"], thread["role"],
+                                thread["user_id"], delivered_at=now, read_at=read_at)
+    return now
+
+
+@router.post("/notification/delivered")
+async def notification_delivered(
+    payload: NotificationActionIn,
+    db: AsyncSession = Depends(get_db),
+):
+    """The phone a message push reached has the message: the sender's tick
+    becomes the double tick. Sent by the app as the push arrives, often from
+    a closed app, which has no live sign-in."""
+    thread = await _notification_thread(db, payload.thread_token)
+    now = await _notification_receipt(db, thread, read=False)
+    return {"status": "ok", "last_delivered_at": now.isoformat() + "Z"}
+
+
+@router.post("/notification/read")
+async def notification_read(
+    payload: NotificationActionIn,
+    db: AsyncSession = Depends(get_db),
+):
+    """Mark as read, pressed on a message notification: the thread is read
+    up to now, and the sender sees "Seen", as when the chat is opened."""
+    thread = await _notification_thread(db, payload.thread_token)
+    now = await _notification_receipt(db, thread, read=True)
+    return {"status": "ok", "last_read_at": now.isoformat() + "Z"}
+
+
+@router.post("/notification/reply")
+async def notification_reply(
+    payload: NotificationReplyIn,
+    db: AsyncSession = Depends(get_db),
+):
+    """Reply, typed into a message notification. Stored and delivered as any
+    direct message - direct_message's checks, broadcast, push to the other
+    side and contact-leak audit - and the thread is marked read: nobody
+    answers a message they have not read."""
+    thread = await _notification_thread(db, payload.thread_token)
+    # Keyed by the account the token speaks for, never by the body.
+    from api.core.rate_limit import message_limiter
+    await message_limiter.check_and_record(thread["user_id"])
+    content = (payload.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+    result = await direct_message(
+        DirectMessageIn(
+            listing_id=thread["listing_id"], store_id=thread["store_id"],
+            sender_role=thread["role"], sender_id=thread["user_id"],
+            content=content, buyer_id=thread["buyer_id"],
+            client_msg_id=payload.client_msg_id,
+        ),
+        db=db, current_user={"id": thread["user_id"]},
+    )
+    now = await _notification_receipt(db, thread, read=True)
+    return {**result, "last_read_at": now.isoformat() + "Z"}
 
 
 # Fields of an inbox row that follow the clock rather than the data: "12s

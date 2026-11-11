@@ -1380,8 +1380,42 @@ class ApiService {
     replyToMessageId: replyToMessageId,
   );
 
-  static Future<bool> markStoreDelivered(String storeId, {String? buyerId}) async {
-    return markThreadDelivered(null, storeId: storeId, buyerId: buyerId);
+  static Future<bool> markStoreDelivered(String storeId,
+      {String? buyerId, bool renew = true}) async {
+    return markThreadDelivered(null, storeId: storeId, buyerId: buyerId, renew: renew);
+  }
+
+  /// Reply, Mark as read, or "this phone has it" from a message
+  /// notification (2026-11-11): POST /negotiate/notification/{action}
+  /// ('reply', 'read', 'delivered') with the thread token the push carried
+  /// - no access token, since this is sent from a closed app whose own has
+  /// usually expired, and renewing it there races the app's renewal.
+  /// Answers the status code, or null when the server could not be reached.
+  static Future<int?> notificationAction(
+    String action,
+    String threadToken, {
+    String? content,
+    String? clientMsgId,
+  }) async {
+    if (threadToken.isEmpty) return null;
+    try {
+      final res = await http.post(
+        Uri.parse('$baseUrl/negotiate/notification/$action'),
+        headers: const {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'thread_token': threadToken,
+          if (content != null) 'content': content,
+          if (clientMsgId != null) 'client_msg_id': clientMsgId,
+        }),
+      ).timeout(const Duration(seconds: 15));
+      if (res.statusCode != 200) {
+        debugPrint('[Push] notification $action refused: HTTP ${res.statusCode}');
+      }
+      return res.statusCode;
+    } catch (e) {
+      debugPrint('[Push] notification $action failed: ${e.runtimeType}');
+      return null;
+    }
   }
 
   static Future<void> markStoreRead(String storeId, {String? buyerId}) async {
@@ -1406,6 +1440,7 @@ class ApiService {
     String? clientMsgId,
     String? replyToMessageId,
     String? caption,
+    String? albumId,
     void Function(int sent, int total)? onProgress,
   }) => uploadMedia(
     storeId: storeId,
@@ -1420,6 +1455,7 @@ class ApiService {
     clientMsgId: clientMsgId,
     replyToMessageId: replyToMessageId,
     caption: caption,
+    albumId: albumId,
     onProgress: onProgress,
   );
 
@@ -1466,18 +1502,23 @@ class ApiService {
   /// their own schedule (the inbox sweep) need to know a post failed, or
   /// one dropped request would silence the receipt for good; the rest
   /// ignore the result - a later sweep or screen visit posts it again.
+  ///
+  /// [renew]: false from the FCM background isolate, which must never
+  /// renew the session - it would race the app's own renewal for the same
+  /// refresh token. An expired token there just means no receipt yet.
   static Future<bool> markThreadDelivered(String? listingId,
-      {String? storeId, String? buyerId}) async {
+      {String? storeId, String? buyerId, bool renew = true}) async {
     _requireExactlyOneThread(listingId, storeId);
     try {
       final path = storeId != null && storeId.isNotEmpty
           ? '/negotiate/store/$storeId/mark-delivered'
           : '/negotiate/$listingId/mark-delivered';
-      final response = await _sendAuthed(() => http.post(
+      Future<http.Response> send() => http.post(
         Uri.parse('$baseUrl$path'),
         headers: _headers,
         body: jsonEncode({if (buyerId != null) 'buyer_id': buyerId}),
-      ).timeout(const Duration(seconds: 10)));
+      ).timeout(const Duration(seconds: 10));
+      final response = renew ? await _sendAuthed(send) : await send();
       return response.statusCode == 200;
     } catch (_) {
       return false;
@@ -1900,6 +1941,9 @@ class ApiService {
     String?  clientMsgId,
     String?  replyToMessageId,
     String?  caption,
+    // Photos sent together: the one id of the whole send, so both phones
+    // draw them in one frame (backend NegotiationMessage.album_id).
+    String?  albumId,
     // Bytes handed to the socket so far and the total, for the upload
     // progress indicator. Reports delivery to the OS, not the server's
     // acknowledgement - the receipt still comes from the response.
@@ -1932,6 +1976,7 @@ class ApiService {
       if (caption != null && caption.trim().isNotEmpty) {
         request.fields['caption'] = caption.trim();
       }
+      if (albumId != null && albumId.isNotEmpty) request.fields['album_id'] = albumId;
       // Long enough for the file at ~50 KB/s: a fixed minute failed every
       // document over about 3 MB on a slow connection, mid-upload.
       final seconds = (60 + fileBytes.length ~/ 50000).clamp(60, 600);

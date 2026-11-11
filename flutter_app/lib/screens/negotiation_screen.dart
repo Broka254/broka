@@ -30,6 +30,7 @@ import '../features/safe_payment/safe_payment.dart' show openZenoEscrowGuide;
 import '../features/calls/domain/call_record.dart' show callSummary;
 import 'package:share_plus/share_plus.dart' show Share, XFile;
 import '../services/chat_documents.dart';
+import '../services/chat_gallery.dart';
 import '../services/chat_screen_memory.dart';
 import '../services/notification_service.dart';
 import '../services/photo_capture.dart';
@@ -48,6 +49,7 @@ import '../services/chat_media_vault.dart';
 import '../services/counterparty_profile_cache.dart';
 import '../services/zeno_voice_controller.dart';
 import '../core/errors/user_facing_error.dart';
+import '../core/navigation/app_route_observer.dart';
 import '../utils/backend_time.dart';
 
 // ── Message model extensions ──────────────────────────────────────────────────
@@ -84,6 +86,10 @@ class ChatMessage {
   final String? fileName;
   final int?    fileSize;
   final String? fileMime;
+  /// Photos sent together (2026-11-11): the one id of the whole send. The
+  /// chat draws an album's photos in one frame, as WhatsApp does; photos
+  /// from before albums are grouped by time instead (groupPhotoAlbums).
+  final String? albumId;
 
   const ChatMessage({
     required this.role,
@@ -104,6 +110,7 @@ class ChatMessage {
     this.fileName,
     this.fileSize,
     this.fileMime,
+    this.albumId,
     String? id,
   }) : id = id ?? '';
 
@@ -127,6 +134,7 @@ class ChatMessage {
     fileName:     j['file_name'] as String?,
     fileSize:     (j['file_size'] as num?)?.toInt(),
     fileMime:     j['file_mime'] as String?,
+    albumId:      j['album_id'] as String?,
     editedAt:     (j['edited_at'] is String && (j['edited_at'] as String).isNotEmpty)
         ? DateTime.tryParse(j['edited_at'] as String)
         : null,
@@ -157,6 +165,7 @@ class ChatMessage {
     fileName:     m.fileName,
     fileSize:     m.fileSize,
     fileMime:     m.fileMime,
+    albumId:      m.albumId,
   );
 
   ChatMessage withFailed(bool value) => ChatMessage(
@@ -166,6 +175,20 @@ class ChatMessage {
     failed: value, id: id, editedAt: editedAt, deleted: deleted,
     replyToMessageId: replyToMessageId, replyPreview: replyPreview,
     fileName: fileName, fileSize: fileSize, fileMime: fileMime,
+    albumId: albumId,
+  );
+
+  /// The same message in [value]'s album - the server's copy of a photo
+  /// keeps the album its phone gave it even from a server too old to echo
+  /// one back.
+  ChatMessage withAlbumId(String? value) => ChatMessage(
+    role: role, content: content, msgType: msgType, mediaUrl: mediaUrl,
+    durationSecs: durationSecs, callType: callType, viaAi: viaAi,
+    isBroker: isBroker, createdAt: createdAt, clientId: clientId,
+    failed: failed, id: id, editedAt: editedAt, deleted: deleted,
+    replyToMessageId: replyToMessageId, replyPreview: replyPreview,
+    fileName: fileName, fileSize: fileSize, fileMime: fileMime,
+    albumId: value,
   );
 
   Map<String, dynamic> toJson() => {
@@ -186,6 +209,7 @@ class ChatMessage {
     if (fileName != null) 'file_name': fileName,
     if (fileSize != null) 'file_size': fileSize,
     if (fileMime != null) 'file_mime': fileMime,
+    if (albumId != null) 'album_id': albumId,
     if (failed) 'failed': true,
   };
 
@@ -216,7 +240,7 @@ class _PendingUpload {
     required this.bytes, required this.contentType, required this.fileName,
     required this.mimeType, this.durationSecs,
     this.replyToMessageId, this.replyPreview, this.caption,
-    this.listingId, this.storeId, this.buyerId,
+    this.listingId, this.storeId, this.buyerId, this.albumId,
     this.progress = 0,
   });
   final Uint8List bytes;
@@ -232,6 +256,8 @@ class _PendingUpload {
   final String? listingId;
   final String? storeId;
   final String? buyerId;
+  /// Photos sent together: the album this one goes in (ChatMessage.albumId).
+  final String? albumId;
   /// 0..1 bytes handed to the socket. Mutable on purpose: progress ticks
   /// must not rebuild the message list's immutable snapshots.
   double progress;
@@ -250,6 +276,7 @@ typedef _OutboxEntry = ({
   String contentType,
   String? fileName,
   String? mimeType,
+  String? albumId,
 });
 
 /// Durable outbox: one file per unsent photo or document under the app
@@ -306,7 +333,8 @@ class _ChatMediaOutbox {
   static Future<void> writeMeta(String clientId,
       {String? replyToMessageId, String? caption,
       String? listingId, String? storeId, String? buyerId,
-      String contentType = 'image', String? fileName, String? mimeType}) async {
+      String contentType = 'image', String? fileName, String? mimeType,
+      String? albumId}) async {
     try {
       final dir = await _dir();
       await File('${dir.path}/${_safeId(clientId)}.json').writeAsString(jsonEncode({
@@ -318,6 +346,7 @@ class _ChatMediaOutbox {
         'content_type': contentType,
         'file_name': fileName,
         'mime_type': mimeType,
+        if (albumId != null) 'album_id': albumId,
       }));
     } catch (_) {}
   }
@@ -404,6 +433,7 @@ class _ChatMediaOutbox {
       String contentType = 'image';
       String? fileName;
       String? mimeType;
+      String? albumId;
       try {
         final meta = File('${dir.path}/$id.json');
         if (meta.existsSync()) {
@@ -416,6 +446,7 @@ class _ChatMediaOutbox {
           contentType = (m['content_type'] as String?) ?? 'image';
           fileName = m['file_name'] as String?;
           mimeType = m['mime_type'] as String?;
+          albumId = m['album_id'] as String?;
         }
       } catch (_) {}
       // A file this build doesn't know how to send is left alone.
@@ -431,6 +462,7 @@ class _ChatMediaOutbox {
         contentType: contentType,
         fileName: fileName,
         mimeType: mimeType,
+        albumId: albumId,
       ));
     }
     return out;
@@ -494,6 +526,70 @@ const voiceNoteConfig = RecordConfig(
   numChannels: 1,
 );
 
+/// How far apart two photos from before albums may have been sent and
+/// still be one send (groupPhotoAlbums).
+const photoAlbumWindow = Duration(minutes: 2);
+
+/// The thread as the chat draws it: one row per message, except photos one
+/// person sent together, which are one row - an album, in one frame, as
+/// WhatsApp shows them (2026-11-11). Together means the same album id (the
+/// app gives every photo of one send the same one), or - for photos from
+/// before albums, or from an older app - one after another from the same
+/// person within [photoAlbumWindow]. A photo that answers a message, or has
+/// a caption of its own after the first, stands alone: an album's frame
+/// shows one quote and one caption, and neither is hidden.
+List<List<ChatMessage>> groupPhotoAlbums(List<ChatMessage> messages) {
+  final rows = <List<ChatMessage>>[];
+  for (final m in messages) {
+    if (rows.isNotEmpty && _joinsAlbum(rows.last.last, m)) {
+      rows.last.add(m);
+    } else {
+      rows.add([m]);
+    }
+  }
+  return rows;
+}
+
+const _receiptLadder = [
+  MessageReceipt.failed,
+  MessageReceipt.sending,
+  MessageReceipt.sent,
+  MessageReceipt.relayed,
+  MessageReceipt.delivered,
+  MessageReceipt.read,
+];
+
+/// An album's state, on its corner: its least far along photo's. One not
+/// sent says so for the album; "Seen" only once every photo has been.
+MessageReceipt? albumReceipt(Iterable<MessageReceipt?> receipts) {
+  MessageReceipt? lowest;
+  for (final r in receipts) {
+    if (r == null) continue;
+    if (lowest == null || _receiptLadder.indexOf(r) < _receiptLadder.indexOf(lowest)) {
+      lowest = r;
+    }
+  }
+  return lowest;
+}
+
+bool _isAlbumPhoto(ChatMessage m) =>
+    m.msgType == 'image' && !m.deleted && !m.isBroker && !m.viaAi &&
+    (m.mediaUrl ?? '').isNotEmpty;
+
+bool _joinsAlbum(ChatMessage previous, ChatMessage next) {
+  if (!_isAlbumPhoto(previous) || !_isAlbumPhoto(next)) return false;
+  if (previous.role != next.role) return false;
+  if ((next.replyToMessageId ?? '').isNotEmpty) return false;
+  if (next.content.trim().isNotEmpty) return false;
+  final a = previous.albumId ?? '';
+  final b = next.albumId ?? '';
+  if (a.isNotEmpty || b.isNotEmpty) return a == b;
+  final at = previous.createdAt;
+  final bt = next.createdAt;
+  if (at == null || bt == null) return false;
+  return bt.difference(at).abs() <= photoAlbumWindow;
+}
+
 /// 4-second ticks between two of the direct chat's fallback polls (while
 /// its socket is down), after [quietPolls] polls in a row found nothing
 /// new: 4, 8, 16, then 32 seconds.
@@ -515,7 +611,7 @@ class NegotiationScreen extends StatefulWidget {
 }
 
 class _NegotiationScreenState extends State<NegotiationScreen>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, RouteAware {
   Listing?          _listing;
   // A store-general conversation has no listing. It shares every part of
   // this screen with listing chats, but its server thread is keyed by
@@ -549,11 +645,31 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   Timer?            _wsPingTimer;
   Timer?            _wsReconnectTimer;
   int               _wsReconnectAttempt = 0;
+  // When the socket last said anything (a frame, or its handshake). The
+  // server pings every 25 seconds and answers each of the app's pings, so a
+  // socket silent for [_wsSilentLimit] is dead without knowing it
+  // (_replaceSilentSocket).
+  DateTime          _wsLastFrameAt = DateTime.now();
+  static const      _wsSilentLimit = Duration(seconds: 60);
+  // Whether a socket has been up on this screen: a reconnect catches up
+  // through the history too (what changed while it was down).
+  bool              _wsWasUp = false;
+  // A message push for this conversation (NotificationService.threadPushes).
+  StreamSubscription<String>? _threadPushSub;
+
+  // The chat's own route, to tell whether anything is drawn over it.
+  ModalRoute<Object?>? _route;
 
   // Whether the app is on screen. A chat left open behind the phone's home
   // screen still receives messages, which is "delivered" - it used to keep
   // marking them read, every 30 seconds, with nobody looking.
   bool _appVisible = true;
+
+  /// The user is looking at this conversation: the app in front, and
+  /// nothing - a call, Zeno's room, a product, a photo - opened over it.
+  /// What arrives while something covers the chat is delivered, not seen:
+  /// it used to be marked seen with the user on a call or another screen.
+  bool get _onScreen => _appVisible && (_route?.isCurrent ?? true);
 
   // Sends go out one at a time, in the order they were typed - so a quick
   // second message can't overtake the first - while the composer stays
@@ -612,6 +728,10 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   // heights. Lazily created in the builder; stale ids are dropped when the
   // thread scope changes, and all keys die with the screen.
   final Map<String, GlobalKey> _bubbleKeys = {};
+  // Message id -> the id of the first message of the row it is drawn in:
+  // a photo in an album is drawn in its first photo's row, under that
+  // photo's key. Rebuilt with the list; a key is never shared by two rows.
+  final Map<String, String> _rowOf = {};
 
   // Read receipts: when the counterpart last read this thread - a message
   // I sent is "seen" once this is at/after that message's createdAt.
@@ -703,6 +823,12 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != null && !identical(route, _route)) {
+      if (_route != null) appRouteObserver.unsubscribe(this);
+      _route = route;
+      appRouteObserver.subscribe(this, route);
+    }
     if (!_routeArgsRead) {
       _routeArgsRead = true;
       final args = ModalRoute.of(context)?.settings.arguments;
@@ -800,6 +926,17 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     unawaited(_restoreMediaOutbox());
     _loadHistory();
     _connectWebSocket();
+    // A message push for this conversation while it is open: the server
+    // has something the socket may not have brought - fetch it now rather
+    // than when a dead socket is noticed.
+    _threadPushSub?.cancel();
+    _threadPushSub = NotificationService.instance.threadPushes.listen((tag) {
+      final threadId = _threadId;
+      if (!mounted || threadId == null) return;
+      if (tag != NotificationService.threadTag(threadId, _buyerId)) return;
+      _pollNow();
+      unawaited(_pollNewMessages());
+    });
     _loadCounterpartyInfo();
     _refreshZenoUnreadCount();
     // Nothing on screen to keep current while the app is in the background:
@@ -839,6 +976,13 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     });
   }
 
+  /// Back on the chat from what was opened over it: what arrived meanwhile
+  /// has been seen now.
+  @override
+  void didPopNext() {
+    if (_hasThread && mounted) unawaited(_syncReadState());
+  }
+
   // Fallback-poll pace (see _startThread).
   int _quietPolls = 0;
   int _pollWait = 0;
@@ -867,6 +1011,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     if (!_wsConnected) {
       _wsReconnectAttempt = 0;
       _connectWebSocket();
+    } else if (_ws != null && _socketSilentTooLong) {
+      // The phone slept or changed networks: the socket still looks open.
+      _replaceSilentSocket(_ws!);
     }
     _pollNow();
     unawaited(_pollNewMessages());
@@ -1080,6 +1227,8 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     if (_role == 'seller' && _buyerId != null) {
       url += '&buyer_id=$_buyerId';
     }
+    final since = _socketReplaySince();
+    if (since != null) url += '&since=${Uri.encodeQueryComponent(since)}';
 
     // The socket being replaced must not report its own closing as this
     // one's: every handler below checks it is still the current socket.
@@ -1107,9 +1256,16 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     ws.ready.then((_) {
       if (!mounted || !identical(_ws, ws)) return;
       _wsReconnectAttempt = 0;
+      _wsLastFrameAt = DateTime.now();
       setState(() => _wsConnected = true);
       // Back online: anything typed while offline goes out on its own.
       _flushFailed();
+      // Back after a drop: what was edited, taken back or sent while the
+      // socket was down comes through the history (an unchanged thread is
+      // an empty 304). The socket replays only messages newer than the
+      // last one this phone has.
+      if (_wsWasUp) unawaited(_pollNewMessages());
+      _wsWasUp = true;
     }).catchError((_) {
       // The stream's onError/onDone below reports it and reconnects.
     });
@@ -1124,10 +1280,58 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     _wsPingTimer?.cancel();
     _wsPingTimer = Timer.periodic(const Duration(seconds: 25), (_) {
       if (!identical(_ws, ws) || !_wsConnected) return;
+      if (_socketSilentTooLong) {
+        _replaceSilentSocket(ws);
+        return;
+      }
       try {
         ws.sink.add(jsonEncode({'type': 'ping'}));
       } catch (_) {}
     });
+  }
+
+  bool get _socketSilentTooLong =>
+      DateTime.now().difference(_wsLastFrameAt) > _wsSilentLimit;
+
+  /// The socket's `since` (backend negotiate_ws): a second before the
+  /// newest message from the other side this phone has, so a reconnect
+  /// replays what it missed and not the last fifty messages again. Their
+  /// newest, not mine: one of mine is confirmed by its send's answer and
+  /// proves nothing about what reached this phone. Nothing from them yet
+  /// replays as before.
+  String? _socketReplaySince() {
+    DateTime? newest;
+    for (final m in _messages) {
+      final at = m.createdAt;
+      if (m.id.isEmpty || at == null || m.role == _role) continue;
+      if (newest == null || at.isAfter(newest)) newest = at;
+    }
+    return newest?.toUtc().subtract(const Duration(seconds: 1)).toIso8601String();
+  }
+
+  /// A socket that has said nothing - not even the server's ping - for
+  /// [_wsSilentLimit] is dead without knowing it: a phone that sleeps or
+  /// moves between networks keeps a half-open connection for minutes. While
+  /// it did, the chat counted itself connected, ran no poll, and the other
+  /// side's messages waited until Android gave up on the connection - the
+  /// "takes long to arrive" of 2026-11-11. Drop it, catch up through the
+  /// history, and open a new one (in the background, on return).
+  void _replaceSilentSocket(WebSocketChannel ws) {
+    if (!identical(_ws, ws)) return;
+    debugPrint('[DirectChat] socket silent for over ${_wsSilentLimit.inSeconds}s - reconnecting');
+    _ws = null;
+    _wsPingTimer?.cancel();
+    try {
+      ws.sink.close();
+    } catch (_) {}
+    _clearRemoteTyping();
+    _resetOutgoingTyping();
+    if (!mounted) return;
+    setState(() => _wsConnected = false);
+    _wsReconnectAttempt = 0;
+    _pollNow();
+    unawaited(_pollNewMessages());
+    if (_appVisible) _connectWebSocket();
   }
 
   // ── Typing presence ────────────────────────────────────────────────────
@@ -1251,6 +1455,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     } catch (_) {
       return;
     }
+    _wsLastFrameAt = DateTime.now();
     if (!_wsConnected) setState(() => _wsConnected = true);
     _wsReconnectAttempt = 0;
     switch (data['type']) {
@@ -1443,12 +1648,20 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     if (i >= 0) {
       final cid = _messages[i].clientId;
       if (cid != null) _uploads.remove(cid);
-      _messages[i] = m;
+      _messages[i] = _keepAlbum(m, _messages[i]);
     } else {
       _messages.insert(_slotFor(_messages, m), m);
     }
     return true;
   }
+
+  /// The server's copy of my photo, in the album my phone gave it: a server
+  /// too old to store albums answers without one, and the album would fall
+  /// apart on the sender's own screen the moment its photos were confirmed.
+  static ChatMessage _keepAlbum(ChatMessage server, ChatMessage local) =>
+      (server.albumId == null && local.albumId != null)
+          ? server.withAlbumId(local.albumId)
+          : server;
 
   /// Where [m] goes in [list] so the thread reads in time order: after
   /// everything not later than it. What arrives here is not always new -
@@ -1506,7 +1719,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       }
       if (server.id.isNotEmpty) _seenMsgIds.add(server.id);
       if (i >= 0) {
-        _messages[i] = server;
+        _messages[i] = _keepAlbum(server, _messages[i]);
       } else {
         _messages.insert(_slotFor(_messages, server), server);
       }
@@ -1650,13 +1863,14 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   }
 
   /// Tells the backend this side has the thread - read if the chat is on
-  /// screen, only delivered if the app is in the background - and refreshes
+  /// screen, only delivered if the app is in the background or something is
+  /// open over the chat (_onScreen) - and refreshes
   /// the other side's watermarks (the ticks on my own messages). Called
   /// whenever I load/receive messages while this screen is open, plus every
   /// 30s via _presenceRefreshTimer.
   Future<void> _syncReadState() async {
     if (!_hasThread) return;
-    if (_appVisible) {
+    if (_onScreen) {
       unawaited(ApiService.markThreadRead(_listing?.id,
           storeId: _storeId, buyerId: _buyerId));
     } else {
@@ -2057,7 +2271,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     final canDelete = own && !m.deleted &&
         _withinWindow(m.createdAt, const Duration(hours: 48));
     final canReply = !m.deleted && m.msgType != 'deleted';
-    if (!canEdit && !canDelete && !canReply) return;
+    // Either side's photo (2026-11-11): one someone sent could not be kept.
+    final canSave = !m.deleted && m.msgType == 'image' && (m.mediaUrl ?? '').isNotEmpty;
+    if (!canEdit && !canDelete && !canReply && !canSave) return;
 
     final choice = await showModalBottomSheet<String>(
       context: context,
@@ -2083,6 +2299,13 @@ class _NegotiationScreenState extends State<NegotiationScreen>
             title: const Text('Reply', style: TextStyle(color: BrokaColors.textHigh)),
             onTap: () => Navigator.pop(ctx, 'reply'),
           ),
+        if (canSave)
+          ListTile(
+            key: const Key('message-save-photo'),
+            leading: const Icon(Icons.download_rounded, color: BrokaColors.neonBlue),
+            title: const Text('Save to phone', style: TextStyle(color: BrokaColors.textHigh)),
+            onTap: () => Navigator.pop(ctx, 'save'),
+          ),
         if (canEdit)
           ListTile(
             leading: const Icon(Icons.edit_rounded, color: BrokaColors.neonGreen),
@@ -2103,6 +2326,11 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     if (choice == 'reply') {
       setState(() => _replyTo = m);
       _composerFocus.requestFocus();
+    } else if (choice == 'save') {
+      final said = await _savePhotoToPhone(m.mediaUrl!,
+          messageId: m.id.isEmpty ? null : m.id, clientId: m.clientId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(said)));
     } else if (choice == 'edit') {
       await _editMessage(m);
     } else if (choice == 'delete') {
@@ -2127,7 +2355,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       return;
     }
     for (var attempt = 0; attempt < 4; attempt++) {
-      final ctx = _bubbleKeys[target]?.currentContext;
+      final ctx = _bubbleKeys[_rowOf[target] ?? target]?.currentContext;
       if (ctx != null) {
         try {
           await Scrollable.ensureVisible(
@@ -2664,16 +2892,20 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     // away, after this returns. It holds nothing that needs freeing.
     final caption = captionCtrl.text.trim();
     if (send != true || !mounted || photos.isEmpty) return;
+    // Sent together, shown together: one album for the whole send, in one
+    // frame on both phones (_PhotoAlbumBubble). A photo on its own needs none.
+    final albumId = photos.length > 1 ? _newClientId() : null;
     for (var i = 0; i < photos.length; i++) {
       if (!mounted) return;
-      await _stageImageUpload(photos[i], i == 0 && caption.isNotEmpty ? caption : null);
+      await _stageImageUpload(photos[i], i == 0 && caption.isNotEmpty ? caption : null,
+          albumId: albumId);
     }
   }
 
   /// Persist the photo to the app-owned outbox, render the optimistic bubble
   /// with an uploading state, then upload. Retries reuse the stored file -
   /// never the in-memory bytes - so they survive a restart.
-  Future<void> _stageImageUpload(File picked, String? caption) async {
+  Future<void> _stageImageUpload(File picked, String? caption, {String? albumId}) async {
     try {
       final raw = await picked.readAsBytes();
       // Fitted off the UI thread when it is real work: ten photos decoded
@@ -2690,7 +2922,8 @@ class _NegotiationScreenState extends State<NegotiationScreen>
           replyToMessageId: reply?.id.isEmpty == true ? null : reply?.id,
           caption: caption, listingId: _listing?.id, storeId: _storeId,
           buyerId: _threadBuyerId, contentType: 'image',
-          fileName: fitted.fileName, mimeType: fitted.mimeType);
+          fileName: fitted.fileName, mimeType: fitted.mimeType,
+          albumId: albumId);
       _uploads[clientId] = _PendingUpload(
         bytes: fitted.bytes,
         contentType: 'image',
@@ -2700,6 +2933,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         replyPreview: reply == null ? null : _replySnapshotOf(reply),
         caption: caption,
         listingId: _listing?.id, storeId: _storeId, buyerId: _threadBuyerId,
+        albumId: albumId,
       );
       setState(() {
         _messages.add(ChatMessage(
@@ -2711,6 +2945,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
           clientId: clientId, createdAt: DateTime.now().toUtc(),
           replyToMessageId: reply?.id.isEmpty == true ? null : reply?.id,
           replyPreview: reply == null ? null : _replySnapshotOf(reply),
+          albumId: albumId,
         ));
         _replyTo = null;
       });
@@ -3011,6 +3246,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         clientMsgId: clientId,
         replyToMessageId: staged?.replyToMessageId,
         caption: staged?.caption,
+        albumId: staged?.albumId,
         onProgress: (sent, total) => _reportUploadProgress(clientId, sent, total),
       );
       final serverMsg = ChatMessage.fromJson({'role': _role, ...saved});
@@ -3068,6 +3304,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
             listingId: entry.listingId,
             storeId: entry.storeId,
             buyerId: entry.buyerId,
+            albumId: entry.albumId,
           );
         } catch (_) {}
       }
@@ -3264,6 +3501,8 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    appRouteObserver.unsubscribe(this);
+    _threadPushSub?.cancel();
     _sendStopTyping();
     _typingDebounce?.cancel();
     _typingHeartbeat?.cancel();
@@ -3412,8 +3651,8 @@ class _NegotiationScreenState extends State<NegotiationScreen>
             width: 36, height: 36,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              gradient: const LinearGradient(colors: kChatGradient),
-              border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.45), width: 1.2)),
+              gradient: const LinearGradient(colors: kChatCalmGradient),
+              border: Border.all(color: BrokaColors.border, width: 1.2)),
             clipBehavior: Clip.antiAlias,
             child: (_headerPhotoSource != null && _headerPhotoSource!.isNotEmpty)
                 ? BrokaImage(_headerPhotoSource,
@@ -3476,9 +3715,13 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         // with the shop, and there is no listing for Zeno to negotiate on.
         if (!_isStoreThread) ...[
           Stack(clipBehavior: Clip.none, children: [
+            // Drawn like the call buttons beside it (2026-11-11): lit, it
+            // was the brightest thing in the header, and "active" on a
+            // header button means a setting that is on. The room switch
+            // under the header names Zeno's room; the badge says when
+            // Zeno has something new.
             BrokaHeaderButton(
               icon: Icons.auto_awesome_rounded,
-              active: true,
               tooltip: 'Ask Zeno',
               onTap: _openZenoAi,
             ),
@@ -3646,32 +3889,47 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         ),
       );
     }
+    // Photos sent together are one row (groupPhotoAlbums); a quote that
+    // points at one of them finds the row through its first photo.
+    final rows = groupPhotoAlbums(_messages);
+    _rowOf
+      ..clear()
+      ..addAll({
+        for (final row in rows)
+          for (final m in row)
+            if (m.id.isNotEmpty && row.first.id.isNotEmpty) m.id: row.first.id,
+      });
     return ListView.builder(
       controller: _scrollCtrl,
       reverse: false,
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-      itemCount: _messages.length,
+      itemCount: rows.length,
       itemBuilder: (_, i) {
-        final id = _messages[i].id;
+        final row = rows[i];
+        final first = row.first;
+        final id = first.id;
         final key = id.isEmpty ? null : _bubbleKeys.putIfAbsent(id, () => GlobalKey());
-        final clientId = _messages[i].clientId;
+        final clientId = first.clientId;
         final fileKey = id.isNotEmpty ? id : (clientId ?? '');
         return _ChatBubble(
         key: key,
+        album: row.length > 1 ? row : null,
+        progressOf: (m) => m.clientId == null ? null : _uploads[m.clientId!]?.progress,
+        inFlightOf: (m) => m.clientId != null && _inFlight.contains(m.clientId),
         uploadProgress: clientId == null ? null : _uploads[clientId]?.progress,
         inFlight: clientId != null && _inFlight.contains(clientId),
         downloading: fileKey.isNotEmpty && _downloading.contains(fileKey),
-        message:    _messages[i],
+        message:    first,
         userRole:   _role,
-        isPlaying:  _isPlaying && _playingUrl == _messages[i].mediaUrl,
+        isPlaying:  _isPlaying && _playingUrl == first.mediaUrl,
         onPlayTap:  (url) => _togglePlay(url),
         onCallBack: _callBack,
         onUnsentTap: _onUnsentTap,
         onLongPress: _onMessageLongPress,
         onQuoteTap: _jumpToReply,
         onOpenFile: _openDocument,
-        highlighted: _highlightId != null && _highlightId == _messages[i].id,
+        highlighted: _highlightId != null && row.any((m) => m.id == _highlightId),
         counterpartLastRead: _counterpartLastRead,
         counterpartLastDelivered: _counterpartLastDelivered,
       );
@@ -3949,6 +4207,15 @@ class _ChatBubble extends StatelessWidget {
   /// A document was tapped.
   final ValueChanged<ChatMessage>? onOpenFile;
 
+  /// Photos sent together - two or more, [message] the first - drawn in
+  /// one frame (groupPhotoAlbums). Null for every other row.
+  final List<ChatMessage>? album;
+
+  /// Per photo of an [album]: its upload progress, and whether its send is
+  /// queued or going.
+  final double? Function(ChatMessage)? progressOf;
+  final bool Function(ChatMessage)? inFlightOf;
+
   const _ChatBubble({
     super.key,
     required this.message,
@@ -3966,6 +4233,9 @@ class _ChatBubble extends StatelessWidget {
     this.downloading = false,
     this.counterpartLastRead,
     this.counterpartLastDelivered,
+    this.album,
+    this.progressOf,
+    this.inFlightOf,
   });
 
   @override
@@ -4100,6 +4370,7 @@ class _ChatBubble extends StatelessWidget {
     }
 
     final hasQuote = (message.replyToMessageId ?? '').isNotEmpty;
+    final isAlbum = (album?.length ?? 0) > 1;
 
     /// Quote above a media bubble: same block, wrapped in the chat's card
     /// styling so it reads as part of the bubble, not floating text. Also
@@ -4129,7 +4400,32 @@ class _ChatBubble extends StatelessWidget {
         isPlaying: isPlaying,
         onTap: () => onPlayTap(message.mediaUrl!),
         isMe: isMe,
+        // Inside quotedMedia's bubble, that bubble is its frame.
+        framed: !hasQuote && !highlighted,
       ));
+    } else if (isAlbum) {
+      // Photos sent together, in one frame - each still its own message:
+      // tapped, held or retried one by one (_PhotoAlbumBubble).
+      bubbleContent = _PhotoAlbumBubble(
+        photos: album!,
+        isMe: isMe,
+        receiptOf: (m) => isMe
+            ? receiptFor(
+                sentAt: m.createdAt,
+                counterpartDeliveredAt: counterpartLastDelivered,
+                counterpartReadAt: counterpartLastRead,
+                viaAi: m.viaAi,
+                pending: m.isPending,
+                failed: m.failed,
+                inFlight: inFlightOf?.call(m) ?? false,
+              )
+            : null,
+        progressOf: progressOf,
+        quote: hasQuote ? quoteBlock() : null,
+        highlighted: highlighted,
+        onUnsentTap: onUnsentTap,
+        onLongPress: onLongPress,
+      );
     } else if (message.msgType == 'image' && message.mediaUrl != null) {
       // The photo's own frame carries the quote and the highlight: the
       // quote used to sit in a second bubble wrapped around the first.
@@ -4185,7 +4481,8 @@ class _ChatBubble extends StatelessWidget {
       );
     }
 
-    if (unsent && onUnsentTap != null) {
+    // An album's photos take their own taps and long-presses.
+    if (!isAlbum && unsent && onUnsentTap != null) {
       bubbleContent = GestureDetector(
         key: const Key('unsent-bubble'),
         // The bubble's own targets (a photo opens its viewer on tap) must
@@ -4197,7 +4494,7 @@ class _ChatBubble extends StatelessWidget {
           child: Opacity(opacity: 0.7, child: bubbleContent),
         ),
       );
-    } else if (onLongPress != null && !message.isPending) {
+    } else if (!isAlbum && onLongPress != null && !message.isPending) {
       bubbleContent = GestureDetector(
         key: const Key('own-message-menu'),
         onLongPress: () => onLongPress!(message),
@@ -4233,7 +4530,11 @@ class _ChatBubble extends StatelessWidget {
                 // hung the ticks low against the label.
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Text(roleLabel(), style: TextStyle(color: roleColor(),
+                  // Muted under my own bubbles (it only says "You"), and
+                  // the role colour softened under theirs: at full strength
+                  // it was the brightest thing under every photo.
+                  Text(roleLabel(), style: TextStyle(
+                      color: isMe ? BrokaColors.textMid : roleColor().withOpacity(0.8),
                       fontSize: 10, fontWeight: FontWeight.w600)),
                   // When it was sent (2026-10-27): no bubble carried a
                   // time at all. Their messages get the time; mine get
@@ -4311,10 +4612,13 @@ class _VoiceBubble extends StatelessWidget {
   final bool   isPlaying;
   final VoidCallback onTap;
   final bool   isMe;
+  /// Drawn in a bubble of its own - not when one with a quote holds it.
+  final bool   framed;
 
   const _VoiceBubble({
     required this.url, required this.duration,
     required this.isPlaying, required this.onTap, required this.isMe,
+    this.framed = true,
   });
 
   @override
@@ -4323,39 +4627,47 @@ class _VoiceBubble extends StatelessWidget {
     final m = (secs ~/ 60).toString().padLeft(1, '0');
     final s = (secs % 60).toString().padLeft(2, '0');
 
+    // In the bubble's own colours, as text and photos are (2026-11-11): mine
+    // was a flat Material blue with a violet edge, unlike anything else I
+    // send.
+    final ink = isMe ? Colors.white : BrokaColors.gold;
+    final decoration = (isMe ? myBubbleDecoration() : theirBubbleDecoration()).copyWith(
+      borderRadius: BorderRadius.only(
+        topLeft:     Radius.circular(isMe ? 14 : 4),
+        topRight:    Radius.circular(isMe ? 4 : 14),
+        bottomLeft:  const Radius.circular(14),
+        bottomRight: const Radius.circular(14)),
+    );
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        padding: framed
+            ? const EdgeInsets.symmetric(horizontal: 14, vertical: 10)
+            : const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
         constraints: const BoxConstraints(minWidth: 140),
-        decoration: BoxDecoration(
-          color: isMe ? const Color(0xFF1565C0) : BrokaColors.bgCard,
-          borderRadius: BorderRadius.only(
-            topLeft:     Radius.circular(isMe ? 14 : 4),
-            topRight:    Radius.circular(isMe ? 4 : 14),
-            bottomLeft:  const Radius.circular(14),
-            bottomRight: const Radius.circular(14)),
-          border: Border.all(color: BrokaColors.gold.withOpacity(0.3))),
+        decoration: framed ? decoration : null,
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Container(
             width: 36, height: 36,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: BrokaColors.gold.withOpacity(0.2)),
+              color: ink.withOpacity(isMe ? 0.18 : 0.16)),
             child: Icon(
               isPlaying ? Icons.stop_rounded : Icons.play_arrow_rounded,
-              color: BrokaColors.gold, size: 20),
+              color: ink, size: 20),
           ),
           const SizedBox(width: 10),
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('Voice Note',
-                style: TextStyle(color: BrokaColors.textMid, fontSize: 11)),
+            Text('Voice Note',
+                style: TextStyle(
+                    color: isMe ? Colors.white.withOpacity(0.75) : BrokaColors.textMid,
+                    fontSize: 11)),
             Text('$m:$s',
-                style: const TextStyle(color: BrokaColors.textHigh,
+                style: TextStyle(color: isMe ? Colors.white : BrokaColors.textHigh,
                     fontSize: 13, fontWeight: FontWeight.w700)),
           ]),
           const SizedBox(width: 8),
-          const Icon(Icons.mic_rounded, color: BrokaColors.gold, size: 14),
+          Icon(Icons.mic_rounded, color: ink.withOpacity(0.8), size: 14),
         ]),
       ),
     );
@@ -4494,11 +4806,14 @@ class _ImageBubbleState extends State<_ImageBubble> {
       onTap: provider == null
           ? null
           : () => Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => _FullScreenImageViewer(
+                builder: (_) => _PhotoViewer(photos: [
+                  (
                     url: widget.url,
                     messageId: widget.messageId,
                     clientId: widget.clientId,
-                    caption: captionText.isEmpty ? null : captionText),
+                    caption: captionText.isEmpty ? null : captionText,
+                  ),
+                ]),
               )),
       child: Container(
         key: const Key('photo-frame'),
@@ -4933,59 +5248,407 @@ class _PreviewThumb extends StatelessWidget {
   );
 }
 
-/// Dedicated full-screen photo viewer: pinch-to-zoom, caption, close.
-class _FullScreenImageViewer extends StatelessWidget {
-  final String url;
-  final String? messageId;
-  final String? clientId;
-  final String? caption;
-  const _FullScreenImageViewer(
-      {required this.url, this.messageId, this.clientId, this.caption});
+/// One photo as the viewer shows it.
+typedef _ViewerPhoto = ({String url, String? messageId, String? clientId, String? caption});
 
-  ImageProvider? _provider() =>
-      _chatImageProvider(url, messageId: messageId, clientId: clientId);
+/// A chat photo's bytes, wherever this phone has them: the vault copy, the
+/// data URI the server sent, the staged file of one being sent, or - for a
+/// link - downloaded.
+Future<Uint8List?> _photoBytes(String url, {String? messageId, String? clientId}) async {
+  try {
+    final vault = ChatMediaVault.fileForSync(messageId: messageId, clientId: clientId);
+    if (vault != null) return await vault.readAsBytes();
+    if (url.startsWith('data:')) {
+      final comma = url.indexOf(',');
+      return comma < 0 ? null : base64Decode(url.substring(comma + 1));
+    }
+    if (url.startsWith('file://')) {
+      return await File(url.substring('file://'.length)).readAsBytes();
+    }
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      return await ChatGallery.download(url);
+    }
+  } catch (e) {
+    debugPrint('[DirectChat] photo bytes unavailable: ${e.runtimeType}');
+  }
+  return null;
+}
+
+/// Save a chat photo to the phone's gallery (Pictures/BROKA) - received
+/// or sent. Answers what to tell the user.
+Future<String> _savePhotoToPhone(String url, {String? messageId, String? clientId}) async {
+  final bytes = await _photoBytes(url, messageId: messageId, clientId: clientId);
+  if (bytes == null || bytes.isEmpty) {
+    return ChatGallery.describe(GallerySaveResult.failed);
+  }
+  final result = await ChatGallery.saveImage(bytes,
+      name: 'BROKA_${DateTime.now().millisecondsSinceEpoch}');
+  return ChatGallery.describe(result);
+}
+
+/// Full-screen photos: pinch to zoom, swipe between the photos of an
+/// album, the caption, and Save - which keeps the photo in the phone's
+/// gallery (2026-11-11: nothing could save a photo someone sent).
+class _PhotoViewer extends StatefulWidget {
+  const _PhotoViewer({required this.photos, this.initialIndex = 0});
+
+  final List<_ViewerPhoto> photos;
+  final int initialIndex;
+
+  @override
+  State<_PhotoViewer> createState() => _PhotoViewerState();
+}
+
+class _PhotoViewerState extends State<_PhotoViewer> {
+  late final PageController _pages = PageController(initialPage: widget.initialIndex);
+  late int _index = widget.initialIndex;
+  // Resolved once: a MemoryImage made again on every page change compares
+  // unequal and decodes the photo again - it flashed as it was swiped to.
+  late final List<ImageProvider?> _providers = [
+    for (final p in widget.photos)
+      _chatImageProvider(p.url, messageId: p.messageId, clientId: p.clientId),
+  ];
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _pages.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    final p = widget.photos[_index];
+    final said = await _savePhotoToPhone(p.url, messageId: p.messageId, clientId: p.clientId);
+    if (!mounted) return;
+    setState(() => _saving = false);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(said)));
+  }
 
   @override
   Widget build(BuildContext context) {
-    final provider = _provider();
+    final photos = widget.photos;
+    final caption = (photos[_index].caption ?? '').trim();
+    const broken = Icon(Icons.broken_image_outlined, color: Colors.white54, size: 48);
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
         iconTheme: const IconThemeData(color: Colors.white),
         leading: IconButton(
           tooltip: 'Close',
           icon: const Icon(Icons.close_rounded),
           onPressed: () => Navigator.pop(context),
         ),
+        title: photos.length > 1
+            ? Text('${_index + 1} of ${photos.length}',
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600))
+            : null,
+        actions: [
+          IconButton(
+            key: const Key('photo-save'),
+            tooltip: 'Save to phone',
+            onPressed: _saving ? null : _save,
+            icon: _saving
+                ? const SizedBox(
+                    width: 20, height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.download_rounded, color: Colors.white),
+          ),
+        ],
       ),
       body: Column(children: [
         Expanded(
-          child: Center(
-            child: provider == null
-                ? const Icon(Icons.broken_image_outlined,
-                    color: Colors.white54, size: 48)
-                : InteractiveViewer(
-                    minScale: 1.0,
-                    maxScale: 4.0,
-                    child: Image(
-                      image: provider,
-                      fit: BoxFit.contain,
-                      errorBuilder: (_, __, ___) => const Icon(
-                          Icons.broken_image_outlined,
-                          color: Colors.white54, size: 48),
-                    ),
-                  ),
+          child: PageView.builder(
+            controller: _pages,
+            itemCount: photos.length,
+            onPageChanged: (i) => setState(() => _index = i),
+            itemBuilder: (_, i) {
+              final provider = _providers[i];
+              return Center(
+                child: provider == null
+                    ? broken
+                    : InteractiveViewer(
+                        minScale: 1.0,
+                        maxScale: 4.0,
+                        child: Image(
+                          image: provider,
+                          fit: BoxFit.contain,
+                          gaplessPlayback: true,
+                          errorBuilder: (_, __, ___) => broken,
+                        ),
+                      ),
+              );
+            },
           ),
         ),
-        if ((caption ?? '').trim().isNotEmpty)
+        if (caption.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
-            child: Text((caption ?? '').trim(),
+            child: Text(caption,
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: Colors.white70, fontSize: 14)),
           ),
       ]),
+    );
+  }
+}
+
+// ── Photos sent together ─────────────────────────────────────────────────────
+
+/// Two or more photos sent together, in one frame - WhatsApp's album
+/// (2026-11-11). Each photo had its own frame, so ten photos were ten
+/// screens of scrolling. Two sit side by side; three are one wide and two
+/// under it; four or more are a square of four, the last saying how many
+/// more there are. Each tile is still its own message: tapped it opens the
+/// viewer at that photo, held it offers that photo's Reply, Save and
+/// Unsend, and one that did not go is retried by itself. The time and the
+/// album's state sit on its corner, as one photo's do.
+class _PhotoAlbumBubble extends StatefulWidget {
+  const _PhotoAlbumBubble({
+    required this.photos,
+    required this.isMe,
+    required this.receiptOf,
+    this.progressOf,
+    this.quote,
+    this.highlighted = false,
+    this.onUnsentTap,
+    this.onLongPress,
+  });
+
+  final List<ChatMessage> photos;
+  final bool isMe;
+  final MessageReceipt? Function(ChatMessage) receiptOf;
+  final double? Function(ChatMessage)? progressOf;
+  final Widget? quote;
+  final bool highlighted;
+  final ValueChanged<ChatMessage>? onUnsentTap;
+  final ValueChanged<ChatMessage>? onLongPress;
+
+  @override
+  State<_PhotoAlbumBubble> createState() => _PhotoAlbumBubbleState();
+}
+
+class _PhotoAlbumBubbleState extends State<_PhotoAlbumBubble> {
+  // One provider per photo for the bubble's life (as _ImageBubble pins its
+  // own): a MemoryImage made on every rebuild compares unequal, and the
+  // photos flickered through their placeholders as the chat updated.
+  final Map<String, ImageProvider?> _providers = {};
+
+  // A photo's provider changes when it does: confirmed (an id), or moved
+  // from its staged file to the server's copy (another length).
+  static String _keyOf(ChatMessage m) => '${m.id}|${m.clientId}|${m.mediaUrl?.length}';
+
+  ImageProvider? _providerFor(ChatMessage m) => _providers.putIfAbsent(
+      _keyOf(m),
+      () => _chatImageProvider(m.mediaUrl ?? '',
+          messageId: m.id.isEmpty ? null : m.id, clientId: m.clientId));
+
+  @override
+  void didUpdateWidget(_PhotoAlbumBubble old) {
+    super.didUpdateWidget(old);
+    final keep = {for (final m in widget.photos) _keyOf(m)};
+    _providers.removeWhere((key, _) => !keep.contains(key));
+  }
+
+  void _open(int index) {
+    final photos = widget.photos;
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => _PhotoViewer(
+        initialIndex: index,
+        photos: [
+          for (final m in photos)
+            (
+              url: m.mediaUrl ?? '',
+              messageId: m.id.isEmpty ? null : m.id,
+              clientId: m.clientId,
+              caption: m.content.trim().isEmpty ? null : m.content.trim(),
+            ),
+        ],
+      ),
+    ));
+  }
+
+  bool _unsent(ChatMessage m) =>
+      widget.receiptOf(m) == MessageReceipt.failed && m.isPending;
+
+  Widget _tile(int i, double width, double height) {
+    final photos = widget.photos;
+    final m = photos[i];
+    final provider = _providerFor(m);
+    // The fourth of five or more: the rest are behind it.
+    final more = (i == 3 && photos.length > 4) ? photos.length - 3 : 0;
+    final behind = more > 0 ? photos.sublist(3) : <ChatMessage>[m];
+    final unsentHere = behind.where(_unsent).toList();
+    final unsent = unsentHere.isNotEmpty;
+    final pending = !unsent && behind.any((p) => p.isPending);
+    const broken = ColoredBox(
+      color: Colors.black26,
+      child: Center(
+        child: Icon(Icons.broken_image_outlined, color: BrokaColors.textLow, size: 28),
+      ),
+    );
+    return GestureDetector(
+      key: ValueKey('album-photo-$i'),
+      behavior: HitTestBehavior.opaque,
+      onTap: unsent
+          ? (widget.onUnsentTap == null ? null : () => widget.onUnsentTap!(unsentHere.first))
+          : (provider == null ? null : () => _open(i)),
+      onLongPress: (m.isPending || widget.onLongPress == null)
+          ? null
+          : () => widget.onLongPress!(m),
+      child: SizedBox(
+        width: width,
+        height: height,
+        child: Stack(fit: StackFit.expand, children: [
+          if (provider == null)
+            broken
+          else
+            Image(
+              image: provider,
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
+              errorBuilder: (_, __, ___) => broken,
+            ),
+          if (more > 0)
+            ColoredBox(
+              color: Colors.black.withOpacity(0.48),
+              child: Center(
+                child: Text('+$more',
+                    style: const TextStyle(
+                        color: Colors.white, fontSize: 26, fontWeight: FontWeight.w700)),
+              ),
+            ),
+          if (pending || unsent)
+            ColoredBox(
+              color: Colors.black.withOpacity(0.45),
+              child: Center(
+                child: unsent
+                    ? const Icon(Icons.error_outline_rounded, color: Colors.white, size: 26)
+                    : SizedBox(
+                        width: 34,
+                        height: 34,
+                        child: FittedBox(
+                            child: _UploadProgressRing(
+                                progress: widget.progressOf?.call(m)))),
+              ),
+            ),
+        ]),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final photos = widget.photos;
+    final width = min(MediaQuery.of(context).size.width * 0.68, 300.0);
+    final frame = (widget.isMe ? myBubbleDecoration(tailRight: false) : theirBubbleDecoration())
+        .copyWith(
+      borderRadius: const BorderRadius.all(Radius.circular(16)),
+      border: widget.highlighted ? Border.all(color: BrokaColors.gold, width: 1.5) : null,
+    );
+    // The tiles fill the frame's inside: what is left of [width] once the
+    // frame's edge is drawn (their card's 1dp border, the highlight's 1.5dp
+    // - a Container pads its child by its border). Sized to [width] itself,
+    // the tiles overflowed every album of theirs by 2dp.
+    final inner = width - (frame.border?.dimensions.horizontal ?? 0.0);
+    const gap = 2.0;
+    final half = (inner - gap) / 2;
+    final Widget grid;
+    if (photos.length == 2) {
+      grid = Row(children: [
+        _tile(0, half, half * 1.25),
+        const SizedBox(width: gap),
+        _tile(1, half, half * 1.25),
+      ]);
+    } else if (photos.length == 3) {
+      grid = Column(mainAxisSize: MainAxisSize.min, children: [
+        _tile(0, inner, inner * 0.6),
+        const SizedBox(height: gap),
+        Row(children: [
+          _tile(1, half, half),
+          const SizedBox(width: gap),
+          _tile(2, half, half),
+        ]),
+      ]);
+    } else {
+      grid = Column(mainAxisSize: MainAxisSize.min, children: [
+        Row(children: [
+          _tile(0, half, half),
+          const SizedBox(width: gap),
+          _tile(1, half, half),
+        ]),
+        const SizedBox(height: gap),
+        Row(children: [
+          _tile(2, half, half),
+          const SizedBox(width: gap),
+          _tile(3, half, half),
+        ]),
+      ]);
+    }
+    final receipt = albumReceipt(photos.map(widget.receiptOf));
+    final caption = photos.first.content.trim();
+    return Container(
+      key: const Key('photo-album'),
+      width: width + 6,
+      padding: const EdgeInsets.all(3),
+      decoration: frame,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (widget.quote != null)
+            Padding(padding: const EdgeInsets.fromLTRB(5, 5, 5, 0), child: widget.quote!),
+          ClipRRect(
+            borderRadius: const BorderRadius.all(Radius.circular(13)),
+            child: Stack(children: [
+              grid,
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                height: 36,
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Colors.black.withOpacity(0.0), Colors.black.withOpacity(0.5)],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                key: const Key('photo-meta-overlay'),
+                right: 8,
+                bottom: 5,
+                child: IgnorePointer(
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    MessageTimeLabel(sentAt: photos.last.createdAt, light: true),
+                    if (receipt != null) ...[
+                      const SizedBox(width: 4),
+                      MessageReceiptIcon(receipt: receipt, light: true, compact: true),
+                    ],
+                  ]),
+                ),
+              ),
+            ]),
+          ),
+          if (caption.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 7, 8, 5),
+              child: Text(caption,
+                  style: TextStyle(
+                      color: widget.isMe ? Colors.white : BrokaColors.textHigh,
+                      fontSize: 14, height: 1.35)),
+            ),
+        ],
+      ),
     );
   }
 }

@@ -226,11 +226,9 @@ has not accepted the phone's token yet), or "even with BROKA closed".
 
 ## 5. Still open
 
-- **Reply and Mark-as-read from the notification.** Both need an
-  authenticated request from the background isolate, where the access
-  token is usually expired. Renewing it there races the main isolate's
-  renewal for the same refresh token. The safe design is a short-lived,
-  thread-scoped token in the push, like the call token.
+- ~~**Reply and Mark-as-read from the notification.**~~ Done on
+  2026-11-11 with a thread token in the push - see "Reply and Mark as
+  read" below.
 - **Dismissing on the other phones when a thread is read** (a data-only
   push on mark-read).
 - **Older senders still reach only the newest phone.** These call
@@ -390,3 +388,87 @@ phone icon that opens call history did not say so.
 * **Call history says so.** The Inbox header's bare phone icon is a
   labelled "Call history" pill (shortened to "Calls" under 360dp,
   full name kept for tooltip and screen readers).
+
+
+## Reply and Mark as read, and the delivered tick from a closed app (2026-11-11)
+
+Asked for: a message notification should offer Reply, which answers
+without opening the app, and Mark as read, also without opening it. And
+"delivered" never showed - only sent and seen.
+
+### The thread token
+
+Both needed a request the server would accept from a closed app. The
+access token has usually expired by the time a notification is acted on
+(it lasts 15 minutes), and renewing it from the background isolate races
+the app's own renewal for the same refresh token (section 5). The same was
+true of the delivered receipt the background isolate posted when a push
+arrived: it went with the expired token and failed, which is why a
+message read "Sent" until the chat was opened and then jumped to "Seen".
+
+Each phone's copy of a message push now carries `threadToken`
+(`api/security.py` `create_thread_token`; built per phone by
+`message_push.per_phone_data` through `push_devices.push_user`'s
+`data_for_token`). It names:
+
+- one conversation (`lid` or `sid`, and `bid`, the buyer),
+- the side its holder is on there (`role`),
+- the phone it was pushed to (`dev`, `push_devices.token_fingerprint` of
+  that phone's push token),
+
+and expires after `THREAD_TOKEN_EXPIRE_HOURS` (168: a phone that was off
+gets its pushes days later, and a notification can sit in the shade as
+long again). Every use is checked against the database as well
+(`negotiate._notification_thread`): the phone must still be signed in to
+the account (`push_devices.device_signed_in`) and the account still on
+that side of the conversation. Signing out, or signing out everywhere,
+ends what a notification left behind can do. It opens nothing else: it is
+not an access token, and no other route accepts it.
+
+| Route | What it does |
+|---|---|
+| `POST /negotiate/notification/delivered` | This phone has the conversation: the sender's tick becomes the double tick. Sent as the push arrives. |
+| `POST /negotiate/notification/read` | Mark as read: read up to now, and the sender sees "Seen". |
+| `POST /negotiate/notification/reply` | Reply: stored and delivered as a direct message (`direct_message`'s checks, broadcast, push and contact-leak audit; `message_limiter`, keyed on the account), with the phone's `client_msg_id` so a retry is stored once. The conversation is marked read. |
+
+Each takes `{"thread_token": ...}` (and `content`, `client_msg_id` for a
+reply). 401 means expired, or the phone signed out; 403 the account is no
+longer on that side; 404 the listing or store is gone; for a reply, 400 is
+an empty message and 429 too many.
+
+### The app
+
+- The other person's message notification has **Reply** (Android's inline
+  reply) and **Mark as read** (`NotificationService.messageDetails`). Zeno's
+  room's notifications have neither: Zeno is read in its own room.
+- What Android draws from a push has no buttons, so the background handler
+  draws every direct message push again with them
+  (`addFaceToPushed`, which before only redrew one that had a face). The
+  push stays a notification + data message: if the app's isolate fails to
+  start, Android's own drawing is still there.
+- Pressed with the app running, the action is handed to the main isolate;
+  with the app closed, `notificationActionBackgroundHandler` handles it
+  itself (`handleActionWithoutApp`). Either way the notification goes, the
+  request is sent with the thread token, and - for a notification the app
+  drew from its own sweep, which has no token, or a token refused - with
+  the signed-in session instead.
+- A reply that could not be sent is posted back as "Your reply was not
+  sent", with the words, and opens the chat when tapped.
+- The Inbox's count catches up at once (`onThreadRead`, wired to the
+  poller's `nudge`).
+- **Delivered.** `markDeliveredFromPush` posts the token first. Without one
+  (an older server) it uses the saved session as it is and never renews it
+  from the background (`markThreadDelivered(renew: false)`). A push whose
+  newest message is Zeno's but which counts the other person's messages
+  too (`directUnread`) now delivers those.
+
+### Not covered
+
+- iOS: no actions are registered for message notifications.
+- A notification is not taken down on the user's other phones when one of
+  them reads the thread.
+- Nothing here can work in an APK built without `GOOGLE_SERVICES_JSON`
+  (section 3): there are no pushes to carry the token.
+
+Tests: `backend/tests/test_notification_actions.py`,
+`flutter_app/test/notification_actions_test.dart`.

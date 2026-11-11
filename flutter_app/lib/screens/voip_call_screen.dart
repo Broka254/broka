@@ -58,6 +58,17 @@ class VoipCallScreen extends StatefulWidget {
   /// Shorter than the server's 120 seconds for an answered call to start.
   static const Duration answeredJoinWindow = Duration(seconds: 60);
 
+  /// How long the caller's screen says only "Reaching their phone" before
+  /// it says the phone may be off: a phone with the push reports ringing
+  /// within a few seconds (NotificationService.acknowledgeIncomingCall).
+  static const Duration ringConfirmWait = Duration(seconds: 10);
+
+  /// What POST /calls/initiate answers when no push could go to the other
+  /// person's phone: no phone of theirs registered for pushes, this server
+  /// has no Firebase, or Firebase refused every send. Their phone can then
+  /// ring only if BROKA is open on it (GlobalPollerService finds the call).
+  static const noPushStatuses = {'no_token', 'fcm_disabled', 'push_failed'};
+
   /// Handed each screen's WebRtcService as it is made - for tests, which
   /// drive the signals a real call would bring.
   @visibleForTesting
@@ -84,6 +95,14 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   // "Calling" and "Ringing": an app that is closed is "offline" and still
   // rings from a push.
   bool _calleeAlerted = false;
+  // Caller: what POST /calls/initiate said about reaching their phone
+  // ("sent", "sent_voip", or one of VoipCallScreen.noPushStatuses). Null
+  // when the screen was opened with its room already.
+  String? _pushStatus;
+  // Caller: [VoipCallScreen.ringConfirmWait] went by with no phone of
+  // theirs saying it rings.
+  bool _slowToRing = false;
+  Timer? _slowToRingTimer;
   // Caller: nobody answered within [noAnswerAfter], and we hung up.
   bool _noAnswer = false;
   Timer? _noAnswerTimer;
@@ -264,10 +283,21 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       });
       return;
     }
-    setState(() => _awaitingSetup = false);
+    setState(() {
+      _awaitingSetup = false;
+      // Ignored until 2026-11-11: a call no push could carry looked, and
+      // sounded, like any other.
+      _pushStatus = info?['status'] as String?;
+    });
+    if (_noPushRoute) {
+      debugPrint('[Call] no push reached their phone: $_pushStatus');
+    }
     _callToken = token;
     _beginCall(roomId: roomId, userId: _userId, callToken: token, autoAccept: false);
   }
+
+  /// No push could go to their phone (VoipCallScreen.noPushStatuses).
+  bool get _noPushRoute => VoipCallScreen.noPushStatuses.contains(_pushStatus);
 
   void _beginCall({
     required String roomId,
@@ -310,13 +340,14 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       RingtoneService.instance.stopFor(roomId);
       if (s == CallState.connected || s == CallState.ended || s == CallState.failed) {
         _stopRingback();
+        _slowToRingTimer?.cancel();
       }
-      // The call is placed: the caller hears it ring, voice and video
-      // alike, from now until it is answered or ends (2026-10-12). It used
-      // to wait for the callee's phone to confirm it was ringing, which a
-      // phone answering from a closed app often never sent - the caller
-      // held a silent phone through the whole ring.
-      if (s == CallState.calling && _isCaller) _startRingback();
+      // The call is placed: the caller hears it, voice and video alike,
+      // until it is answered or ends - the soft calling pip, then the ring
+      // once a phone of theirs says it rings (_startCallerTone). It rang
+      // from here whatever happened (2026-10-12), so a phone that was off
+      // sounded the same as one ringing.
+      if (s == CallState.calling && _isCaller) _startCallerTone();
       if (!mounted) return;
       setState(() => _callState = s);
       if (s == CallState.connected) {
@@ -346,12 +377,19 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     };
     _svc.onPeerRinging = () {
       if (!mounted) return;
-      setState(() => _calleeAlerted = true);
-      // Already ringing since the call was placed; this starts it if the
-      // placing didn't (a ringback that failed to load).
-      _startRingback();
+      _slowToRingTimer?.cancel();
+      setState(() {
+        _calleeAlerted = true;
+        _slowToRing = false;
+      });
+      // From the calling pip to the ring: their phone is ringing.
+      _startCallerTone();
     };
-    _svc.onPeerJoined = _stopRingback;
+    _svc.onPeerJoined = () {
+      _stopRingback();
+      // "Ringing…" becomes "Connecting…" (_peerAnswered) as the ring stops.
+      if (mounted) setState(() {});
+    };
     _svc.onPeerAnswered = () {
       _stopRingback();
       if (!mounted || _everConnected || _endingCall) return;
@@ -379,7 +417,14 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       // showed "BROKA should be granted Microphone access".
       CallForegroundService.start(
           peerName: _peerName, isVideo: _isVideo && !_svc.cameraUnavailable);
-      setState(() => _localMediaReady = true);
+      setState(() {
+        _localMediaReady = true;
+        // The route the call starts on (WebRtcService: the speaker for
+        // video, the earpiece for voice). This screen assumed the earpiece:
+        // a video call showed "Earpiece" while on the speaker, and its
+        // first tap of the button turned the speaker off.
+        _speaker = _svc.speakerOn;
+      });
     };
     _svc.onRemoteStreamConnected = () {
       // Remote media of SOME kind is flowing. Deliberately does NOT flip
@@ -439,6 +484,13 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       CallKitService.instance.reportOutgoingCall(
           roomId: roomId, peerName: _peerName, isVideo: _isVideo);
       _svc.start();
+      // A phone with the push says it rings within seconds. Past that the
+      // screen says the phone may be off, rather than "Reaching their
+      // phone" for the whole minute.
+      _slowToRingTimer = Timer(VoipCallScreen.ringConfirmWait, () {
+        if (!mounted || _calleeAlerted || _calleeAnswered || _everConnected || _isOver) return;
+        setState(() => _slowToRing = true);
+      });
       // The caller's no-answer window - as long as the callee's phone
       // rings. There wasn't one: the connect timeout stood in for it and
       // ended every unanswered call after 30 seconds as a failure.
@@ -610,7 +662,8 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     return peerIsBuyer ? 'Buyer' : 'Seller';
   }
 
-  bool _ringbackOn = false;
+  // The caller's sound playing now (RingbackService), or null.
+  CallerTone? _toneOn;
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -645,18 +698,26 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     }
   }
 
-  void _startRingback() {
-    if (_ringbackOn || _calleeAnswered || _svc.peerJoined || _everConnected || _endingCall ||
+  /// The caller's sound for where the call has got to (RingbackService):
+  /// the calling pip until a phone of theirs says it rings, the ring after.
+  /// On the call's own route - the speaker for a video call. It was this
+  /// screen's speaker flag, false for every call, and since a player's
+  /// route is the whole phone's, a video call's ring took the call off the
+  /// speaker.
+  void _startCallerTone() {
+    if (!_isCaller || _calleeAnswered || _svc.peerJoined || _everConnected || _endingCall ||
         _isOver) {
       return;
     }
-    _ringbackOn = true;
-    unawaited(RingbackService.instance.start(speakerOn: _speaker));
+    final tone = _calleeAlerted ? CallerTone.ringback : CallerTone.calling;
+    if (_toneOn == tone) return;
+    _toneOn = tone;
+    unawaited(RingbackService.instance.start(speakerOn: _svc.speakerOn, tone: tone));
   }
 
   void _stopRingback() {
-    if (!_ringbackOn) return;
-    _ringbackOn = false;
+    if (_toneOn == null) return;
+    _toneOn = null;
     unawaited(RingbackService.instance.stop());
   }
 
@@ -665,6 +726,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     WidgetsBinding.instance.removeObserver(this);
     _stopRingback();
     _noAnswerTimer?.cancel();
+    _slowToRingTimer?.cancel();
     _ringEndedSub?.cancel();
     _answerSub?.cancel();
     if (_awaitingSetup) _setupCancelled = true;
@@ -809,13 +871,31 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       // them - gold = still our side, blue = their phone is ringing.
       case CallState.ringing:    return BrokaColors.neonBlue;
       // Gold until their phone has the call: the ring colour is the signal
-      // that the far end was alerted.
+      // that the far end was alerted. The caller's connecting is the same
+      // wait - the server has placed the call - so it changes the same way.
       case CallState.calling:
-        return (_calleeAlerted || _calleeAnswered)
+      case CallState.connecting:
+        return (_isCaller && (_calleeAlerted || _calleeAnswered))
             ? BrokaColors.neonBlue : BrokaColors.gold;
       default:                   return BrokaColors.gold;
     }
   }
+
+  /// Caller: they answered - Accept reached the server, or their phone
+  /// joined the call - and it is connecting.
+  bool get _peerAnswered => _calleeAnswered || (_svcReady && _svc.peerJoined);
+
+  /// Caller: a phone of theirs is ringing now - the ring, the ripples, the
+  /// ringing icon.
+  bool get _ringingThere =>
+      _isCaller && _calleeAlerted && !_peerAnswered && _isRinging;
+
+  /// Ripples spread from the face only while a phone rings: theirs (the
+  /// caller's screen, once a phone of theirs has the call) or this one (an
+  /// incoming call). While the caller's call is only "Calling…" the ring
+  /// round the face turns and nothing spreads, so the two look different -
+  /// they looked the same from the moment the call was placed.
+  bool get _showRipples => _isCaller ? _ringingThere : _isIncoming;
 
   /// Three distinct pre-connection states, not one word for all of them.
   ///
@@ -847,10 +927,15 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       return _isVideo ? 'Incoming video call' : 'Incoming call';
     }
     switch (_callState) {
-      case CallState.connecting:  return 'Connecting…';
+      // The caller's connecting is this phone opening the microphone and
+      // the call's connection; the server has placed the call already and
+      // their phone may be ringing. It said "Connecting…" - as if the call
+      // was up - while the other phone rang.
+      case CallState.connecting:
       case CallState.calling:
+        if (!_isCaller) return 'Connecting…';
         // They pressed Accept; their phone is joining.
-        if (_calleeAnswered) return 'Connecting…';
+        if (_peerAnswered) return 'Connecting…';
         // WhatsApp's two words, on the same evidence: "Calling" while the
         // call has reached only the server, "Ringing" once a phone of
         // theirs acknowledged it (_calleeAlerted). It used to guess from
@@ -879,17 +964,18 @@ class _VoipCallScreenState extends State<VoipCallScreen>
         (_callState == CallState.ringing || _callState == CallState.connecting)) {
       return _listingName.isEmpty ? null : 'About $_listingName';
     }
-    if (_callState == CallState.connecting && _isCaller) {
-      return 'Setting up the call';
-    }
     if (_callState == CallState.recovering) {
       return 'The connection dropped - hold on';
     }
-    if (_callState == CallState.calling && _isCaller) {
-      if (_calleeAnswered) return 'They answered - connecting the call';
-      return _calleeAlerted
-          ? 'Their phone is ringing'
-          : "Reaching their phone - they'll see you called if they can't answer";
+    if (_isCaller &&
+        (_callState == CallState.calling || _callState == CallState.connecting)) {
+      if (_peerAnswered) return 'They answered - connecting the call';
+      if (_calleeAlerted) return 'Their phone is ringing';
+      // No push went: nothing will make their phone ring unless BROKA is
+      // open on it. Said plainly rather than "Reaching their phone".
+      if (_noPushRoute) return "They can't be notified - their phone rings only if BROKA is open";
+      if (_slowToRing) return "Their phone hasn't rung yet - it may be off or offline";
+      return "Reaching their phone - they'll see you called if they can't answer";
     }
     if (_callState == CallState.ended && _isCaller && _joinTimedOut) {
       return "They answered, but their phone couldn't join. Try calling again.";
@@ -1097,9 +1183,9 @@ class _VoipCallScreenState extends State<VoipCallScreen>
         return SizedBox(
           width: box, height: box,
           child: Stack(alignment: Alignment.center, children: [
-            // Ripples in the state colour while the call is being put
-            // through - they stop the moment it connects.
-            if (_isRinging)
+            // Ripples in the state colour while a phone rings (_showRipples)
+            // - they stop the moment it is answered.
+            if (_showRipples)
               for (int i = 0; i < 3; i++)
                 _RippleRing(
                   progress: (_ringCtrl.value + i / 3) % 1.0,
@@ -1248,19 +1334,24 @@ class _VoipCallScreenState extends State<VoipCallScreen>
             border: Border.all(color: color.withOpacity(0.45)),
           ),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            // A dot that breathes while the call is being put through.
-            AnimatedBuilder(
-              animation: _ringCtrl,
-              builder: (_, __) => Container(
-                width: 8, height: 8,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: color.withOpacity(_isRinging
-                      ? 0.45 + 0.55 * (1 - (_ringCtrl.value * 2 - 1).abs())
-                      : 1.0),
+            // A ringing phone once theirs rings; until then a dot that
+            // breathes while the call is being put through.
+            if (_ringingThere)
+              Icon(Icons.ring_volume_rounded,
+                  key: const Key('call-ringing-icon'), size: 15, color: color)
+            else
+              AnimatedBuilder(
+                animation: _ringCtrl,
+                builder: (_, __) => Container(
+                  width: 8, height: 8,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: color.withOpacity(_isRinging
+                        ? 0.45 + 0.55 * (1 - (_ringCtrl.value * 2 - 1).abs())
+                        : 1.0),
+                  ),
                 ),
               ),
-            ),
             const SizedBox(width: 8),
             Flexible(
               child: AnimatedDefaultTextStyle(

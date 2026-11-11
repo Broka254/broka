@@ -22,6 +22,11 @@
     <uses-permission android:name="android.permission.USE_FINGERPRINT"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32"/>
+    <!-- Saving a chat photo to the gallery on Android 9 and older
+         (ChatGallery.kt). Android 10 and newer save through MediaStore with
+         no permission, so it is not asked for there. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28"/>
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
     <!-- Keeps voice/video calls alive when the screen locks or the app

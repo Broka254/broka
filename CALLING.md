@@ -1029,3 +1029,77 @@ voice is heard the instant Accept is pressed. If a model misbehaves,
 
 Tests: `backend/tests/test_call_answer_while_ringing.py`;
 `flutter_app/test/call_answer_while_ringing_test.dart`.
+
+
+# Calling and Ringing you can hear apart (2026-11-11)
+
+Asked for: "assess the implementation of calls, both audio and video, so
+that the caller can clearly distinguish if it's actually ringing; the
+callee gets the notification of a ringing call."
+
+The caller heard the double ring from the moment the call was placed
+(2026-10-12, "a ring the caller hears"). That was chosen because a phone
+answering from a closed app often never reported ringing, and the caller
+held a silent phone. But it meant a phone that was off, offline, or never
+got the push sounded exactly like one ringing in a pocket - the one thing
+the caller wanted to know. This pass makes the report reliable and lets
+the caller hear the difference again.
+
+## What the caller sees and hears
+
+| State | Label · detail | Sound | Around the face |
+|---|---|---|---|
+| Placed; no phone of theirs has reported ringing | Calling… · "Reaching their phone - they'll see you called if they can't answer" | a soft pip every 2 s (`assets/audio/calling.wav`) | the ring turns, in gold; no ripples |
+| …and 10 s later (`VoipCallScreen.ringConfirmWait`) | Calling… · "Their phone hasn't rung yet - it may be off or offline" | pip | same |
+| `/calls/initiate` answered `no_token`, `fcm_disabled` or `push_failed` | Calling… · "They can't be notified - their phone rings only if BROKA is open" | pip | same |
+| A phone of theirs rings (`callee_ringing`) | Ringing… · "Their phone is ringing", a ringing icon in the pill | the double ring (`ringback.wav`) | blue, with ripples spreading |
+| They pressed Accept, or joined | Connecting… · "They answered - connecting the call" | none | blue, no ripples |
+
+The caller's own `connecting` (the microphone opening, the connection
+being made) is part of the same wait: the server placed the call at
+`/initiate`, and their phone may already ring. It read "Connecting…" - as
+if the call were up - while the other phone rang. The callee's screen is
+unchanged: "Incoming call", its ringtone, and ripples while it rings.
+
+`RingbackService` plays either sound (`CallerTone.calling`,
+`CallerTone.ringback`) on the call's own audio route, the speaker for a
+video call. It was given the screen's speaker flag, false for every call,
+and a player's route is the whole phone's: a video call's ring took the
+call off the speaker. The screen now also reads the route the call starts
+on, so a video call no longer shows "Earpiece" while on the speaker.
+
+## Making the report reliable
+
+- **The callee's phone tries harder to say it rings.** From a push (the
+  app closed, or in front) it posted `/alerted` at most twice, back to
+  back. On a phone just woken from Doze the network is often not back for
+  either, and the caller read "Calling…" through the whole ring. It now
+  tries twice more, 2 and 5 seconds later
+  (`NotificationService.persistentAlertRetryDelays`), while the call still
+  rings there and has not been answered or declined on it.
+- **The flag cannot be wiped.** `callee_alerted` lived only inside the
+  session record, which every state change rewrites whole. A write that
+  read the session just before `/alerted` and saved it just after put it
+  back to false, and a caller whose socket joined after that never got
+  `callee_ringing`. It is now also its own key
+  (`broka:call:alerted:{room}`), written first and read with the session
+  (`call_state.get`), and removed with it.
+- **Android rings first.** iPhone VoIP pushes went out one after another,
+  each with a 10-second limit, before the Android push; now they go
+  alongside it.
+
+## Still open
+
+- iOS: `AppDelegate.swift` does not post `/alerted`, so a call to an
+  iPhone reads "Calling…" with the pip until it is answered.
+- Without `GOOGLE_SERVICES_JSON` in the repository's secrets the APK has no
+  Firebase (NOTIFICATIONS.md, section 3): a closed app cannot be rung at
+  all, and the caller sees the no-push message.
+- Not run on a phone: CI's widget tests drive the screen with the signals a
+  call would bring.
+
+Tests: `flutter_app/test/call_answer_ring_and_video_test.dart`,
+`flutter_app/test/push_delivery_test.dart`,
+`backend/tests/test_chat_socket_and_albums.py`
+(`test_a_ring_acknowledgement_survives_a_racing_session_write`,
+`test_iphones_ring_alongside_android_phones_not_before_them`).

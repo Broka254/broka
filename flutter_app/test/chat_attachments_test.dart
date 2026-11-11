@@ -214,7 +214,8 @@ void main() {
   });
 
   group('photos', () {
-    testWidgets('several go at once, each its own message, the caption on the first',
+    testWidgets(
+        'several go at once, each its own message, in one frame, the caption on the first',
         (tester) async {
       // Tall enough that the list builds all three bubbles.
       tester.view.physicalSize = const Size(800, 2400);
@@ -238,6 +239,9 @@ void main() {
           'id': 'photo-$n',
           'role': 'buyer',
           'msg_type': 'image',
+          // The server answers with the caption it stored (media.py), and
+          // the photos go one after another, so the first is the captioned.
+          'content': n == 1 ? 'Front, back and the box' : '',
           'media_url': 'data:image/png;base64,${base64Encode(_png(8, 6))}',
           'created_at': _iso(DateTime.now()),
         };
@@ -264,7 +268,26 @@ void main() {
       }
       expect(hasField(sent.first, 'caption', 'Front, back and the box'), isTrue);
       expect(sent.skip(1).any((r) => r.body.contains('name="caption"')), isFalse);
-      expect(find.byKey(const Key('photo-frame')), findsNWidgets(3));
+      // One album for the send, so the other phone draws them together too.
+      final albums = {
+        for (final r in sent)
+          RegExp('name="album_id"\r\n\r\n([^\r]+)\r\n').firstMatch(r.body)?.group(1),
+      };
+      expect(albums, hasLength(1));
+      expect(albums.single, isNotNull, reason: 'every photo of the send names the album');
+      // WhatsApp's album: one frame, each photo a tile in it (2026-11-11).
+      // It was three frames, one under the other.
+      expect(find.byKey(const Key('photo-album')), findsOneWidget);
+      expect(find.byKey(const Key('photo-frame')), findsNothing);
+      for (var i = 0; i < 3; i++) {
+        expect(find.byKey(ValueKey('album-photo-$i')), findsOneWidget);
+      }
+      expect(
+          find.descendant(
+              of: find.byKey(const Key('photo-album')),
+              matching: find.text('Front, back and the box')),
+          findsOneWidget,
+          reason: 'the caption under the album');
       expect(find.text('Not sent'), findsNothing);
     });
   });

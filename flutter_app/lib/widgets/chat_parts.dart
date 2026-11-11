@@ -14,6 +14,13 @@ import '../main.dart' show BrokaColors;
 /// Zeno's colours - the brand gradient Home's Zeno CTA and the splash use.
 const List<Color> kChatGradient = [BrokaColors.neonPurple, BrokaColors.neonBlue];
 
+/// The brand gradient as the chat wears it (2026-11-11): the same violet to
+/// blue, a few shades deeper. At full neon every bubble, photo frame and
+/// button of mine glowed, and the brightest things on screen were frames
+/// rather than what was in them. White text on it reads at 5.8:1 or better
+/// (on the neon it was 3.7:1).
+const List<Color> kChatCalmGradient = [Color(0xFF5B3FC4), Color(0xFF2F5FC8)];
+
 /// The chat composer (2026-11-09): a rounded card with the message on top
 /// and a row of actions under it - the way DeepSeek's and ChatGPT's read.
 /// It replaced a single pill that held its icons inside the text line:
@@ -44,17 +51,19 @@ class ChatComposerCard extends StatelessWidget {
   Widget build(BuildContext context) => AnimatedContainer(
     duration: const Duration(milliseconds: 160),
     padding: const EdgeInsets.fromLTRB(14, 6, 8, 8),
+    // A quiet edge until it is typed in (2026-11-11: a lit blue ring sat
+    // round it all the time); the focus ring is still plain to see.
     decoration: BoxDecoration(
       color: BrokaColors.bgCard.withOpacity(0.94),
       borderRadius: BorderRadius.circular(24),
       border: Border.all(
-        color: BrokaColors.neonBlue.withOpacity(focused ? 0.8 : 0.32),
-        width: focused ? 1.4 : 1.0,
+        color: focused ? BrokaColors.neonBlue.withOpacity(0.55) : BrokaColors.border,
+        width: focused ? 1.3 : 1.0,
       ),
       boxShadow: [
         BoxShadow(color: Colors.black.withOpacity(0.28), blurRadius: 16, offset: const Offset(0, 4)),
         if (focused)
-          BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.16), blurRadius: 14),
+          BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.08), blurRadius: 10),
       ],
     ),
     child: Column(
@@ -119,10 +128,11 @@ class ChatComposerChip extends StatelessWidget {
         child: Container(
           height: 34,
           padding: const EdgeInsets.symmetric(horizontal: 11),
+          // A tint, not a light: the word and its icon carry the colour.
           decoration: BoxDecoration(
-            color: color.withOpacity(active ? 0.26 : 0.12),
+            color: color.withOpacity(active ? 0.18 : 0.08),
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: color.withOpacity(active ? 0.8 : 0.42)),
+            border: Border.all(color: color.withOpacity(active ? 0.6 : 0.28)),
           ),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             Icon(icon, size: 16, color: color),
@@ -172,9 +182,9 @@ class ChatComposerIconButton extends StatelessWidget {
             color: active ? BrokaColors.neonBlue.withOpacity(0.18) : null,
             border: Border.all(
               color: active
-                  ? BrokaColors.neonBlue
-                  : BrokaColors.textHigh.withOpacity(0.55),
-              width: 1.4,
+                  ? BrokaColors.neonBlue.withOpacity(0.8)
+                  : BrokaColors.textHigh.withOpacity(0.3),
+              width: 1.2,
             ),
           ),
           child: Icon(icon,
@@ -243,13 +253,10 @@ class ChatSendButton extends StatelessWidget {
                 gradient: const LinearGradient(
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
-                  colors: kChatGradient,
+                  colors: kChatCalmGradient,
                 ),
                 boxShadow: [
-                  BoxShadow(
-                      color: BrokaColors.neonBlue.withOpacity(0.35),
-                      blurRadius: 14,
-                      spreadRadius: 1),
+                  BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.18), blurRadius: 8),
                 ],
               ),
               child: busy
@@ -295,16 +302,20 @@ BoxDecoration zenoBubbleDecoration() => BoxDecoration(
   border: Border.all(color: BrokaColors.neonPurple.withOpacity(0.30)),
 );
 
-/// The frame of the user's own message: the brand gradient.
+/// The frame of the user's own message - text, voice note or photo: the
+/// chat's gradient (kChatCalmGradient), with a soft shadow under it where a
+/// blue glow used to bleed round every bubble and photo.
 BoxDecoration myBubbleDecoration({bool tailRight = true}) => BoxDecoration(
   gradient: const LinearGradient(
-      begin: Alignment.topLeft, end: Alignment.bottomRight, colors: kChatGradient),
+      begin: Alignment.topLeft, end: Alignment.bottomRight, colors: kChatCalmGradient),
   borderRadius: BorderRadius.only(
       topLeft: const Radius.circular(16),
       topRight: Radius.circular(tailRight ? 4 : 16),
       bottomLeft: const Radius.circular(16),
       bottomRight: const Radius.circular(16)),
-  boxShadow: [BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.18), blurRadius: 10)],
+  boxShadow: [
+    BoxShadow(color: Colors.black.withOpacity(0.22), blurRadius: 8, offset: const Offset(0, 2)),
+  ],
 );
 
 /// The frame of the other person's message: a card like Home's.
@@ -407,9 +418,9 @@ class ChatModeSwitch extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 13),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(17),
-          gradient: active ? const LinearGradient(colors: kChatGradient) : null,
+          gradient: active ? const LinearGradient(colors: kChatCalmGradient) : null,
           boxShadow: active
-              ? [BoxShadow(color: BrokaColors.neonPurple.withOpacity(0.35), blurRadius: 10)]
+              ? [BoxShadow(color: BrokaColors.neonPurple.withOpacity(0.16), blurRadius: 6)]
               : null,
         ),
         alignment: Alignment.center,

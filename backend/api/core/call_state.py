@@ -278,6 +278,9 @@ class _RedisCallStore:
     def _key(self, room_id: str) -> str:
         return f"{_KEY_PREFIX}{room_id}"
 
+    def _alerted_key(self, room_id: str) -> str:
+        return f"{_KEY_PREFIX}alerted:{room_id}"
+
     async def create(self, session: CallSession, ttl_seconds: int = DEFAULT_SESSION_TTL_SECONDS) -> None:
         client = await self._get_client()
         # Redis's EX requires a positive integer - callers may legitimately
@@ -293,7 +296,7 @@ class _RedisCallStore:
 
     async def get(self, room_id: str) -> Optional[CallSession]:
         client = await self._get_client()
-        raw = await client.get(self._key(room_id))
+        raw, alerted = await client.mget(self._key(room_id), self._alerted_key(room_id))
         if not raw:
             return None
         try:
@@ -301,6 +304,14 @@ class _RedisCallStore:
         except Exception as e:
             logger.warning("[call_state] corrupt session room=%s err=%s", room_id, e)
             return None
+        # The ring acknowledgement is kept in a key of its own as well
+        # (mark_callee_alerted): every writer here reads the whole session
+        # and writes it back, so a socket joining (set_participant_connected)
+        # that read the session just before the phone's /alerted wrote it
+        # back with callee_alerted false - and a caller whose socket joined
+        # afterwards was never told the phone was ringing.
+        if alerted and not session.callee_alerted:
+            session.callee_alerted = True
         # Lazy expiry: Redis's own TTL will eventually reclaim the key, but
         # a session can be logically expired (past expires_at) slightly
         # before Redis actually evicts it - callers need `expired` to read
@@ -390,8 +401,12 @@ class _RedisCallStore:
         session = await self.get(room_id)
         if session is None or session.callee_alerted or is_terminal(session.state):
             return session
-        session.callee_alerted = True
         remaining = max(int(session.expires_at - time.time()), 1)
+        # First, and on its own: a whole-session write racing this one can
+        # put callee_alerted back to false, never this key (see get).
+        client = await self._get_client()
+        await client.set(self._alerted_key(room_id), "1", ex=max(remaining, 60))
+        session.callee_alerted = True
         await self._write(session, ttl_seconds=remaining)
         return session
 
@@ -436,7 +451,7 @@ class _RedisCallStore:
     async def delete(self, room_id: str) -> None:
         client = await self._get_client()
         session = await self.get(room_id)
-        await client.delete(self._key(room_id))
+        await client.delete(self._key(room_id), self._alerted_key(room_id))
         if session is not None:
             await self.clear_pending(_session_thread_key(session), session.callee_id)
 

@@ -90,6 +90,8 @@ class Message {
   final String? fileName;
   final int? fileSize;
   final String? fileMime;
+  // Photos sent together: the album the chat draws them in, one frame.
+  final String? albumId;
 
   const Message({
     required this.role,
@@ -114,6 +116,7 @@ class Message {
     this.fileName,
     this.fileSize,
     this.fileMime,
+    this.albumId,
   });
 
   factory Message.fromJson(Map<String, dynamic> j) => Message(
@@ -140,6 +143,7 @@ class Message {
     fileName:        j['file_name']        as String?,
     fileSize:        (j['file_size']       as num?)?.toInt(),
     fileMime:        j['file_mime']        as String?,
+    albumId:         j['album_id']         as String?,
     createdAt:       j['created_at'] != null
         ? parseBackendUtc(j['created_at'] as String)
         : null,
@@ -171,6 +175,7 @@ class Message {
     if (fileName != null) 'file_name': fileName,
     if (fileSize != null) 'file_size': fileSize,
     if (fileMime != null) 'file_mime': fileMime,
+    if (albumId != null) 'album_id': albumId,
   };
 }
 

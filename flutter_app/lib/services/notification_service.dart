@@ -60,25 +60,23 @@ import 'ringtone_service.dart';
 /// Only when there is no main isolate - the app was killed and the
 /// notification was posted from an FCM background isolate, whose sound
 /// stops with the notification - does this isolate decline by itself.
+///
+/// Reply and Mark as read on a message notification arrive here the same
+/// way: handed to the main isolate when there is one, handled here when the
+/// app is not running.
 @pragma('vm:entry-point')
 Future<void> notificationActionBackgroundHandler(NotificationResponse response) async {
   final port = IsolateNameServer.lookupPortByName(NotificationService.callActionsPortName);
   if (port != null) {
-    port.send({'actionId': response.actionId, 'payload': response.payload});
+    port.send({
+      'actionId': response.actionId,
+      'payload': response.payload,
+      'input': response.input,
+    });
     return;
   }
-  if (response.actionId != NotificationService.callDeclineActionId) return;
-  final data = NotificationService.decodePayload(response.payload);
-  if (data == null) return;
-  DartPluginRegistrant.ensureInitialized();
-  // This isolate can outlive many calls, and SharedPreferences caches per
-  // isolate - without a reload it would send whatever access token it read
-  // the first time, long since rotated by the app.
-  try {
-    await (await SharedPreferences.getInstance()).reload();
-  } catch (_) {}
-  await ApiService.loadSavedSession();
-  await NotificationService.instance.declineFromPayload(data);
+  await NotificationService.handleActionWithoutApp(
+      actionId: response.actionId, payload: response.payload, input: response.input);
 }
 
 class NotificationService {
@@ -185,6 +183,39 @@ class NotificationService {
   /// Where notificationActionBackgroundHandler finds the main isolate.
   static const String callActionsPortName = 'broka_call_actions';
   ReceivePort? _actionsPort;
+
+  // Buttons on a message notification (2026-11-11): answer, or mark the
+  // conversation read, without opening the app. Both run without showing
+  // anything (notificationActionBackgroundHandler) and are sent with the
+  // thread token the server's push carries - see replyFromNotification.
+  static const String messageReplyActionId = 'msg_reply';
+  static const String messageReadActionId = 'msg_read';
+
+  /// Reply (typed into the notification itself, Android's inline reply) and
+  /// Mark as read.
+  static const List<AndroidNotificationAction> _messageActions = [
+    AndroidNotificationAction(
+      messageReplyActionId, 'Reply',
+      inputs: <AndroidNotificationActionInput>[
+        AndroidNotificationActionInput(label: 'Reply'),
+      ],
+      cancelNotification: true,
+    ),
+    AndroidNotificationAction(
+      messageReadActionId, 'Mark as read',
+      cancelNotification: true,
+    ),
+  ];
+
+  /// Set by GlobalPollerService: a conversation was read or answered from
+  /// its notification, so the Inbox badge should catch up now.
+  VoidCallback? onThreadRead;
+
+  // A message push for the conversation on screen (showMessageFromPush):
+  // its tag (threadTag). The chat refreshes on it - its socket may have
+  // died without saying so, and the push is proof something arrived.
+  final StreamController<String> _threadPushes = StreamController<String>.broadcast();
+  Stream<String> get threadPushes => _threadPushes.stream;
 
   // Rooms declined, answered or ended on this device live in ActiveCall
   // (its settled set), with the call on screen: the poller re-posts a
@@ -317,9 +348,47 @@ class NotificationService {
       handleResponse(
         actionId: message['actionId'] as String?,
         payload: message['payload'] as String?,
+        input: message['input'] as String?,
       );
     });
     _actionsPort = port;
+  }
+
+  /// A notification button pressed while the app is not running - no main
+  /// isolate to hand it to (notificationActionBackgroundHandler): Decline on
+  /// a call, Reply or Mark as read on a message. Nothing else here can
+  /// renew the session at the same moment, so the saved one is used as is.
+  static Future<void> handleActionWithoutApp({
+    String? actionId, String? payload, String? input,
+  }) async {
+    final isDecline = actionId == callDeclineActionId;
+    final isMessage = actionId == messageReplyActionId || actionId == messageReadActionId;
+    if (!isDecline && !isMessage) return;
+    final data = decodePayload(payload);
+    if (data == null) return;
+    try {
+      DartPluginRegistrant.ensureInitialized();
+    } catch (_) {}
+    // This isolate can outlive many calls, and SharedPreferences caches per
+    // isolate - without a reload it would send whatever access token it read
+    // the first time, long since rotated by the app.
+    try {
+      await (await SharedPreferences.getInstance()).reload();
+    } catch (_) {}
+    await ApiService.loadSavedSession();
+    final svc = NotificationService.instance;
+    if (isDecline) {
+      await svc.declineFromPayload(data);
+      return;
+    }
+    // The notification is taken down, or drawn again as "not sent", from
+    // here: the plugin has to be ready in this isolate too.
+    await svc.initialize(navKey: GlobalKey<NavigatorState>(), requestPermission: false);
+    if (actionId == messageReplyActionId) {
+      await svc.replyFromNotification(data, input ?? '');
+    } else {
+      await svc.markReadFromNotification(data);
+    }
   }
 
   static Map<String, dynamic>? decodePayload(String? raw) {
@@ -332,15 +401,24 @@ class NotificationService {
     }
   }
 
-  void _onTap(NotificationResponse response) =>
-      handleResponse(actionId: response.actionId, payload: response.payload);
+  void _onTap(NotificationResponse response) => handleResponse(
+      actionId: response.actionId, payload: response.payload, input: response.input);
 
-  /// A tap on a notification or on one of its buttons.
-  Future<void> handleResponse({String? actionId, String? payload}) async {
+  /// A tap on a notification or on one of its buttons. [input] is what was
+  /// typed into an inline Reply.
+  Future<void> handleResponse({String? actionId, String? payload, String? input}) async {
     final data = decodePayload(payload);
     if (data == null) return;
     if (actionId == callDeclineActionId) {
       await declineFromPayload(data);
+      return;
+    }
+    if (actionId == messageReplyActionId) {
+      await replyFromNotification(data, input ?? '');
+      return;
+    }
+    if (actionId == messageReadActionId) {
+      await markReadFromNotification(data);
       return;
     }
     final answer = actionId == callAcceptActionId;
@@ -433,6 +511,103 @@ class NotificationService {
       callerRole: iAmBuyer ? 'seller' : 'buyer',
       callType:   data['callType'] as String? ?? 'audio',
     );
+  }
+
+  /// Reply, typed into a message notification: sent without opening the
+  /// app, and the conversation is read - nobody answers what they haven't
+  /// read. With the thread token the server's push carried, a closed app
+  /// needs no sign-in (the token names this conversation, this side and
+  /// this phone); a notification the app drew from its own sweep has none,
+  /// and goes with the session instead. A reply that could not go is drawn
+  /// again as "not sent", words and all, so it is never lost silently.
+  Future<void> replyFromNotification(Map<String, dynamic> data, String input) async {
+    final text = input.trim();
+    final threadId = _threadIdFromPayload(data);
+    if (threadId == null) return;
+    final buyerId = data['buyerId'] as String?;
+    // Android shows a spinner on an inline reply until the notification
+    // changes; the button's own cancel does not always reach a tagged one.
+    await cancelThread(threadId, buyerId);
+    if (text.isEmpty) return;
+    final clientId = 'n${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}';
+    var sent = false;
+    final token = _nonEmpty(data['threadToken']);
+    if (token != null) {
+      final status = await ApiService.notificationAction(
+          'reply', token, content: text, clientMsgId: clientId);
+      sent = status == 200;
+      // Expired, or this phone signed out and back in since: the session
+      // may still be good.
+      if (!sent && status != null && status != 429 && status != 400) {
+        sent = await _replyWithSession(data, text, clientId);
+      }
+    } else {
+      sent = await _replyWithSession(data, text, clientId);
+    }
+    debugPrint('[Notifications] MESSAGE_REPLY_RESULT thread=$threadId sent=$sent');
+    if (!sent) {
+      await showNewMessage(
+        fromName: 'Your reply was not sent',
+        preview: '"$text" - tap to open the chat and send it again.',
+        listingId: threadId,
+        buyerId: buyerId,
+        payload: {...data, 'type': 'new_message'},
+        actions: false,
+      );
+      return;
+    }
+    onThreadRead?.call();
+  }
+
+  /// The reply through the signed-in session - for a notification the
+  /// app drew itself, which has no thread token.
+  Future<bool> _replyWithSession(Map<String, dynamic> data, String text, String clientId) async {
+    final me = ApiService.currentUserId;
+    if (!ApiService.isLoggedIn || me == null) return false;
+    final storeId = _nonEmpty(data['storeId']);
+    final listingId = storeId == null ? _nonEmpty(data['listingId']) : null;
+    if (storeId == null && listingId == null) return false;
+    final buyerId = _nonEmpty(data['buyerId']);
+    try {
+      await ApiService.sendDirectMessage(
+        listingId: listingId,
+        storeId: storeId,
+        senderRole: data['myRole'] as String? ?? 'buyer',
+        senderId: me,
+        content: text,
+        buyerId: buyerId,
+        clientMsgId: clientId,
+      );
+    } catch (e) {
+      debugPrint('[Notifications] reply not sent: ${e.runtimeType}');
+      return false;
+    }
+    await ApiService.markThreadRead(listingId, storeId: storeId, buyerId: buyerId);
+    return true;
+  }
+
+  /// Mark as read, pressed on a message notification: the conversation is
+  /// read up to now - the sender sees "Seen" - and the notification goes.
+  Future<void> markReadFromNotification(Map<String, dynamic> data) async {
+    final threadId = _threadIdFromPayload(data);
+    if (threadId == null) return;
+    await cancelThread(threadId, data['buyerId'] as String?);
+    final token = _nonEmpty(data['threadToken']);
+    var done = false;
+    if (token != null) {
+      done = await ApiService.notificationAction('read', token) == 200;
+    }
+    if (!done && ApiService.isLoggedIn) {
+      final storeId = _nonEmpty(data['storeId']);
+      final listingId = storeId == null ? _nonEmpty(data['listingId']) : null;
+      if (storeId != null || listingId != null) {
+        await ApiService.markThreadRead(listingId,
+            storeId: storeId, buyerId: _nonEmpty(data['buyerId']));
+        done = true;
+      }
+    }
+    debugPrint('[Notifications] MESSAGE_MARKED_READ thread=$threadId done=$done');
+    if (done) onThreadRead?.call();
   }
 
   /// Handles an FCM data message that arrived while the app was in the
@@ -553,7 +728,10 @@ class NotificationService {
       debugPrint('[Notifications] incoming call $roomId was not shown - not acknowledging');
       return;
     }
-    final alert = await acknowledgeIncomingCall(roomId, data['callToken'] as String?);
+    // The sweep acknowledges only the calls it rang itself: nothing else
+    // tries again for this one.
+    final alert = await acknowledgeIncomingCall(roomId, data['callToken'] as String?,
+        persist: true);
     if (alert == CallAlertResult.unknown) {
       debugPrint('[Notifications] ring acknowledgement for $roomId unconfirmed');
     }
@@ -570,11 +748,26 @@ class NotificationService {
     await callEnded(replaced);
   }
 
+  /// How long a phone that has no sweep to try again later waits before
+  /// each further try at telling the server it is ringing ([persist]).
+  @visibleForTesting
+  static List<Duration> persistentAlertRetryDelays = const [
+    Duration(seconds: 2),
+    Duration(seconds: 5),
+  ];
+
   /// Tell the server this phone is ringing (the caller's "Ringing"), and
   /// stop at once if it answers that the call is already over - a push
   /// that arrived late, or a call answered on another phone.
+  ///
+  /// [persist]: nothing else will try again - a push to a closed app, or a
+  /// call the push opened in front (the sweep acknowledges only calls it
+  /// rang itself). A couple more tries, a few seconds apart, while the call
+  /// still rings here: on a phone just woken from Doze the network often
+  /// is not back for the first two, and the caller read "Calling…" through
+  /// the whole ring of a phone that was ringing.
   Future<CallAlertResult> acknowledgeIncomingCall(
-      String roomId, String? callToken) async {
+      String roomId, String? callToken, {bool persist = false}) async {
     if (callToken == null || callToken.isEmpty) return CallAlertResult.unknown;
     var result = await ApiService.reportCallAlerted(roomId, callToken);
     if (result == CallAlertResult.unknown) {
@@ -584,6 +777,20 @@ class NotificationService {
       // alert for the same room as a no-op.
       debugPrint('[Notifications] CALL_ALERT_RETRY room=$roomId');
       result = await ApiService.reportCallAlerted(roomId, callToken);
+    }
+    if (persist) {
+      for (final delay in persistentAlertRetryDelays) {
+        if (result != CallAlertResult.unknown) break;
+        await Future<void>.delayed(delay);
+        // Answered, declined or over on this phone meanwhile: there is no
+        // ring left to claim. (The background isolate learns that from
+        // what the app saved.)
+        final active = ActiveCall.instance;
+        if (active.isSettled(roomId)) break;
+        if (!active.onCall && !await ActiveCall.savedAllowsRinging(roomId)) break;
+        debugPrint('[Notifications] CALL_ALERT_RETRY room=$roomId after=${delay.inMilliseconds}ms');
+        result = await ApiService.reportCallAlerted(roomId, callToken);
+      }
     }
     debugPrint('[Notifications] CALL_ALERT_RESULT room=$roomId result=${result.name}');
     if (result == CallAlertResult.over) {
@@ -661,7 +868,7 @@ class NotificationService {
           return;
         }
         final alert = await svc.acknowledgeIncomingCall(
-            roomId, data['callToken'] as String?);
+            roomId, data['callToken'] as String?, persist: true);
         if (alert == CallAlertResult.unknown) {
           debugPrint('[Notifications] background ring acknowledgement for '
               '$roomId unconfirmed');
@@ -709,18 +916,26 @@ class NotificationService {
   /// and a newer message's notification (the next push, drawn while this
   /// photo downloaded) must not be put back to this older one. Without the
   /// photo, or if anything fails, Android's stays as it is.
+  ///
+  /// A message from the other person is drawn again even without a face
+  /// (2026-11-11): what Android draws from the push has no Reply or Mark as
+  /// read, and this drawing does.
   Future<void> addFaceToPushed(Map<String, dynamic> data) async {
     if (!_ready || defaultTargetPlatform != TargetPlatform.android) return;
     final type = data['type'];
     final photo = _nonEmpty(type == 'missed_call' ? data['callerPhoto'] : data['senderPhoto']);
     final threadId = _threadIdFromPayload(data);
-    if (photo == null || threadId == null) return;
+    if (threadId == null) return;
+    final withActions = type == 'new_message' && data['screen'] != 'zeno';
+    if (photo == null && !withActions) return;
     final buyerId = data['buyerId'] as String?;
     final tag = type == 'missed_call'
         ? missedCallTag(threadId, buyerId)
         : threadTag(threadId, buyerId);
-    final face = await NotificationAvatar.load(photo, timeout: const Duration(seconds: 8));
-    if (face == null) return;
+    final face = photo == null
+        ? null
+        : await NotificationAvatar.load(photo, timeout: const Duration(seconds: 8));
+    if (face == null && !withActions) return;
     // What Android drew from this push (main.dart passes the push's own
     // title and body along with its data).
     final drawnTitle = data['title'] as String?;
@@ -799,6 +1014,9 @@ class NotificationService {
         'myRole': data['myRole'],
         if (data['senderName'] != null) 'senderName': data['senderName'],
         if (data['screen'] == 'zeno') 'screen': 'zeno',
+        // What Reply and Mark as read are sent with from a closed app
+        // (replyFromNotification): this conversation, this side, this phone.
+        if (_nonEmpty(data['threadToken']) != null) 'threadToken': data['threadToken'],
       },
     );
   }
@@ -858,28 +1076,47 @@ class NotificationService {
   /// A message push reached this phone: record the thread as delivered
   /// (received, not read) so the sender's tick can show it.
   ///
-  /// Only direct-chat pushes move the watermark. A push for Zeno's room
-  /// (screen: 'zeno') says nothing about the direct thread, and advancing
+  /// Only pushes that announce the other person's direct messages move the
+  /// watermark. A push for Zeno's room (screen: 'zeno') with none of them
+  /// among its news says nothing about the direct thread, and advancing
   /// its delivered watermark would credit the other side's direct
   /// messages with a delivery that hasn't been shown to have happened.
-  /// Reading still belongs to the chat screen alone (markThreadRead) -
-  /// this must never move the purple "seen" tick.
+  /// Reading still belongs to the chat screen (markThreadRead) and the
+  /// notification's own Mark as read - this must never move the purple
+  /// "seen" tick.
   ///
   /// Best effort and silent: [restoreSession] reloads the saved sign-in
   /// for the FCM background isolate, which starts with no session in
   /// memory (the pattern notificationActionBackgroundHandler uses). A
   /// failure here is recovered by the foreground sweep's own delivered
   /// posts when the app next runs.
+  ///
+  /// With the thread token the push carries (2026-11-11) no session is
+  /// needed at all. Without one (an older server), the background isolate
+  /// sends the saved access token as it is and never renews it: renewing
+  /// there raced the app's own renewal for the same refresh token, and a
+  /// phone whose app sat in the background could come back signed out.
   static Future<void> markDeliveredFromPush(
     Map<String, dynamic> data, {
     bool restoreSession = false,
   }) async {
     if (data['type'] != 'new_message') return;
-    if (data['screen'] == 'zeno') return;
+    // A push whose newest message is Zeno's still brings the other
+    // person's messages counted with it (directUnread): those are delivered.
+    if (data['screen'] == 'zeno' &&
+        (int.tryParse('${data['directUnread'] ?? ''}') ?? 0) <= 0) {
+      return;
+    }
     final listingId = data['listingId'] as String?;
     final storeId = data['storeId'] as String?;
     final isStore = storeId != null && storeId.isNotEmpty;
     if (isStore ? (storeId == null || storeId.isEmpty) : (listingId == null || listingId.isEmpty)) return;
+    final token = _nonEmpty(data['threadToken']);
+    if (token != null) {
+      final status = await ApiService.notificationAction('delivered', token);
+      if (status == 200) return;
+      // Expired, or refused: try the way an older server is told.
+    }
     try {
       if (restoreSession) {
         // SharedPreferences caches per isolate, and the app may have
@@ -896,12 +1133,14 @@ class NotificationService {
         await ApiService.loadSavedSession();
         try {
           if (!ApiService.isLoggedIn) return;
+          // renew: false - see above. An expired token here means no
+          // receipt from this push; the sweep posts it when the app runs.
           if (isStore) {
             await ApiService.markStoreDelivered(
-              storeId!, buyerId: data['buyerId'] as String?);
+              storeId!, buyerId: data['buyerId'] as String?, renew: false);
           } else {
             await ApiService.markThreadDelivered(
-              listingId!, buyerId: data['buyerId'] as String?);
+              listingId!, buyerId: data['buyerId'] as String?, renew: false);
           }
         } finally {
           if (previousUserId != null) ApiService.currentUserId = previousUserId;
@@ -936,7 +1175,13 @@ class NotificationService {
     if (messageId != null) {
       await markAnnounced(prefs, threadId, buyerId, messageId);
     }
-    if (onScreen) return;
+    if (onScreen) {
+      // No notification for the chat being read - but the chat is told:
+      // its socket can be dead without knowing it, and this push says a
+      // message is waiting (NegotiationScreen fetches it).
+      _threadPushes.add(threadTag(threadId, buyerId));
+      return;
+    }
 
     final m = _messageNotification(data);
     await showNewMessage(
@@ -1520,6 +1765,10 @@ class NotificationService {
   /// selfie), drawn as the notification's large icon; [face] is one
   /// already loaded. [silent] redraws without a sound - see
   /// addFaceToPushed.
+  ///
+  /// The other person's message carries Reply and Mark as read
+  /// ([actions], and a direct-chat payload); Zeno's - read in its own room -
+  /// and the "your reply was not sent" note do not.
   Future<void> showNewMessage({
     required String fromName,
     required String preview,
@@ -1529,26 +1778,18 @@ class NotificationService {
     String? photo,
     Uint8List? face,
     bool silent = false,
+    bool actions = true,
   }) async {
     if (!_ready) return;
     face ??= await NotificationAvatar.load(photo);
     final tag = threadTag(listingId, buyerId);
-    final details = NotificationDetails(
-      android: AndroidNotificationDetails(
-        _messageChannel.id,
-        _messageChannel.name,
-        channelDescription: _messageChannel.description,
-        importance: Importance.high,
-        priority: Priority.high,
-        category: AndroidNotificationCategory.message,
-        tag: tag,
-        icon: smallIcon,
-        color: _accent,
-        largeIcon: face != null ? ByteArrayAndroidBitmap(face) : null,
-        silent: silent,
-        styleInformation: BigTextStyleInformation(preview),
-      ),
-      iOS: DarwinNotificationDetails(threadIdentifier: tag),
+    final details = messageDetails(
+      tag: tag,
+      preview: preview,
+      face: face,
+      silent: silent,
+      actions: actions && payload != null &&
+          payload['type'] == 'new_message' && payload['screen'] != 'zeno',
     );
     try {
       await _plugin.show(
@@ -1563,6 +1804,35 @@ class NotificationService {
       debugPrint('[Notifications] showNewMessage failed: $e');
     }
   }
+
+  /// What a conversation's message notification looks like - separate from
+  /// showNewMessage so its buttons can be checked without a device.
+  @visibleForTesting
+  static NotificationDetails messageDetails({
+    required String tag,
+    required String preview,
+    Uint8List? face,
+    bool silent = false,
+    bool actions = true,
+  }) =>
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          _messageChannel.id,
+          _messageChannel.name,
+          channelDescription: _messageChannel.description,
+          importance: Importance.high,
+          priority: Priority.high,
+          category: AndroidNotificationCategory.message,
+          tag: tag,
+          icon: smallIcon,
+          color: _accent,
+          largeIcon: face != null ? ByteArrayAndroidBitmap(face) : null,
+          silent: silent,
+          styleInformation: BigTextStyleInformation(preview),
+          actions: actions ? _messageActions : null,
+        ),
+        iOS: DarwinNotificationDetails(threadIdentifier: tag),
+      );
 
   /// The tag of the one catch-up summary posted after an offline stretch.
   static const String catchUpTag = 'broka_catchup';

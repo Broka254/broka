@@ -995,14 +995,18 @@ async def initiate_call(
         "callToken":   create_call_token(callee.id, room_id),
     }
 
-    for voip_token in voip_tokens:
+    async def _ring_iphones() -> None:
         # iOS: a PushKit VoIP push is the ONLY thing that reliably wakes a
         # terminated app for a call, and AppDelegate.swift must report it to
         # CallKit the moment it arrives. Sent in addition to (not instead
-        # of) FCM, since a user can be signed in on both platforms.
-        await _send_voip_push(token=voip_token, data=call_data)
+        # of) FCM, since a user can be signed in on both platforms - and
+        # alongside it, not before it: one at a time, each with its own
+        # 10-second limit, they held the Android ring back until they were
+        # all done.
+        await asyncio.gather(*(_send_voip_push(token=t, data=call_data) for t in voip_tokens))
 
     if not fcm_tokens:
+        await _ring_iphones()
         logger.info(
             "[calls] CALL_PUSH_SKIPPED room=%s reason=no_fcm_token voip_tokens=%d",
             room_id, len(voip_tokens),
@@ -1013,16 +1017,19 @@ async def initiate_call(
     # Every phone the callee is signed in on rings at once, like WhatsApp;
     # whichever answers or declines takes it, and the others get call_over
     # (_push_ring_over) - or, unanswered, the missed-call push - and stop.
-    # Dead tokens are forgotten by push_user.
-    pushed = await push_devices.push_user(
-        callee.id, db=db,
-        title=f"{'📹' if is_video else '📞'} Incoming {'video ' if is_video else ''}call from {payload.caller_name}",
-        body=f"About: {payload.listing_name or thread_name}",
-        data=call_data,
-        data_only=True,
-        # An incoming call is the definitive "only useful right now"
-        # notification - see CALL_PUSH_TTL_SECONDS.
-        ttl_seconds=CALL_PUSH_TTL_SECONDS,
+    # Dead tokens are forgotten by push_user. Neither send raises.
+    pushed, _ = await asyncio.gather(
+        push_devices.push_user(
+            callee.id, db=db,
+            title=f"{'📹' if is_video else '📞'} Incoming {'video ' if is_video else ''}call from {payload.caller_name}",
+            body=f"About: {payload.listing_name or thread_name}",
+            data=call_data,
+            data_only=True,
+            # An incoming call is the definitive "only useful right now"
+            # notification - see CALL_PUSH_TTL_SECONDS.
+            ttl_seconds=CALL_PUSH_TTL_SECONDS,
+        ),
+        _ring_iphones(),
     )
 
     configured = _get_fcm() is not None
