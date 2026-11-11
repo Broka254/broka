@@ -23,6 +23,10 @@ class MainActivity : FlutterFragmentActivity() {
     private val SHARE_CHANNEL = "com.broka.app/share"
     private val LINKS_CHANNEL = "com.broka.app/links"
     private val DOCUMENTS_CHANNEL = "com.broka.app/documents"
+    private val GALLERY_CHANNEL = "com.broka.app/gallery"
+
+    // ── Saving chat photos (ChatGallery.kt) ──────────────────────────────
+    private val chatGallery by lazy { ChatGallery(applicationContext) }
 
     // ── Documents in a chat (ChatDocuments.kt) ───────────────────────────
     // The system document picker. Registered here, at construction: an
@@ -211,6 +215,26 @@ class MainActivity : FlutterFragmentActivity() {
                             result.success("missing")
                         } else {
                             chatDocuments.open(path, call.argument<String>("mime"), result)
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
+        // ── Saving a chat photo (lib/services/chat_gallery.dart) ────────
+        //   saveImage {bytes, name} - into Pictures/BROKA: "saved",
+        //     "permission" (Android 9 and older, storage not granted yet)
+        //     or "failed".
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, GALLERY_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "saveImage" -> {
+                        val bytes = call.argument<ByteArray>("bytes")
+                        val name = call.argument<String>("name") ?: "BROKA"
+                        if (bytes == null || bytes.isEmpty()) {
+                            result.success("failed")
+                        } else {
+                            chatGallery.save(bytes, name, result)
                         }
                     }
                     else -> result.notImplemented()
