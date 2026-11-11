@@ -279,6 +279,8 @@ services:
         sync: false          # Only needed if a future administrative Cloudflare call requires it
       - key: CALL_RINGING_PRECONNECT
         value: "true"        # Calls negotiated while they ring (CALLING.md); "false" switches it off without an app release
+      - key: THREAD_TOKEN_EXPIRE_HOURS
+        value: "168"         # How long Reply / Mark as read on a message notification keeps working (NOTIFICATIONS.md)
 
 databases:
   - name: broka-db

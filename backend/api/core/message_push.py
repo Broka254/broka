@@ -38,7 +38,7 @@ import logging
 from collections import OrderedDict
 from typing import Optional
 
-from sqlalchemy import and_, event, or_, select
+from sqlalchemy import and_, event, func, or_, select
 from sqlalchemy.orm import Session
 
 from api.database import AsyncSessionLocal, Listing, NegotiationMessage, User
@@ -132,6 +132,38 @@ def preview_of(msg_type: Optional[str], content: Optional[str],
         return "\U0001F4C4 " + (name if len(name) <= 120 else name[:117] + "...")
     text = " ".join((content or "").split())
     return text if len(text) <= 160 else text[:157] + "..."
+
+
+def album_preview(photos: int) -> str:
+    """Several photos sent together (NegotiationMessage.album_id) are one
+    piece of news, as the chat shows them in one frame: "📷 3 photos", not
+    "3 new messages · 📷 Photo"."""
+    return "\U0001F4F7 " + (f"{photos} photos" if photos > 1 else "Photo")
+
+
+def _notification_body(count: int, preview: str, album_photos: int) -> str:
+    # An album that is all of the news reads as the album alone.
+    if album_photos > 1 and count <= album_photos:
+        return preview
+    return preview if count == 1 else f"{count} new messages · {preview}"
+
+
+def per_phone_data(data: dict, *, user_id: str, role: str, buyer_id: str,
+                   listing_id: Optional[str] = None,
+                   store_id: Optional[str] = None):
+    """Each phone's copy of a message push (push_devices.push_user's
+    data_for_token): the push's data plus the token its notification's
+    Reply and Mark as read, and its delivered receipt, are sent with -
+    bound to that phone (api/security.py create_thread_token)."""
+    from api.core.push_devices import token_fingerprint
+    from api.security import create_thread_token
+
+    def build(token: str) -> dict:
+        return {**data, "threadToken": create_thread_token(
+            user_id, role, buyer_id, listing_id=listing_id, store_id=store_id,
+            device=token_fingerprint(token),
+        )}
+    return build
 
 
 # ── Session hook ─────────────────────────────────────────────────────────────
@@ -301,7 +333,20 @@ async def build_notification(db, listing_id: str, buyer_id: str, role: str) -> O
     short_listing = listing_name if len(listing_name) <= 40 else listing_name[:37] + "..."
     title = f"{sender_name} · {short_listing}" if short_listing else sender_name
     preview = preview_of(newest.msg_type, newest.content, getattr(newest, "file_name", None))
-    body = preview if count == 1 else f"{count} new messages · {preview}"
+    album_photos = 0
+    album_id = getattr(newest, "album_id", None)
+    if (newest.msg_type or "") == "image" and album_id:
+        # visibility-ok: _visible_to applies /history's audience rules - recipient_role on Zeno's rows, via_ai on the other side's
+        album_photos = int((await db.execute(
+            select(func.count(NegotiationMessage.id)).where(
+                _visible_to(role, listing_id, buyer_id),
+                NegotiationMessage.album_id == album_id,
+                NegotiationMessage.msg_type == "image",
+            )
+        )).scalar() or 0)
+        if album_photos > 1:
+            preview = album_preview(album_photos)
+    body = _notification_body(count, preview, album_photos)
 
     return {
         "user_id": recipient_id,
@@ -319,6 +364,10 @@ async def build_notification(db, listing_id: str, buyer_id: str, role: str) -> O
             "senderName":  sender_name,
             "listingName": listing_name,
             "count":       count,
+            # The other person's messages among them. A push whose newest
+            # message is Zeno's still delivers these to the phone, and the
+            # phone says so (the sender's delivered tick) only on this.
+            "directUnread": int(direct_unread or 0),
             "preview":     preview,
             **({"senderPhoto": sender_photo} if sender_photo else {}),
         },
@@ -385,6 +434,9 @@ async def push_thread(
         sent = await push_devices.push_user(
             note["user_id"], title=note["title"], body=note["body"], data=note["data"],
             tokens=tokens,
+            data_for_token=per_phone_data(
+                note["data"], user_id=note["user_id"], role=role,
+                buyer_id=buyer_id, listing_id=listing_id),
             android_tag=tag, android_channel_id=MESSAGES_CHANNEL_ID,
             apns_thread_id=tag,
         )
@@ -484,7 +536,22 @@ async def build_store_notification(db, store_id: str, buyer_id: str, role: str) 
     except Exception as exc:
         logger.warning("[message_push] no photo for user=%s: %s", other_id, exc)
     preview = preview_of(newest.msg_type, newest.content, getattr(newest, "file_name", None))
-    body = preview if count == 1 else f"{count} new messages · {preview}"
+    album_photos = 0
+    album_id = getattr(newest, "album_id", None)
+    if (newest.msg_type or "") == "image" and album_id:
+        # visibility-ok: visible_to_role_clause applies /history audience rules
+        album_photos = int((await db.execute(
+            select(func.count(NegotiationMessage.id)).where(
+                M.store_id == store_id, M.buyer_id == buyer_id,
+                visible_to_role_clause(role),
+                M.deleted_at.is_(None),
+                M.album_id == album_id,
+                M.msg_type == "image",
+            )
+        )).scalar() or 0)
+        if album_photos > 1:
+            preview = album_preview(album_photos)
+    body = _notification_body(count, preview, album_photos)
     return {
         "user_id": recipient_id,
         "message_id": newest.id,
@@ -494,7 +561,7 @@ async def build_store_notification(db, store_id: str, buyer_id: str, role: str) 
             "type": "new_message", "storeId": store_id, "buyerId": buyer_id,
             "myRole": role, "messageId": newest.id, "screen": "chat",
             "senderName": sender_name, "listingName": store.name,
-            "count": count, "preview": preview,
+            "count": count, "directUnread": count, "preview": preview,
             **({"senderPhoto": sender_photo} if sender_photo else {}),
         },
     }
@@ -527,7 +594,11 @@ async def push_store_thread(store_id: str, buyer_id: str, role: str,
         tag = store_tag(store_id, buyer_id)
         sent = await push_devices.push_user(
             note["user_id"], title=note["title"], body=note["body"], data=note["data"],
-            tokens=tokens, android_tag=tag, android_channel_id=MESSAGES_CHANNEL_ID,
+            tokens=tokens,
+            data_for_token=per_phone_data(
+                note["data"], user_id=note["user_id"], role=role,
+                buyer_id=buyer_id, store_id=store_id),
+            android_tag=tag, android_channel_id=MESSAGES_CHANNEL_ID,
             apns_thread_id=tag,
         )
         if sent > 0:

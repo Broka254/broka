@@ -360,6 +360,14 @@ class Settings:
     call_token_expire_minutes: int = field(default_factory=lambda: int(
         os.getenv("CALL_TOKEN_EXPIRE_MINUTES", "5")
     ))
+    # How long a message notification's Reply / Mark as read keeps working
+    # (api/security.py create_thread_token). Message pushes have no TTL - a
+    # phone that was off gets them days later - and a notification can sit
+    # in the shade for as long again. The token is also bound to the phone
+    # it was pushed to, so signing out ends it sooner.
+    thread_token_expire_hours: int = field(default_factory=lambda: int(
+        os.getenv("THREAD_TOKEN_EXPIRE_HOURS", "168")
+    ))
     # Answering without "Connecting…" (CALLING.md): a ringing phone whose
     # app can do it joins the call's room while it rings
     # (/calls/ws/{room}/ringing) and the call is negotiated then, with both

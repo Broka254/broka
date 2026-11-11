@@ -31,7 +31,7 @@ import logging
 import re
 import uuid
 from datetime import datetime as _dt
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 from fastapi import (
     APIRouter, Depends, File, Form, HTTPException,
@@ -42,7 +42,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from api.core.chat_files import (
-    MAX_FILE_BYTES, FileRejected, accept_document, content_disposition, file_fields,
+    MAX_FILE_BYTES, FileRejected, accept_document, content_disposition, message_media_fields,
 )
 from api.core.image_processing import ImageRejected, process_image
 from api.core.rate_limit import chat_media_daily_limiter, chat_media_limiter
@@ -113,25 +113,81 @@ async def _broadcast_typing(key: str, sender_uid: str, sender_role: str, *, typi
     )
 
 
+# How long one socket may take to accept a frame before it is treated as
+# dead. A phone that lost its radio leaves a socket TCP has not noticed yet;
+# once its send buffer fills - a photo is a few hundred KB of base64 - a send
+# to it waits for the TCP timeout, minutes.
+CHAT_WS_SEND_TIMEOUT_SECONDS = 5.0
+
+
+async def _send_or_drop(key: str, ws: WebSocket, payload: dict) -> None:
+    try:
+        await asyncio.wait_for(ws.send_json(payload), timeout=CHAT_WS_SEND_TIMEOUT_SECONDS)
+        return
+    except Exception:
+        pass
+    _thread_connections.get(key, {}).pop(ws, None)
+    # Closed, not only forgotten: a phone whose socket is merely slow sees
+    # it close and reconnects - its app polls meanwhile - instead of sitting
+    # on a socket the thread no longer writes to.
+    try:
+        await asyncio.wait_for(ws.close(code=4000, reason="Send timeout"), timeout=1.0)
+    except Exception:
+        pass
+
+
 async def _broadcast(key: str, payload: dict, exclude_uid: Optional[str] = None) -> None:
     """Broadcast a JSON message to WebSocket clients in a thread, skipping
     any connection owned by exclude_uid - normally the message's own sender,
     who already sees it immediately via their own optimistic UI update and
     would otherwise get it a second time when it echoed back over the
-    socket."""
-    dead: List[WebSocket] = []
-    for ws, owner_uid in list(_thread_connections.get(key, {}).items()):
-        if exclude_uid is not None and owner_uid == exclude_uid:
-            continue
-        try:
-            await ws.send_json(payload)
-        except Exception:
-            dead.append(ws)
-    for ws in dead:
-        _thread_connections.get(key, {}).pop(ws, None)
+    socket.
+
+    Every socket at once, each with its own time limit. They were written
+    one after another with no limit, and the message's own request waited
+    for all of them (direct_message broadcasts before it answers): one dead
+    socket held the message back from every other open copy of the thread
+    and left the sender on "Sending" until TCP gave up on it."""
+    targets = [
+        ws for ws, owner_uid in list(_thread_connections.get(key, {}).items())
+        if exclude_uid is None or owner_uid != exclude_uid
+    ]
+    if not targets:
+        return
+    await asyncio.gather(*(_send_or_drop(key, ws, payload) for ws in targets))
 
 
 # ── WebSocket — real-time chat ─────────────────────────────────────────────────
+
+def _replay_since(since) -> Optional[_dt]:
+    """The `since` a chat socket was opened with - the newest message the
+    app already has - as naive UTC, or None to replay as before. Anything
+    unreadable is None: the app dedupes a full replay, it can't recover a
+    message a bad filter left out."""
+    if not isinstance(since, str) or not since.strip():
+        return None
+    try:
+        from api.core.timeutil import parse_iso_to_naive_utc
+        return parse_iso_to_naive_utc(since)
+    except ValueError:
+        return None
+
+
+async def _release(db: AsyncSession) -> None:
+    """Hand the socket's database connection back to the pool before it
+    starts waiting on the phone.
+
+    The session the socket was opened with lives as long as the socket.
+    After the history replay it sat in an open transaction, holding a pooled
+    connection for as long as the chat stayed on screen - 30 open chats and
+    every other request, a sent message included, queued up to
+    DB_POOL_TIMEOUT_SECONDS for a connection. Nothing after the replay uses
+    the session."""
+    try:
+        await db.close()
+    except Exception as exc:
+        logger.warning("[media-ws] could not release the session: %s", type(exc).__name__)
+
 
 @router.websocket("/ws/{listing_id}")
 async def negotiate_ws(
@@ -139,6 +195,10 @@ async def negotiate_ws(
     websocket:  WebSocket,
     token:      str = Query(...),
     buyer_id:   Optional[str] = Query(default=None),
+    # The newest message the app already has (ISO 8601). Only what is newer
+    # is replayed: the last 50 messages, photos as base64, went down every
+    # connect - megabytes on mobile data, ahead of any new message.
+    since:      Optional[str] = Query(default=None),
     db:         AsyncSession = Depends(get_db),
 ):
     """
@@ -223,21 +283,31 @@ async def negotiate_ws(
             exclude_uid=uid, delivered_at=delivered_at, read_at=None,
         )
     except Exception as exc:
-        # Never fail a chat connection over a receipt.
+        # Never fail a chat connection over a receipt. A failed write leaves
+        # the session needing a rollback before the replay below can run.
         logger.warning("[media-ws] delivery watermark failed: %s", exc)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
     # Send recent history on connect
+    replay_after = _replay_since(since)
+    replay_conds = [
+        NegotiationMessage.listing_id == listing_id,
+        NegotiationMessage.buyer_id == effective_buyer_id,
+    ]
+    if replay_after is not None:
+        replay_conds.append(NegotiationMessage.created_at > replay_after)
     # visibility-ok: direct-chat socket; broker rows are dropped in the loop below
     hist_result = await db.execute(
         select(NegotiationMessage)
-        .where(
-            NegotiationMessage.listing_id == listing_id,
-            NegotiationMessage.buyer_id == effective_buyer_id,
-        )
+        .where(*replay_conds)
         .order_by(NegotiationMessage.created_at.desc())
         .limit(50)
     )
     recent = list(reversed(hist_result.scalars().all()))
+    await _release(db)
     # This socket backs the DIRECT buyer<->seller chat only. Zeno (broker)
     # replies and any message either party sent through the AI screen
     # (via_ai=True) belong to their own private AI thread and must never be
@@ -352,7 +422,7 @@ def _msg_to_dict(m: NegotiationMessage, uid: str, is_seller: bool) -> dict:
         "deleted":      getattr(m, "deleted_at", None) is not None,
         "reply_to_message_id": getattr(m, "reply_to_message_id", None),
         "reply_preview": _reply_preview_dict(m),
-        **file_fields(m),
+        **message_media_fields(m),
     }
 
 
@@ -369,6 +439,10 @@ _AUDIO_TYPE_RE = re.compile(r"audio/[a-z0-9][a-z0-9.+-]{0,40}")
 
 # What one voice note can last: the recorder's own limit is far below this.
 MAX_VOICE_SECONDS = 3600
+
+# An album id as the app makes them (negotiation_screen.dart _newClientId):
+# letters, digits, "-" and "_".
+_ALBUM_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
 def _max_bytes(content_type: str) -> int:
@@ -393,6 +467,9 @@ async def upload_media(
     reply_to_message_id: Optional[str] = Form(default=None, max_length=64),
     # Optional caption for an image or a document, shown with it.
     caption: Optional[str] = Form(default=None, max_length=2000),
+    # Photos sent together: the id the sender's app gave the whole send, so
+    # both phones draw them in one frame (NegotiationMessage.album_id).
+    album_id: Optional[str] = Form(default=None, max_length=64),
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -545,6 +622,11 @@ async def upload_media(
     )
     msg_type = {"audio": "voice", "image": "image", "file": "file"}[content_type]
     text = ((caption or "").strip() or None) if content_type != "audio" else None
+    # Only a photo is in an album, and only under an id the app could have
+    # made: anything else is dropped rather than refused - the photo still
+    # goes, as one on its own.
+    album = (album_id or "").strip()
+    album = album if content_type == "image" and _ALBUM_ID_RE.fullmatch(album) else None
     nm = NegotiationMessage(
         listing_id=listing_id,
         store_id=store_id,
@@ -564,6 +646,7 @@ async def upload_media(
         file_name=chat_file.file_name if chat_file else None,
         file_size=chat_file.size_bytes if chat_file else None,
         file_mime=chat_file.mime_type if chat_file else None,
+        album_id=album,
     )
     if chat_file is not None:
         db.add(chat_file)
@@ -677,7 +760,7 @@ def _upload_response(nm: NegotiationMessage) -> dict:
         "deleted":       getattr(nm, "deleted_at", None) is not None,
         "reply_to_message_id": getattr(nm, "reply_to_message_id", None),
         "reply_preview": _reply_preview_dict(nm),
-        **file_fields(nm),
+        **message_media_fields(nm),
     }
 
 
@@ -749,6 +832,8 @@ async def store_ws(
     websocket: WebSocket,
     token: str = Query(...),
     buyer_id: Optional[str] = Query(default=None),
+    # As on the listing socket: only what is newer than this is replayed.
+    since: Optional[str] = Query(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     """Real-time socket for a store-general thread. Same payloads as the
@@ -793,14 +878,24 @@ async def store_ws(
         )
     except Exception as exc:
         logger.warning("[media-ws] store delivery watermark failed: %s", exc)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+    replay_after = _replay_since(since)
+    replay_conds = [NegotiationMessage.store_id == store_id,
+                    NegotiationMessage.buyer_id == effective_buyer_id]
+    if replay_after is not None:
+        replay_conds.append(NegotiationMessage.created_at > replay_after)
     # visibility-ok: direct store socket; via_ai/broker rows dropped below
     hist_result = await db.execute(
         select(NegotiationMessage)
-        .where(NegotiationMessage.store_id == store_id,
-               NegotiationMessage.buyer_id == effective_buyer_id)
+        .where(*replay_conds)
         .order_by(NegotiationMessage.created_at.desc()).limit(50)
     )
-    for m in reversed(list(hist_result.scalars().all())):
+    replay = list(reversed(list(hist_result.scalars().all())))
+    await _release(db)
+    for m in replay:
         if m.role == "broker" or bool(getattr(m, "via_ai", False)):
             continue
         try:

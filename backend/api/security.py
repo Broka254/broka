@@ -268,6 +268,60 @@ def decode_call_token(token: str) -> dict | None:
     return payload
 
 
+# ── Thread token (Reply / Mark as read on a message notification) ───────────
+# A message push carries one, so the notification it draws can be answered
+# or marked read from the shade, and the phone can report the message
+# delivered, by an app whose access token expired long ago. Renewing the
+# session from the background isolate instead raced the app's own renewal
+# for the same refresh token (NOTIFICATIONS.md, "Still open"): the call
+# token's design, applied to one conversation.
+#
+# It names one thread, the side its holder is on there, and the phone it was
+# pushed to (`dev`, push_devices.token_fingerprint). The endpoints that take
+# it (negotiate.py's /notification/...) refuse it once that phone is no
+# longer signed in to the account, so signing out - or signing out
+# everywhere - ends what a notification left in the shade can still do.
+
+def create_thread_token(
+    user_id: str, role: str, buyer_id: str, *,
+    listing_id: str | None = None, store_id: str | None = None,
+    device: str | None = None,
+) -> str:
+    from api.core.config import settings as _settings
+    payload = {
+        "sub":  user_id,
+        "type": "thread",
+        "role": role,
+        "bid":  buyer_id,
+        "lid":  listing_id,
+        "sid":  store_id,
+        "dev":  device,
+        "exp": datetime.now(timezone.utc) + timedelta(
+            hours=_settings.thread_token_expire_hours
+        ),
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def decode_thread_token(token: str) -> dict | None:
+    """The claims of a genuine, unexpired thread token naming exactly one
+    thread, or None. The caller must still check the phone (`dev`) is signed
+    in and the holder is still on that side of the thread."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        return None
+    if payload.get("type") != "thread":
+        return None
+    if payload.get("role") not in ("buyer", "seller"):
+        return None
+    if not payload.get("sub") or not payload.get("bid") or not payload.get("dev"):
+        return None
+    if bool(payload.get("lid")) == bool(payload.get("sid")):
+        return None
+    return payload
+
+
 # ── Refresh token (30 day, DB-backed) ────────────────────────────────────────
 
 def create_refresh_token(user_id: str) -> tuple[str, datetime, str]:

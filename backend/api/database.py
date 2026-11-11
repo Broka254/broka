@@ -577,6 +577,12 @@ class NegotiationMessage(Base):
     file_name      = Column(String(255), nullable=True)
     file_size      = Column(Integer, nullable=True)
     file_mime      = Column(String(127), nullable=True)
+    # Photos sent together (msg_type "image"): one id the sender's app gave
+    # the whole send, so both phones show them in one frame, as WhatsApp
+    # groups an album. Each photo stays its own message (its own upload,
+    # receipt, reply and unsend). NULL on everything else and on photos
+    # from builds before albums, which the app groups by time instead.
+    album_id       = Column(String(64), nullable=True)
 
     # (listing_id, buyer_id) is the thread-identity pair filtered on
     # throughout negotiate.py (history, inbox, deal-status) and
@@ -1482,7 +1488,7 @@ async def _apply_optional_statements(conn, statements) -> None:
         await conn.execute(text(prepared))
 
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 SCHEMA_REVISIONS = (
     (1, "legacy_schema_adoption"),
     (2, "durable_payment_intents_and_callbacks"),
@@ -1519,6 +1525,10 @@ SCHEMA_REVISIONS = (
     # from create_all(); the revision keeps a replica from serving the
     # reports endpoints against a database that has no admin_reports yet.
     (14, "admin_reports"),
+    # Photos sent together in a chat: NegotiationMessage.album_id (the
+    # ALTER below). Without the revision a replica could read history
+    # against a database missing the column - every chat would fail to load.
+    (15, "chat_photo_albums"),
 )
 
 # Tables/columns that must exist before an API process is safe to serve
@@ -2034,6 +2044,8 @@ async def _init_db_impl():
             "ALTER TABLE negotiation_messages ADD COLUMN file_name VARCHAR(255)",
             "ALTER TABLE negotiation_messages ADD COLUMN file_size INTEGER",
             "ALTER TABLE negotiation_messages ADD COLUMN file_mime VARCHAR(127)",
+            # Photos sent together (rev 15): the album a chat photo belongs to.
+            "ALTER TABLE negotiation_messages ADD COLUMN album_id VARCHAR(64)",
             # Zeno conversation durability (2026-11): one row per
             # (owner, mode, listing). The expression unique index in
             # index_patches enforces it - PostgreSQL treats NULL listing
