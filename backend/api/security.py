@@ -322,6 +322,32 @@ def decode_thread_token(token: str) -> dict | None:
     return payload
 
 
+def explain_thread_token(token: str) -> tuple[str, dict | None]:
+    """Why decode_thread_token refused `token`, for the log line saying so.
+
+    ("expired", claims) for a genuine thread token past its time - the
+    signature is still checked, so its claims can name the thread and the
+    phone (the usual case: a push that reached a phone more than
+    THREAD_TOKEN_EXPIRE_HOURS after it was sent). ("invalid", None) for
+    anything else, whose claims say nothing trustworthy. Never authorises:
+    a refused token stays refused.
+    """
+    from jose.exceptions import ExpiredSignatureError
+
+    try:
+        jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except ExpiredSignatureError:
+        try:
+            claims = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM],
+                                options={"verify_exp": False})
+        except JWTError:
+            return "invalid", None
+        return ("expired", claims) if claims.get("type") == "thread" else ("invalid", None)
+    except JWTError:
+        return "invalid", None
+    return "invalid", None
+
+
 # ── Refresh token (30 day, DB-backed) ────────────────────────────────────────
 
 def create_refresh_token(user_id: str) -> tuple[str, datetime, str]:

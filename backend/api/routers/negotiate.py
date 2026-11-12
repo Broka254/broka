@@ -39,7 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, NamedTuple, Optional
 import hashlib
 import httpx
 import os
@@ -4511,18 +4511,43 @@ async def _zeno_unread(db: AsyncSession, listing_id: str, buyer_id: str, my_role
     return (await db.execute(q)).scalar() or 0
 
 
-async def _touch_watermark(
+class _WatermarkMove(NamedTuple):
+    """What one _move_watermark call left in a side's row."""
+    now: _dt                          # the moment the call recorded
+    delivered_before: Optional[_dt]   # the delivery watermark it found
+    delivered_at: Optional[_dt]       # the delivery watermark it left
+    read_at: Optional[_dt]            # the read watermark it left
+
+    @property
+    def delivered_advanced(self) -> bool:
+        return self.delivered_at is not None and (
+            self.delivered_before is None or self.delivered_at > self.delivered_before)
+
+
+async def _move_watermark(
     db: AsyncSession, listing_id: Optional[str], buyer_id: str, role: str,
     *, delivered: bool, read: bool, store_id: Optional[str] = None,
-):
-    """Advance one side's delivery and/or read watermark to now.
+    delivered_up_to: Optional[_dt] = None,
+) -> _WatermarkMove:
+    """Advance one side's delivery and/or read watermark.
 
     Watermarks only ever move FORWARD. An out-of-order request (a slow
     retry landing after a newer one, or two devices for the same account
     reporting at once) must not rewind a receipt the other party has
     already been shown - a tick that un-ticks is worse than a late tick.
+
+    A delivery moves to now, unless `delivered_up_to` names the newest
+    message the device is known to hold - what a push announced. Then it
+    moves to that message and no further: a receipt that lands late (a
+    retry, a phone that woke slowly, the push handler run again when its
+    notification is dismissed) must not mark as delivered what the sender
+    wrote after that push, which this phone has not been shown to have. A
+    read is never bounded: the person read the thread as it is now.
     """
     now = _dt.utcnow()
+    mark = now
+    if delivered_up_to is not None and not read:
+        mark = min(delivered_up_to, now)
     if store_id:
         _trs_cond = (ThreadReadState.store_id == store_id)
     else:
@@ -4535,21 +4560,27 @@ async def _touch_watermark(
         ).execution_options(populate_existing=True))
         row = existing.scalar_one_or_none()
         if row is None:
-            db.add(ThreadReadState(
+            before = None
+            row = ThreadReadState(
                 listing_id=listing_id, store_id=store_id, buyer_id=buyer_id, role=role,
                 last_read_at=now if read else _dt(1970, 1, 1),
-                last_delivered_at=now if (delivered or read) else None,
-            ))
+                last_delivered_at=mark if (delivered or read) else None,
+            )
+            db.add(row)
         else:
+            before = row.last_delivered_at
             if read and (row.last_read_at is None or now > row.last_read_at):
                 row.last_read_at = now
             # Reading implies delivery - you can't read what never arrived.
             if (delivered or read) and (
-                    row.last_delivered_at is None or now > row.last_delivered_at):
-                row.last_delivered_at = now
+                    row.last_delivered_at is None or mark > row.last_delivered_at):
+                row.last_delivered_at = mark
+        # Plain values, read before the commit: after a rollback the row
+        # is expired, and async code cannot lazy-load it back.
+        move = _WatermarkMove(now, before, row.last_delivered_at, row.last_read_at)
         try:
             await db.commit()
-            return now
+            return move
         except IntegrityError:
             # This side's first watermark, written twice at once - a push's
             # delivered receipt and the inbox sweep's land together. The
@@ -4560,7 +4591,18 @@ async def _touch_watermark(
             await db.rollback()
             if attempt:
                 raise
-    return now
+    return _WatermarkMove(now, None, None, None)
+
+
+async def _touch_watermark(
+    db: AsyncSession, listing_id: Optional[str], buyer_id: str, role: str,
+    *, delivered: bool, read: bool, store_id: Optional[str] = None,
+):
+    """Advance one side's delivery and/or read watermark to now (see
+    _move_watermark). Returns the moment recorded."""
+    move = await _move_watermark(db, listing_id, buyer_id, role,
+                                 delivered=delivered, read=read, store_id=store_id)
+    return move.now
 
 
 class MarkDeliveredRequest(BaseModel):
@@ -5022,79 +5064,170 @@ class NotificationReplyIn(NotificationActionIn):
     client_msg_id: Optional[str] = Field(default=None, max_length=64)
 
 
-async def _notification_thread(db: AsyncSession, token: str) -> dict:
+class NotificationDeliveredIn(NotificationActionIn):
+    # The message the push announced (its data's messageId): the delivery
+    # watermark moves up to it and no further (_move_watermark). Optional,
+    # because app builds from before it was sent still post the token alone
+    # - and are answered as before, with the watermark at now.
+    message_id: Optional[str] = Field(default=None, max_length=64)
+
+
+def _iso(dt: Optional[_dt]) -> Optional[str]:
+    return dt.isoformat() + "Z" if dt else None
+
+
+def _refused(action: str, status: int, reason: str, detail: str, **ids) -> HTTPException:
+    """Log why a notification's request was refused, and return the error.
+
+    One line per refusal, so "why did that message never get its double
+    tick?" is answered from the API log: an expired token (the push sat
+    undelivered for a week), a phone that signed out, a listing that went.
+    Ids only - never the token, which acts for the account until it expires.
+    """
+    event = "DELIVERY_ACK_FAILED" if action == "delivered" else "NOTIFICATION_ACTION_REFUSED"
+    logger.info("[negotiate] %s action=%s status=%d reason=%s %s", event, action, status,
+                reason, " ".join(f"{k}={v or '-'}" for k, v in ids.items()))
+    return HTTPException(status_code=status, detail=detail)
+
+
+async def _notification_thread(db: AsyncSession, token: str, *, action: str) -> dict:
     """Who a notification's token speaks for, and in which thread - checked
     against the database now, not only the token: the phone it was pushed
     to must still be signed in to the account (signing out ends what a
     notification left in the shade can do), and the account must still be
     on that side of the conversation."""
     from api.core import push_devices
-    from api.security import decode_thread_token
+    from api.security import decode_thread_token, explain_thread_token
 
     claims = decode_thread_token(token)
     if claims is None:
-        raise HTTPException(status_code=401,
-                            detail="This notification has expired. Open BROKA to reply.")
+        # Named in the log only when the signature holds (an expired
+        # token); a forged one's claims are whatever its maker wrote.
+        reason, old = explain_thread_token(token)
+        old = old or {}
+        raise _refused(action, 401, f"token_{reason}",
+                       "This notification has expired. Open BROKA to reply.",
+                       user=old.get("sub"), device=old.get("dev"),
+                       thread=f"{old.get('lid') or old.get('sid') or '-'}:{old.get('bid') or '-'}")
     user_id = claims["sub"]
-    if not await push_devices.device_signed_in(db, user_id, claims["dev"]):
-        raise HTTPException(status_code=401,
-                            detail="This phone is no longer signed in. Open BROKA to reply.")
     role, buyer_id = claims["role"], claims["bid"]
     listing_id = claims.get("lid") or None
     store_id = claims.get("sid") or None
+    ids = {"user": user_id, "device": claims["dev"], "role": role,
+           "thread": f"{listing_id or store_id}:{buyer_id}"}
+    if not await push_devices.device_signed_in(db, user_id, claims["dev"]):
+        raise _refused(action, 401, "device_signed_out",
+                       "This phone is no longer signed in. Open BROKA to reply.", **ids)
     if store_id:
         from api.models.store import Store
         seller_id = (await db.execute(
             select(Store.owner_id).where(Store.id == store_id, Store.deleted_at.is_(None))
         )).scalar_one_or_none()
         if seller_id is None:
-            raise HTTPException(status_code=404, detail="Store not found")
+            raise _refused(action, 404, "store_gone", "Store not found", **ids)
     else:
         seller_id = (await db.execute(
             select(Listing.seller_id).where(Listing.id == listing_id)
         )).scalar_one_or_none()
         if seller_id is None:
-            raise HTTPException(status_code=404, detail="Listing not found")
+            raise _refused(action, 404, "listing_gone", "Listing not found", **ids)
     on_that_side = (user_id == seller_id) if role == "seller" else (
         user_id == buyer_id and user_id != seller_id)
     if not on_that_side:
-        raise HTTPException(status_code=403, detail="Not your conversation")
+        raise _refused(action, 403, "not_on_that_side", "Not your conversation", **ids)
     return {"user_id": user_id, "role": role, "buyer_id": buyer_id,
-            "listing_id": listing_id, "store_id": store_id}
+            "listing_id": listing_id, "store_id": store_id, "device": claims["dev"]}
 
 
-async def _notification_receipt(db: AsyncSession, thread: dict, *, read: bool) -> _dt:
+async def _announced_at(db: AsyncSession, thread: dict, message_id: str) -> _dt:
+    """When the message a push announced was sent: the furthest that push's
+    delivery receipt may move the watermark.
+
+    It must be news for this side of this conversation - the push's own
+    audience rule (visible_to_role_clause). A message from another thread,
+    or one this side wrote itself, is refused rather than taken as "up to
+    now", which would credit whatever the token's thread holds. An unsent
+    message still counts: the push that announced it did arrive.
+    """
+    in_thread = (NegotiationMessage.store_id == thread["store_id"]) if thread["store_id"] \
+        else (NegotiationMessage.listing_id == thread["listing_id"])
+    # visibility-ok: one created_at for a bound, no content leaves; visible_to_role_clause keeps it to this side's news
+    sent_at = (await db.execute(select(NegotiationMessage.created_at).where(
+        NegotiationMessage.id == message_id,
+        in_thread,
+        NegotiationMessage.buyer_id == thread["buyer_id"],
+        visible_to_role_clause(thread["role"]),
+    ))).scalar_one_or_none()
+    if sent_at is None:
+        raise _refused("delivered", 404, "message_not_in_thread",
+                       "Message not found in this conversation",
+                       user=thread["user_id"], device=thread["device"], role=thread["role"],
+                       thread=f"{thread['listing_id'] or thread['store_id']}:{thread['buyer_id']}",
+                       message=message_id)
+    return sent_at
+
+
+async def _notification_receipt(
+    db: AsyncSession, thread: dict, *, read: bool, delivered_up_to: Optional[_dt] = None,
+) -> _WatermarkMove:
     """Move this side's watermark and tell the other side's open chat, as
-    mark-delivered / mark-read do."""
-    now = await _touch_watermark(
+    mark-delivered / mark-read do - with the watermarks the row now holds,
+    which for a bounded delivery is not now. A delivery that moved nothing
+    (the same push acknowledged twice, or an older one after a newer) is
+    not announced again."""
+    move = await _move_watermark(
         db, thread["listing_id"], thread["buyer_id"], thread["role"],
-        delivered=True, read=read, store_id=thread["store_id"])
-    read_at = now if read else None
+        delivered=True, read=read, store_id=thread["store_id"],
+        delivered_up_to=delivered_up_to)
+    if not read and not move.delivered_advanced:
+        return move
+    delivered_at = move.delivered_at
+    read_at = move.read_at if read else None
     if thread["store_id"]:
         try:
             from api.routers.media import broadcast_store_receipt
             await broadcast_store_receipt(
                 thread["store_id"], thread["buyer_id"], thread["role"],
-                exclude_uid=thread["user_id"], delivered_at=now, read_at=read_at)
+                exclude_uid=thread["user_id"], delivered_at=delivered_at, read_at=read_at)
         except Exception as exc:
             logger.debug("[negotiate] store receipt broadcast failed: %s", exc)
     else:
         await _announce_receipt(thread["listing_id"], thread["buyer_id"], thread["role"],
-                                thread["user_id"], delivered_at=now, read_at=read_at)
-    return now
+                                thread["user_id"], delivered_at=delivered_at, read_at=read_at)
+    return move
 
 
 @router.post("/notification/delivered")
 async def notification_delivered(
-    payload: NotificationActionIn,
+    payload: NotificationDeliveredIn,
     db: AsyncSession = Depends(get_db),
 ):
     """The phone a message push reached has the message: the sender's tick
     becomes the double tick. Sent by the app as the push arrives, often from
-    a closed app, which has no live sign-in."""
-    thread = await _notification_thread(db, payload.thread_token)
-    now = await _notification_receipt(db, thread, read=False)
-    return {"status": "ok", "last_delivered_at": now.isoformat() + "Z"}
+    a closed app, which has no live sign-in.
+
+    With `message_id` (the push's messageId) the watermark moves up to that
+    message, not to the moment this lands. Never a read: "Seen" is only
+    for the chat being opened, or Mark as read."""
+    thread = await _notification_thread(db, payload.thread_token, action="delivered")
+    message_id = (payload.message_id or "").strip() or None
+    up_to = await _announced_at(db, thread, message_id) if message_id else None
+    move = await _notification_receipt(db, thread, read=False, delivered_up_to=up_to)
+    advanced = move.delivered_advanced
+    where = f"{thread['listing_id'] or thread['store_id']}:{thread['buyer_id']}"
+    if advanced:
+        logger.info(
+            "[negotiate] DELIVERY_WATERMARK_UPDATED thread=%s role=%s user=%s message=%s "
+            "from=%s to=%s source=push_receipt",
+            where, thread["role"], thread["user_id"], message_id or "-",
+            _iso(move.delivered_before) or "-", _iso(move.delivered_at))
+    logger.info(
+        "[negotiate] DELIVERY_ACK_SUCCESS thread=%s role=%s user=%s device=%s message=%s "
+        "bounded=%s advanced=%s watermark=%s",
+        where, thread["role"], thread["user_id"], thread["device"], message_id or "-",
+        up_to is not None, advanced, _iso(move.delivered_at))
+    return {"status": "ok", "last_delivered_at": _iso(move.delivered_at),
+            "advanced": advanced, "message_id": message_id}
 
 
 @router.post("/notification/read")
@@ -5104,9 +5237,9 @@ async def notification_read(
 ):
     """Mark as read, pressed on a message notification: the thread is read
     up to now, and the sender sees "Seen", as when the chat is opened."""
-    thread = await _notification_thread(db, payload.thread_token)
-    now = await _notification_receipt(db, thread, read=True)
-    return {"status": "ok", "last_read_at": now.isoformat() + "Z"}
+    thread = await _notification_thread(db, payload.thread_token, action="read")
+    move = await _notification_receipt(db, thread, read=True)
+    return {"status": "ok", "last_read_at": _iso(move.now)}
 
 
 @router.post("/notification/reply")
@@ -5118,7 +5251,7 @@ async def notification_reply(
     direct message - direct_message's checks, broadcast, push to the other
     side and contact-leak audit - and the thread is marked read: nobody
     answers a message they have not read."""
-    thread = await _notification_thread(db, payload.thread_token)
+    thread = await _notification_thread(db, payload.thread_token, action="reply")
     # Keyed by the account the token speaks for, never by the body.
     from api.core.rate_limit import message_limiter
     await message_limiter.check_and_record(thread["user_id"])
@@ -5134,8 +5267,8 @@ async def notification_reply(
         ),
         db=db, current_user={"id": thread["user_id"]},
     )
-    now = await _notification_receipt(db, thread, read=True)
-    return {**result, "last_read_at": now.isoformat() + "Z"}
+    move = await _notification_receipt(db, thread, read=True)
+    return {**result, "last_read_at": _iso(move.now)}
 
 
 # Fields of an inbox row that follow the clock rather than the data: "12s
