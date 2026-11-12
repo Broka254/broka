@@ -160,3 +160,20 @@ server go in `web/src/lib/server-config.ts`, never behind `NEXT_PUBLIC_`.
 | Push notifications (calls, messages, alerts to a closed app) | `backend/api/core/push_devices.py`, `message_push.py`, `flutter_app/lib/services/notification_service.dart`, `NOTIFICATIONS.md` |
 | Scheduled work | `backend/api/core/workers.py` (the 5-minute sweep) |
 | The Rust extension, chat contact-leak scanning, distances | `backend/native/README.md`, `backend/api/core/native.py`, `text_guard.py`, `geo.py` |
+
+## APK release workflow — preserve this policy
+
+- `.github/workflows/build.yml` must publish `latest-release` after a
+  successful build on `main` for both a normal `push` and an intentional
+  `workflow_dispatch` run targeting `main`.
+- The `Delete previous release` and `Create GitHub Release` steps must use
+  the same gate: `github.ref == 'refs/heads/main'` AND
+  (`github.event_name == 'push'` OR
+  `github.event_name == 'workflow_dispatch'`). Do not narrow this back to
+  push-only. Pull-request runs must never delete or publish the release.
+- The `repo-map` job's generated-map commit remains push-only; do not change
+  that condition when changing the APK release gate.
+- Before editing or synchronizing `.github/workflows/build.yml`, preserve
+  these release conditions. A source mirror or merge must not silently
+  restore older workflow logic. After any workflow change, inspect the
+  resulting file on `main` and verify both release steps' conditions.
