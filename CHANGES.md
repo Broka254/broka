@@ -1,3 +1,57 @@
+# No message lost to an offline recipient: delivery tracked per message, pushes retried, the app syncs what it missed, and the log says what happened to each message (2026-11-12)
+
+Asked for: a message sent while its recipient is offline, has the app
+closed or the phone locked must reach them when they reconnect and open or
+resume BROKA, without the sender resending it. The Render log must show,
+per message, whether it was saved, pushed, delivered or read. Delivered
+means the recipient's app has it, not that Firebase accepted a push.
+NOTIFICATIONS.md ("No message lost to an offline recipient") has the
+design and the log reference.
+
+- **Delivery per message and recipient** (`message_deliveries`, schema
+  revision 17).
+  - Each row is written in the message's own transaction by the existing
+    session hook. Its status runs SAVED, PUSH_PENDING, PUSH_ACCEPTED or
+    PUSH_FAILED, DELIVERED, READ, and only moves forward.
+  - DELIVERED comes only from the app: the new sync acknowledgement, or the
+    push receipt for the message it names. READ comes only from read
+    receipts.
+- **Push retries that survive a restart.**
+  - Transient FCM failures are retried by a 30-second sweep: 30 s, 1 min,
+    2 min, 4 min, five attempts in all. The sweep also sends pushes a
+    restart dropped.
+  - No phone, a dead token or a misconfigured server is not retried. The
+    message still syncs.
+- **Offline sync.**
+  - `GET /negotiate/sync` hands the caller's undelivered messages, across
+    every conversation, oldest first, a page at a time. Handing them out is
+    not delivery.
+  - `POST /negotiate/sync/ack` records the ones the app stored, and moves
+    the sender's double tick up to them, never further.
+  - The app (`MessageSyncService`) syncs on sign-in and app start, on
+    resume, when the network comes back (`ConnectivityBridge.kt`), on
+    opening a conversation, on a foreground push, and when the Inbox shows
+    news. It stores before it acknowledges, keeps each message once, and
+    retries while in front. Against an older server it keeps the old
+    receipts.
+  - The Inbox sweep no longer posts "delivered" for a thread it has not
+    fetched. An open chat behind the home screen acknowledges by message
+    id.
+- **Lifecycle log.**
+  - Every step is one line with ids only: `MESSAGE_SAVED`,
+    `MESSAGE_PUSH_STARTED`, `MESSAGE_PUSH_ACCEPTED`, `MESSAGE_PUSH_FAILED`,
+    `MESSAGE_DELIVERY_RETRY`, `OFFLINE_SYNC_STARTED`,
+    `MESSAGE_SYNCED_TO_CLIENT`, `MESSAGE_DELIVERY_ACK_RECEIVED`,
+    `MESSAGE_DELIVERED`, `MESSAGE_READ`, `OFFLINE_SYNC_COMPLETED`,
+    `OFFLINE_SYNC_FAILED`.
+  - A `MESSAGE_DELIVERY_SUMMARY` every 15 minutes.
+  - `FcmResult.error_code` carries FCM's own reason (UNAVAILABLE,
+    UNREGISTERED...).
+
+Tests: `backend/tests/test_offline_delivery.py`,
+`flutter_app/test/message_sync_test.dart`,
+`flutter_app/test/direct_chat_offline_sync_test.dart`.
+
 # The listing page: smaller Like and Save, the price at the foot of the screen, "Mark as unavailable" that texts the seller, the seller's number, reply time to the first message, Zeno's three questions fixed, and two free Zeno sessions a day (2026-11-12)
 
 Asked for: Like and Save were too large; the price and Start Negotiation

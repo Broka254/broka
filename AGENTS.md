@@ -158,6 +158,7 @@ server go in `web/src/lib/server-config.ts`, never behind `NEXT_PUBLIC_`.
 | The Buying Agent's screen (its motion, radar and results) | `flutter_app/lib/screens/zeno_screen.dart` (buying mode), `flutter_app/lib/features/buy_agent/presentation/widgets/` (`agent_motion.dart`, `agent_hud.dart`) |
 | Calls | `backend/api/routers/calls.py`, `CALLING.md` |
 | Push notifications (calls, messages, alerts to a closed app) | `backend/api/core/push_devices.py`, `message_push.py`, `flutter_app/lib/services/notification_service.dart`, `NOTIFICATIONS.md` |
+| Message delivery: per-message status, push retries, the offline sync and its log | `backend/api/core/message_delivery.py`, `GET /negotiate/sync` and `POST /negotiate/sync/ack` in `negotiate.py`, `flutter_app/lib/services/message_sync_service.dart`, `NOTIFICATIONS.md` ("No message lost to an offline recipient") |
 | Scheduled work | `backend/api/core/workers.py` (the 5-minute sweep) |
 | The Rust extension, chat contact-leak scanning, distances | `backend/native/README.md`, `backend/api/core/native.py`, `text_guard.py`, `geo.py` |
 
