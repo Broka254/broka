@@ -76,6 +76,68 @@ class LocalChatStore {
     } catch (_) {}
   }
 
+  /// Add [incoming] to [scope]'s cached thread - each message once, by its
+  /// server id, in time order - and save it.
+  ///
+  /// True once they are saved (or were all there already): what the
+  /// offline sync waits for before telling the server this phone has them
+  /// (MessageSyncService). Unlike [save], a failure is reported, not
+  /// swallowed - a message acknowledged but never stored would be lost to
+  /// this phone, and the server would stop handing it out.
+  static Future<bool> mergeMessages(
+      String scope, List<Map<String, dynamic>> incoming) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_key(scope));
+      final existing = (raw == null || raw.isEmpty)
+          ? <Map<String, dynamic>>[]
+          : (jsonDecode(raw) as List)
+              .whereType<Map>()
+              .map((m) => Map<String, dynamic>.from(m))
+              .toList();
+      final known = <String>{
+        for (final m in existing)
+          if (m['id'] is String && (m['id'] as String).isNotEmpty) m['id'] as String,
+      };
+      final out = List<Map<String, dynamic>>.of(existing);
+      for (final m in incoming) {
+        final id = m['id'];
+        if (id is! String || id.isEmpty || !known.add(id)) continue;
+        out.insert(_slotFor(out, m), m);
+      }
+      if (out.length == existing.length) return true;
+      final toStore = out.length > _maxCached
+          ? out.sublist(out.length - _maxCached)
+          : out;
+      return await prefs.setString(_key(scope), jsonEncode(toStore));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Where [m] goes so the list reads in time order: after everything not
+  /// later than it. Undated entries (a bubble still sending) stay put.
+  static int _slotFor(List<Map<String, dynamic>> list, Map<String, dynamic> m) {
+    final at = _when(m);
+    var i = list.length;
+    if (at == null) return i;
+    while (i > 0) {
+      final before = _when(list[i - 1]);
+      if (before == null || !before.isAfter(at)) break;
+      i--;
+    }
+    return i;
+  }
+
+  static DateTime? _when(Map<String, dynamic> m) {
+    final v = m['created_at'];
+    if (v is! String || v.isEmpty) return null;
+    // The server's times are UTC with or without the "Z"; the chat's own
+    // copies carry it. Compare them as the same instants either way.
+    final parsed = DateTime.tryParse(v.endsWith('Z') || v.contains('+') ? v : '${v}Z');
+    return parsed?.toUtc();
+  }
+
   // ── Receipt watermarks: the other side's last delivered/read instants ────
   // Kept separately from the message list because they arrive on their own
   // channel (read-status polls, receipt frames) and the message cache is

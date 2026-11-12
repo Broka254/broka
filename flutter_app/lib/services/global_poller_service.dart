@@ -39,8 +39,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import '../core/network/data_saver.dart';
 import 'api_service.dart';
+import 'connectivity_monitor.dart';
 import 'local_chat_store.dart';
 import 'active_call.dart';
+import 'message_sync_service.dart';
 import 'notification_service.dart';
 import 'callkit_service.dart';
 
@@ -126,10 +128,15 @@ class GlobalPollerService {
   final Set<String> _activelyViewedThreads = {};
 
   // Thread key -> signature of the newest message this sweep has already
-  // recorded as delivered (see _checkAll). In-memory only: an app restart
-  // re-posts once per unread thread, which the forward-only watermark
-  // absorbs.
+  // recorded as delivered (see _checkAll) - against a server without the
+  // offline sync. In-memory only: an app restart re-posts once per unread
+  // thread, which the forward-only watermark absorbs.
   final Map<String, String> _deliveredMarks = {};
+
+  // Thread key -> signature of the newest message the offline sync was
+  // asked to fetch for. Its own map: these were never posted as receipts,
+  // so a server found to have no sync must still get them (_deliveredMarks).
+  final Map<String, String> _syncedMarks = {};
 
   static String threadKeyFor(String listingId, String? buyerId) =>
       '$listingId::${buyerId ?? ''}';
@@ -166,6 +173,7 @@ class GlobalPollerService {
   bool _appInForeground = true;
   set appInForeground(bool value) {
     _appInForeground = value;
+    MessageSyncService.instance.appInForeground = value;
     if (!_running) return;
     if (!value && pushReady) {
       _timer?.cancel();
@@ -314,7 +322,23 @@ class GlobalPollerService {
     _checkAll();
     unawaited(ensurePushRegistration());
     unawaited(_registerVoipTokenIfAvailable());
+    // Everything sent to this account while the phone was offline or the
+    // app closed, in every conversation - stored, then acknowledged.
+    final sync = MessageSyncService.instance;
+    sync.onSynced = nudge;
+    sync.start();
+    unawaited(_syncMessages('app_start'));
+    ConnectivityMonitor.instance.start(() {
+      unawaited(_syncMessages('connectivity_restored'));
+      nudge();
+    });
   }
+
+  /// Run the offline sync. An older server without it answers so, and the
+  /// Inbox sweep goes back to posting its own delivered receipts
+  /// ([_checkAll]).
+  Future<void> _syncMessages(String trigger) =>
+      MessageSyncService.instance.sync(trigger: trigger);
 
   /// Sweep everything that happened while we weren't looking.
   ///
@@ -343,6 +367,8 @@ class GlobalPollerService {
     unawaited(ensurePushRegistration());
     // Back from the background: full speed, whatever the pace was before.
     _quietSweeps = 0;
+    // What arrived while the app was away, in every conversation.
+    unawaited(_syncMessages('resume'));
     await _checkAll();
   }
 
@@ -497,10 +523,13 @@ class GlobalPollerService {
     _registeredPushUserId = null;
     _activelyViewedThreads.clear();
     _deliveredMarks.clear();
+    _syncedMarks.clear();
     _shownCallNotifications.clear();
     _acknowledgedRooms.clear();
     unreadTotal.value = 0;
     inbox.value = null;
+    MessageSyncService.instance.stop();
+    ConnectivityMonitor.instance.stop();
   }
 
   String get _inboxScope =>
@@ -550,6 +579,7 @@ class GlobalPollerService {
     _checking = true;
     _ticksSinceSweep = 0;
     var reachedServer = false;
+    final wasFailing = _failedSweeps > 0;
     try {
       // Conditional: an unchanged inbox comes back as an empty 304 and the
       // previous list (ApiService.getInbox). Every check below still runs
@@ -559,6 +589,9 @@ class GlobalPollerService {
       final changed = !ApiService.lastInboxNotModified;
       reachedServer = true;
       _failedSweeps = 0;
+      // The server answers again after failing: the network is back (on a
+      // phone where ConnectivityMonitor has nothing to say, iOS included).
+      if (wasFailing) unawaited(_syncMessages('network_back'));
       _quietSweeps = changed ? 0 : _quietSweeps + 1;
       inbox.value = InboxSnapshot(
         threads: threads,
@@ -622,6 +655,11 @@ class GlobalPollerService {
               '${_previewFor(t['last_msg_type'] as String? ?? 'text', last)}';
         }
       }
+      // Whether a thread shows news this sweep has not seen yet: then the
+      // offline sync fetches it, stores it and acknowledges it, below.
+      var newsToSync = false;
+      final syncHandlesReceipts = MessageSyncService.instance.isRunning &&
+          MessageSyncService.instance.serverSupportsSync != false;
       for (final thread in threads) {
         final threadId = notificationThreadId(thread);
         if (threadId == null) continue;
@@ -634,13 +672,13 @@ class GlobalPollerService {
           continue;
         }
 
-        // The inbox sweep has just pulled this thread's latest message onto
-        // the device. That is exactly what "delivered" means - the app has
-        // it, the user hasn't necessarily looked - so record it here rather
-        // than waiting for them to open the thread. Without this, a sender's
-        // tick would sit on a single check until the recipient actually
-        // opened the chat, which is precisely the ambiguity the delivered
-        // state exists to remove.
+        // A thread with news. "Delivered" means this phone has the
+        // messages, and an inbox row has only the last one's first line:
+        // the offline sync fetches the messages themselves, stores them,
+        // and the server records each delivered when the sync says it has
+        // them (MessageSyncService). Only against a server without the
+        // sync does the sweep post the thread's delivered receipt itself,
+        // as it always did - the older backend has nothing better.
         // Backend sends `unread`; it only started sending `unread_count`
         // alongside it in this change. Read both so this works against an
         // older backend too - previously it read only `unread_count`, got
@@ -650,7 +688,16 @@ class GlobalPollerService {
         // "delivered" exists to distinguish from.
         final unread = (thread['unread_count'] as int?) ??
                        (thread['unread'] as int?) ?? 0;
-        if (unread > 0) {
+        if (unread > 0 && syncHandlesReceipts) {
+          // threadKeyFor's / storeThreadKeyFor's form.
+          final key = '$threadId::${thread['buyer_id'] ?? ''}';
+          final signature =
+              '${thread['last_message_id'] ?? ''}|${thread['last_message_at'] ?? ''}';
+          if (_syncedMarks[key] != signature) {
+            _syncedMarks[key] = signature;
+            newsToSync = true;
+          }
+        } else if (unread > 0) {
           // Once per new message, not once per sweep: this used to post
           // on every 7-second pass for as long as the thread stayed
           // unread - a database commit and a receipt broadcast to the
@@ -696,6 +743,7 @@ class GlobalPollerService {
         // reason in the V2 pass; this copy was missed.
         if (!byListing) await _checkThreadForIncomingCall(thread);
       }
+      if (newsToSync) unawaited(_syncMessages('inbox'));
       if (!announce) await prefs.setBool(_primedKeyFor, true);
       if (!hiddenPrimed) await prefs.setBool(_hiddenPrimedKeyFor, true);
       if (!announce && primeThreads > 0) {

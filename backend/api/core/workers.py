@@ -111,6 +111,16 @@ _nudge_task: asyncio.Task | None = None
 _nudge_running = False
 _service_communications_task: asyncio.Task | None = None
 _service_communications_running = False
+_message_delivery_task: asyncio.Task | None = None
+_message_delivery_running = False
+
+# Chat message pushes that failed (FCM unavailable, a phone offline) or never
+# went (a restart during the debounce) are retried from the delivery rows
+# themselves (api/core/message_delivery.py), so the queue survives a restart
+# and needs no worker service. 30s is finer than the first backoff step.
+MESSAGE_DELIVERY_SWEEP_SECONDS = 30
+# And where every recent message stands, one line in the log this often.
+MESSAGE_DELIVERY_SUMMARY_SECONDS = 900
 
 # The availability nudge has its own, much faster loop.
 #
@@ -222,6 +232,43 @@ async def _nudge_loop(interval_seconds: int = NUDGE_SWEEP_SECONDS) -> None:
                     await task_lapse_unpaid_auction_wins({})
                 except Exception as exc:
                     logger.error("[nudge] auction payment-lapse sweep failed: %s", exc)
+        await asyncio.sleep(interval_seconds)
+
+
+async def _message_delivery_loop(interval_seconds: int = MESSAGE_DELIVERY_SWEEP_SECONDS) -> None:
+    """Push again what is due, and log where recent messages stand.
+
+    One replica at a time (the lease): a second one would send the same
+    retry twice. A failed pass is logged and the next one tries again; the
+    rows it did not get to are still due.
+    """
+    import time
+
+    from api.core import message_delivery
+
+    global _message_delivery_running
+    _message_delivery_running = True
+    logger.info("[delivery] message push retry sweep started (every %ds)", interval_seconds)
+    last_summary = None
+    while _message_delivery_running:
+        async with scheduler_lease("broka:scheduler:message_delivery") as acquired:
+            if acquired:
+                try:
+                    await message_delivery.retry_due_pushes()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.error("[delivery] retry sweep failed type=%s", type(exc).__name__)
+                if (last_summary is None
+                        or time.monotonic() - last_summary >= MESSAGE_DELIVERY_SUMMARY_SECONDS):
+                    last_summary = time.monotonic()
+                    try:
+                        await message_delivery.delivery_summary()
+                        await message_delivery.prune()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        logger.error("[delivery] summary failed type=%s", type(exc).__name__)
         await asyncio.sleep(interval_seconds)
 
 
@@ -429,7 +476,7 @@ async def task_expire_buy_agent_watches(ctx: dict | None = None) -> None:
 
 
 async def start_periodic_sweep(interval_seconds: int = 300) -> None:
-    global _sweep_task, _nudge_task, _service_communications_task
+    global _sweep_task, _nudge_task, _service_communications_task, _message_delivery_task
     _sweep_task = asyncio.create_task(_periodic_sweep_loop(interval_seconds))
     # Separate task, not another entry in the 300s loop - see NUDGE_SWEEP_SECONDS.
     _nudge_task = asyncio.create_task(_nudge_loop())
@@ -440,16 +487,20 @@ async def start_periodic_sweep(interval_seconds: int = 300) -> None:
     _service_communications_task = asyncio.create_task(
         _service_communications_loop(_settings.service_communication_sweep_seconds)
     )
+    # Chat message push retries - see MESSAGE_DELIVERY_SWEEP_SECONDS.
+    _message_delivery_task = asyncio.create_task(_message_delivery_loop())
     logger.info("[sweep] periodic deal-timer sweep started (every %ds)", interval_seconds)
 
 
 async def stop_periodic_sweep() -> None:
     global _sweep_running, _sweep_task, _nudge_running, _nudge_task
     global _service_communications_running, _service_communications_task
+    global _message_delivery_running, _message_delivery_task
     _sweep_running = False
     _nudge_running = False
     _service_communications_running = False
-    for task in (_sweep_task, _nudge_task, _service_communications_task):
+    _message_delivery_running = False
+    for task in (_sweep_task, _nudge_task, _service_communications_task, _message_delivery_task):
         if task:
             task.cancel()
             try:

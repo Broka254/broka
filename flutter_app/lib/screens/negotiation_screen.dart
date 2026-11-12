@@ -45,6 +45,7 @@ import '../models/listing.dart';
 import '../services/last_screen_tracker.dart';
 import '../services/global_poller_service.dart';
 import '../services/local_chat_store.dart';
+import '../services/message_sync_service.dart';
 import '../services/chat_media_vault.dart';
 import '../services/counterparty_profile_cache.dart';
 import '../services/zeno_voice_controller.dart';
@@ -701,6 +702,15 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     }
   }
 
+  // The other side's messages this screen has told the server it holds
+  // (_acknowledgeInbound), so each is acknowledged once.
+  final Set<String> _acknowledgedIds = {};
+
+  // The offline sync's hand-off while this conversation is open
+  // (MessageSyncService.attach), and the cache scope it was attached for.
+  SyncedMessagesSink? _syncSink;
+  String? _syncScope;
+
   // Polling fallback (used when WS not available)
   Timer? _pollTimer;
 
@@ -926,6 +936,11 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     unawaited(_restoreMediaOutbox());
     _loadHistory();
     _connectWebSocket();
+    // While this conversation is open, what the offline sync brings for it
+    // comes here - this screen owns its cache and rewrites it from what it
+    // shows - and opening it is a moment to sync every conversation.
+    _attachSync();
+    unawaited(MessageSyncService.instance.sync(trigger: 'open_conversation'));
     // A message push for this conversation while it is open: the server
     // has something the socket may not have brought - fetch it now rather
     // than when a dead socket is noticed.
@@ -1874,10 +1889,83 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       unawaited(ApiService.markThreadRead(_listing?.id,
           storeId: _storeId, buyerId: _buyerId));
     } else {
-      unawaited(ApiService.markThreadDelivered(_listing?.id,
-          storeId: _storeId, buyerId: _buyerId));
+      unawaited(_acknowledgeInbound());
     }
     await _refreshReceipts();
+  }
+
+  /// This screen holds the other side's messages but nobody is looking at
+  /// them (the app behind the home screen, something open over the chat):
+  /// delivered, not read. By their ids, so the server records exactly
+  /// these and moves the sender's double tick up to the newest of them -
+  /// "delivered up to now" counted anything sent in the moment after this
+  /// screen last fetched. Against a server without per-message receipts,
+  /// the thread's delivered receipt as before.
+  Future<void> _acknowledgeInbound() async {
+    final pending = [
+      for (final m in _messages)
+        if (!m.isPending && !m.isBroker && m.role != _role &&
+            !_acknowledgedIds.contains(m.id))
+          m.id,
+    ];
+    if (pending.isEmpty) return;
+    // The newest hundred: anything older has long been acknowledged, by
+    // this screen or the sync.
+    final ids = pending.length > 100 ? pending.sublist(pending.length - 100) : pending;
+    if (MessageSyncService.instance.serverSupportsSync != false) {
+      final answer = await ApiService.acknowledgeMessages(ids, source: 'chat');
+      if (answer.ok) {
+        _acknowledgedIds.addAll(ids);
+        return;
+      }
+      if (!answer.unsupported) return; // tried again on the next receipt
+    }
+    if (await ApiService.markThreadDelivered(_listing?.id,
+        storeId: _storeId, buyerId: _buyerId)) {
+      _acknowledgedIds.addAll(ids);
+    }
+  }
+
+  void _attachSync() {
+    _detachSync();
+    final scope = _threadScopeKey();
+    Future<void> sink(List<Map<String, dynamic>> messages) =>
+        _absorbSynced(messages);
+    _syncSink = sink;
+    _syncScope = scope;
+    MessageSyncService.instance.attach(scope, sink);
+  }
+
+  void _detachSync() {
+    final sink = _syncSink, scope = _syncScope;
+    if (sink != null && scope != null) {
+      MessageSyncService.instance.detach(scope, sink);
+    }
+    _syncSink = null;
+    _syncScope = null;
+  }
+
+  /// The offline sync brought messages for this open conversation: shown,
+  /// and saved with the rest of it, before the sync acknowledges them. The
+  /// same _absorb as the socket and the poll, so a message that came by
+  /// two routes is drawn once.
+  Future<void> _absorbSynced(List<Map<String, dynamic>> messages) async {
+    if (!mounted) throw StateError('conversation closed');
+    var changed = false;
+    var inbound = false;
+    for (final json in messages) {
+      final cm = ChatMessage.fromJson(json);
+      if (_absorb(cm)) {
+        changed = true;
+        if (cm.role != _role) inbound = true;
+      }
+    }
+    if (changed && mounted) {
+      setState(() {});
+      _scrollDown();
+    }
+    await _cacheMessages();
+    if (inbound) unawaited(_syncReadState());
   }
 
   /// The other side's watermarks, applied forward only. A failed request
@@ -2415,6 +2503,10 @@ class _NegotiationScreenState extends State<NegotiationScreen>
 
   @visibleForTesting
   bool get debugTypingSent => _typingSent;
+
+  /// One receipt run, as the 30-second timer or an inbound message makes.
+  @visibleForTesting
+  Future<void> debugSyncReadState() => _syncReadState();
 
   Future<void> _editMessage(ChatMessage m) async {
     final controller = TextEditingController(text: m.content);
@@ -3503,6 +3595,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     WidgetsBinding.instance.removeObserver(this);
     appRouteObserver.unsubscribe(this);
     _threadPushSub?.cancel();
+    _detachSync();
     _sendStopTyping();
     _typingDebounce?.cancel();
     _typingHeartbeat?.cancel();

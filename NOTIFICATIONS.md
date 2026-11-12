@@ -683,3 +683,228 @@ blocks the receipt's request even when the push arrives; it shows as
 Tests: `backend/tests/test_push_delivery_receipts.py`,
 `flutter_app/test/background_delivery_receipt_test.dart`,
 `flutter_app/test/delivery_receipt_retry_test.dart`.
+
+
+## No message lost to an offline recipient, and a log that says so (2026-11-12)
+
+Asked for: a message sent while its recipient is offline (no signal, phone
+off, BROKA closed or the phone locked) must reach them, and show, when they
+reconnect and open or resume the app, whatever happened to its push. The
+API log on Render must show, per message, whether it was saved, pushed,
+delivered or read, without a phone's logcat. "Delivered" must be the
+recipient's app saying it has the message. Firebase accepting a push is
+not delivery.
+
+### What was wrong
+
+1. **Nothing about a push was stored.** The debounced push lived in memory.
+   A push that reached no phone (FCM unavailable, the phone offline, no
+   token registered yet) was only tried again if another message arrived in
+   the same thread or a phone registered. A restart lost every push still
+   waiting out its debounce. The only trace was one line per thread,
+   `MESSAGE_PUSHED phones=0`, with no message id.
+2. **"Delivered" was a guess.** The app's Inbox sweep posted
+   `mark-delivered` for a whole thread as soon as its inbox row showed
+   something unread. That was before it had fetched a single message, and
+   the watermark moved to "now". A conversation the user never opened was
+   never on the phone.
+3. **No record per message.** Delivery and read lived only in the
+   per-thread watermarks (ThreadReadState), so "what happened to message X?"
+   had no answer, in the database or the log.
+4. **Nothing caught a phone up when it came back.** Each conversation
+   loaded its history only when opened. Nothing ran when the network
+   returned.
+
+### How it works now
+
+**Server.** The `message_deliveries` table (`api/models/message_delivery.py`,
+schema revision 17) has one row per message and recipient. The session hook
+in `message_push.py` writes it in the message's own transaction, so a
+saved message is a tracked message, whichever code path wrote it. On
+PostgreSQL the INSERT runs in a savepoint: if tracking fails, the message
+still saves and `MESSAGE_TRACKING_FAILED` is logged. Who gets a row follows
+`recipients_of`: the other side gets direct messages, and each side gets
+Zeno's messages addressed to it. A buyer's private words to Zeno and call
+cards get no row.
+
+| Status | Set when |
+|---|---|
+| `SAVED` | The message committed. |
+| `PUSH_PENDING` | A push attempt claimed it (`message_delivery.claim_for_push`). |
+| `PUSH_ACCEPTED` | FCM accepted the push for at least one phone. Not delivery. |
+| `PUSH_FAILED` | No phone accepted. `push_error` is FCM's code (`UNAVAILABLE`, `UNREGISTERED`...) or ours (`NO_DEVICES`, `PUSH_NOT_CONFIGURED`, `NOT_ANNOUNCED`). |
+| `DELIVERED` | The app said it has the message: `POST /negotiate/sync/ack` (the offline sync stored it, or an open chat holds it), or the push receipt `POST /negotiate/notification/delivered` naming that message. |
+| `READ` | A read receipt: the chat opened (`mark-read`), Zeno's room (`zeno-read`, Zeno's messages only), or Mark as read / Reply on the notification. |
+
+A row only moves up that ladder. The one way back is a failed push being
+tried again. A push result that lands after the app has acknowledged the
+message leaves `DELIVERED` alone, and a delivery receipt after `READ`
+changes nothing. A push receipt delivers only the message it names. The
+"3 new messages" it counted were announced to the phone, not given to it;
+the sync delivers those. The legacy `mark-delivered` still moves the
+sender's tick, as older app builds expect, but records no delivery. The
+chat socket's connect-time watermark is unchanged too.
+
+**Retries.** `workers._message_delivery_loop` runs every 30 seconds, under
+an advisory lease so only one replica runs it:
+
+- A transient failure (`UNAVAILABLE`, `INTERNAL`, `QUOTA_EXCEEDED`, a
+  timeout, a lookup error) is retried 30 s, 1 min, 2 min and 4 min later.
+  There are five attempts in all.
+- A permanent failure is not retried. That covers `NO_DEVICES`,
+  `UNREGISTERED` (the token is deleted, as before), `SENDER_ID_MISMATCH`,
+  `INVALID_ARGUMENT` and `PUSH_NOT_CONFIGURED`. A phone that registers later
+  still gets the register-time re-push.
+- A row the debounced push never took, because of a restart or an error,
+  is due 20 seconds after it was saved.
+
+Each retry goes through the same `push_thread`, under the same lock, as
+the first try. The rows are the queue, so a restart loses nothing, and no
+worker service or paid queue is needed. A message whose push was given up
+is still delivered by the sync.
+
+**The offline sync.**
+
+- `GET /negotiate/sync` hands out the caller's undelivered messages:
+  - every conversation, oldest first, a page at a time (`limit` up to 200);
+  - pages run in (sent time, id) order through `after=<next_cursor>`, so
+    messages with the same timestamp are neither skipped nor repeated;
+  - the shape is `/history`'s, plus `listing_id`/`store_id`, `buyer_id`,
+    `my_role` and `room` (`direct` or `zeno`);
+  - each row must also pass `visible_to_role_clause` for its side.
+- Handing a message out is not delivery. It stays in these pages until
+  `POST /negotiate/sync/ack {message_ids, source, sync_id, final}`. That
+  marks each one `DELIVERED` once, and moves the sender's double tick up to
+  the newest message acknowledged in each conversation, never further.
+- An id that is not the caller's own message is answered as `unknown` and
+  changes nothing.
+- The server keeps the "undelivered" record, not a cursor on the phone.
+  So a message that committed after a later one, a sync cut off half way,
+  and a sync run twice are all covered by asking again.
+
+**The app** (`lib/services/message_sync_service.dart`):
+
+- **When it runs:**
+  - sign-in or app start (`GlobalPollerService.start`);
+  - return to the foreground (`catchUp`);
+  - the network coming back (`ConnectivityMonitor`, and the Inbox sweep
+    reaching the server after failing);
+  - a conversation opening, in either chat screen;
+  - a message push arriving with the app in front;
+  - the Inbox sweep finding news it has not seen. This replaces the
+    sweep's thread-wide `mark-delivered`.
+- **Storing before acknowledging.** Each page is stored in the
+  conversation's own on-device cache, `direct_<listing | store:<id>>_<buyer>`
+  or `ai_<listing>_<buyer>`. `LocalChatStore.mergeMessages` keeps each
+  message once, by id, in time order, and reports a failed save. Only then
+  is the page acknowledged. A message that could not be stored is not
+  acknowledged and comes back on the next pass.
+- **Open conversations.** An open conversation takes its own messages
+  through `MessageSyncService.attach`. It draws them through the same
+  `_absorb` as the socket and the poll, so a message that arrives by two
+  routes is one bubble.
+- **Retries and overlap.** One sync runs at a time; asking during one
+  queues one more pass. A failed sync is retried while the app is in front
+  (2 s, 5 s, 15 s, 30 s, then every minute). The next request says which
+  try it is and why the last one failed (`attempt`, `previous_error`), so
+  the API log shows the failures once one gets through.
+- **Older servers.** A server without the sync answers 404. The app then
+  goes back to the sweep's own receipts and asks again 10 minutes later.
+- **A chat open but not looked at** (the app behind the home screen)
+  acknowledges the other side's messages by id (`source=chat`). It used to
+  post "delivered up to now".
+- **Connectivity events.** `ConnectivityMonitor` gets them from
+  `ConnectivityBridge.kt` (ConnectivityManager's default-network callback,
+  `ACCESS_NETWORK_STATE`). It is a plain channel because connectivity_plus
+  7.x does not build with the pinned Flutter 3.24.5. A test APK build with
+  connectivity_plus 7.3.1 failed with "Could not get unknown property
+  'flutter'", the same break that pins `geolocator_android`.
+
+### The log (Render)
+
+Every event is one INFO line from `api.core.message_delivery`. It starts
+with the event name and carries ids only: never a message's words, a push
+token, a thread token or a credential. In production the line is the
+`msg` of the JSON log record. Each per-message event carries
+`message_id conversation_id sender_id recipient_id recipient_role
+delivery_status attempt timestamp`. Push events add `device_count`, and
+failures add `error`.
+
+| Event | Means |
+|---|---|
+| `MESSAGE_SAVED` | Committed. `kind`, `from_zeno`. |
+| `MESSAGE_PUSH_STARTED` | A push attempt for it. `trigger=message\|retry\|device_registered`. |
+| `MESSAGE_PUSH_ACCEPTED` | FCM took it (`accepted` phones of `device_count`). |
+| `MESSAGE_PUSH_FAILED` | No phone took it: `error`, `retryable`, `next_retry_in_s`, `final`. |
+| `MESSAGE_DELIVERY_RETRY` | Another attempt: `previous_status`, `previous_error`. |
+| `MESSAGE_PUSH_SKIPPED` | Nothing left to announce (`reason=NOTHING_UNREAD`): read already. |
+| `OFFLINE_SYNC_STARTED` | A phone began a sync: `trigger`, `attempt`, `sync_id`. |
+| `MESSAGE_SYNCED_TO_CLIENT` | The sync handed it out (`page`). Not delivery. |
+| `MESSAGE_DELIVERY_ACK_RECEIVED` | The app acknowledged it: `source=sync\|chat\|push_receipt`, `result=delivered\|already_delivered\|already_read\|unknown`. |
+| `MESSAGE_DELIVERED` | Now `DELIVERED`: `delivered_via`, `since_saved_ms`. A message read before any receipt logs this with `delivered_via=read` just before `MESSAGE_READ`. |
+| `MESSAGE_READ` | Now `READ`: `source=chat_open\|zeno_room\|notification_mark_read\|notification_reply`. |
+| `OFFLINE_SYNC_COMPLETED` | The last page was acknowledged (`final=true`), or there was nothing to send. |
+| `OFFLINE_SYNC_FAILED` | `source=server`: the endpoint failed. `source=client_report`: the phone's earlier try failed (`error`), as it reported on its next one. |
+| `MESSAGE_DELIVERY_SUMMARY` | Every 15 minutes: counts by status for the last 24 h, `undelivered_over_10m`, `oldest_undelivered_age_s`. |
+| `MESSAGE_TRACKING_FAILED` | ERROR: a tracking write failed; the message itself is unaffected. |
+
+An offline recipient, from the test run (ids shortened):
+
+```
+MESSAGE_SAVED message_id=33e1… conversation_id=listing:3065…:40ae… sender_id=40ae… recipient_id=7e4e… recipient_role=seller delivery_status=SAVED attempt=0 kind=text from_zeno=false timestamp=…
+MESSAGE_PUSH_STARTED message_id=33e1… … delivery_status=PUSH_PENDING attempt=1 device_count=1 trigger=message
+MESSAGE_PUSH_FAILED message_id=33e1… … delivery_status=PUSH_FAILED attempt=1 device_count=1 error=UNAVAILABLE retryable=true next_retry_in_s=30 final=false trigger=message
+OFFLINE_SYNC_STARTED recipient_id=7e4e… trigger=connectivity_restored attempt=1
+MESSAGE_SYNCED_TO_CLIENT message_id=33e1… … delivery_status=PUSH_FAILED page=1
+MESSAGE_DELIVERY_ACK_RECEIVED message_id=33e1… … source=sync result=delivered
+MESSAGE_DELIVERED message_id=33e1… … delivery_status=DELIVERED delivered_via=sync since_saved_ms=57
+OFFLINE_SYNC_COMPLETED recipient_id=7e4e… acknowledged=1 delivered=1 already_delivered=0 unknown=0
+```
+
+To follow one message, search for `message_id=<id>`; for one phone's
+syncs, `recipient_id=<id>` with `OFFLINE_SYNC_`. A message whose last line
+is `MESSAGE_PUSH_ACCEPTED` or `MESSAGE_PUSH_FAILED final=true` has not
+reached the recipient's app yet. The summary line says how many such
+messages are older than ten minutes. Rows are kept 60 days.
+
+### What needs the new APK
+
+- **Server only, with today's APK:**
+  - the tracking itself;
+  - `MESSAGE_SAVED`, the push events, the retries and the summary;
+  - `MESSAGE_READ`;
+  - `MESSAGE_DELIVERED` from a push receipt, since the current APK already
+    names the message.
+- **The new APK:**
+  - the offline sync (`OFFLINE_SYNC_*`, `MESSAGE_SYNCED_TO_CLIENT`, and
+    `DELIVERED` via `sync`/`chat`);
+  - running it when the network returns;
+  - acknowledging by id from an open chat.
+
+  A phone on an older APK keeps working as before. Its messages show
+  `DELIVERED` only through a push receipt or a read.
+
+### Not covered
+
+- **Messages from before this deployment** have no rows. They are not
+  synced or logged, but they are still in the Inbox and each chat's
+  history.
+- **A closed app syncs when it next runs.** Until then a push receipt
+  delivers the one message the push named. The sync does not run in the
+  FCM background isolate: its access token has usually expired there, and
+  renewing it races the app (see "Reply and Mark as read").
+- **iOS** has no connectivity events (the sync runs on start, resume and
+  when the sweep gets through again), and still sends no background push
+  receipt.
+- **Ticks versus the record.** The chat socket's connect-time watermark and
+  older builds' `mark-delivered` still move the sender's tick without a
+  per-message delivery.
+- **Not device-tested.** No Android device or SDK was available where this
+  was written. On two phones, check each case in the table under "Checking
+  a phone" above. The recipient's `OFFLINE_SYNC_STARTED trigger=…` should
+  appear on reconnecting, then `MESSAGE_DELIVERED delivered_via=sync` for
+  each message sent while it was offline.
+
+Tests: `backend/tests/test_offline_delivery.py` (scenarios A-G, retries,
+restarts, privacy), `flutter_app/test/message_sync_test.dart`,
+`flutter_app/test/direct_chat_offline_sync_test.dart`.

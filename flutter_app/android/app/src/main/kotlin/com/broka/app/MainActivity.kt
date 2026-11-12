@@ -24,6 +24,10 @@ class MainActivity : FlutterFragmentActivity() {
     private val LINKS_CHANNEL = "com.broka.app/links"
     private val DOCUMENTS_CHANNEL = "com.broka.app/documents"
     private val GALLERY_CHANNEL = "com.broka.app/gallery"
+    private val CONNECTIVITY_EVENTS = "com.broka.app/connectivity"
+
+    // ── The network coming back (ConnectivityBridge.kt) ──────────────────
+    private var connectivity: ConnectivityBridge? = null
 
     // ── Saving chat photos (ChatGallery.kt) ──────────────────────────────
     private val chatGallery by lazy { ChatGallery(applicationContext) }
@@ -259,6 +263,14 @@ class MainActivity : FlutterFragmentActivity() {
                 }
             }
 
+        // ── The network coming back (lib/services/connectivity_monitor.dart)
+        // "online"/"offline" events; Dart runs the offline message sync when
+        // offline turns into online.
+        val net = ConnectivityBridge(applicationContext)
+        connectivity = net
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, CONNECTIVITY_EVENTS)
+            .setStreamHandler(net)
+
         // ── OTP auto-capture (SMS Retriever API) ─────────────────────────
         // Lets the verify-code screen fill itself with no prompt and no SMS
         // permission. See SmsRetrieverBridge.kt and
@@ -366,6 +378,9 @@ class MainActivity : FlutterFragmentActivity() {
         // without this it would outlive the activity on a config change.
         smsRetriever?.stop()
         smsRetriever = null
+        // The network callback is the application context's too.
+        connectivity?.stop()
+        connectivity = null
         super.onDestroy()
     }
 }
