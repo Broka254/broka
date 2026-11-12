@@ -275,7 +275,9 @@ jobs:
         run: python scripts/graphify.py
 
       - name: Commit the updated map
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         run: |
           if git diff --quiet -- graphify.md; then
             echo "graphify.md is up to date."
@@ -456,16 +458,18 @@ jobs:
           ls -lh "${{ steps.find_apk.outputs.apk_path }}"
 
       - name: Delete previous release
-        # Only a push to main releases the APK (AGENTS.md). A pull request
-        # used to replace latest-release with its own unmerged build.
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        # Only main-branch pushes and intentional manual main-branch builds may
+        # replace latest-release. Pull-request builds must never publish.
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release delete latest-release --yes --repo ${{ github.repository }} 2>/dev/null || true; git push --delete origin latest-release 2>/dev/null || true
 
       - name: Create GitHub Release
-        # Only a push to main releases the APK (AGENTS.md). A pull request
-        # used to replace latest-release with its own unmerged build.
+        # Only main-branch pushes and intentional manual main-branch builds may
+        # replace latest-release. Pull-request builds must never publish.
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         # The release page says when the APK has no Firebase. A build
         # warning is easy to miss, and such an APK installs and runs
