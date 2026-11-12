@@ -517,3 +517,169 @@ buyers; **It's sold** removes it, after asking.
 
 Tests: `backend/tests/test_sold_out_reports.py` (`TestTellingTheSeller`),
 `flutter_app/test/listing_unavailable_test.dart`.
+
+
+## "Delivered" means the phone has it (2026-11-12)
+
+Asked for: the double tick must mean the recipient's phone received the
+message, with the app in the background, closed, or the phone locked.
+Firebase accepting a push is not delivery, a receipt that failed must
+never pass for one, and a notification arriving is never "Seen".
+
+The tick ladder, unchanged: one grey tick is "Sent" (the server has it),
+two grey ticks are "Delivered" (the other side's delivery watermark is at
+or after the message), two purple ticks are "Seen" (their read watermark
+is). `receiptFor` in `flutter_app/lib/widgets/message_receipt.dart`
+computes all three from the two watermarks. Nothing turns FCM's message
+id into a watermark (`FcmResult.message_id` is logged, never stored).
+
+### What was wrong
+
+1. **One try, then nothing.** The push handler posted
+   `POST /negotiate/notification/delivered` once. A phone woken from Doze
+   for a high-priority push often has no network for its first request
+   (the call receipt found the same, 2026-10-25). From a closed app
+   nothing reports the receipt again until the app next runs in front,
+   and by then the chat is usually opened, so the sender went from one
+   tick straight to "Seen".
+2. **The watermark went to the moment the receipt landed, not to the
+   message the push announced.** A receipt that landed late (a retry, a
+   slow phone, or the handler run again when its notification is
+   dismissed, [flutterfire#12326](https://github.com/firebase/flutterfire/issues/12326))
+   marked as delivered everything the sender had written since, which
+   this phone had not been shown to have. The sender's open chat was sent
+   the same instant, and the chat applies receipts forward only and saves
+   them, so the false tick stayed.
+3. **A refused token fell back to the saved session, whoever's it was.**
+   With two BROKA accounts on one phone, a push for the account signed out
+   that arrived after the switch was refused (the phone is no longer that
+   account's) and then reported by the other account's session, which
+   moved a watermark on that account's own thread for a message it never
+   got. The same fallback ran after a network failure, where it could not
+   succeed either.
+4. **The same push acknowledged twice was announced to the sender twice.**
+5. **Nothing was logged.** The server wrote no line for a receipt,
+   accepted or refused; the phone wrote "refused: HTTP 401" with no
+   conversation or message.
+6. With the app in front, the notification waited on the receipt (up to
+   15 s on a bad connection). With it closed, the redrawn notification
+   with Reply and Mark as read waited too.
+
+### What changed
+
+**Server** (`api/routers/negotiate.py`):
+
+- `POST /negotiate/notification/delivered` takes an optional
+  `message_id`, the push's `messageId`. The message must be news for that
+  side of that conversation (`visible_to_role_clause`, the push's own
+  audience rule); one from another thread, or one this side wrote,
+  answers 404 and moves nothing. The delivery watermark moves up to that
+  message's `created_at`, never past it and never back
+  (`_move_watermark`'s `delivered_up_to`). Without `message_id` (app
+  builds from before this) it moves to now, as before.
+- The sender's open chat is sent the watermark the row now holds, and only
+  when it moved. The answer says the same: `last_delivered_at`,
+  `advanced`.
+- A refusal is logged with its reason: `token_expired` (named by the
+  token's verified claims), `token_invalid`, `device_signed_out`,
+  `listing_gone` / `store_gone`, `not_on_that_side`,
+  `message_not_in_thread`.
+- Never a read: this endpoint moves only the delivery watermark.
+
+**App** (`NotificationService.markDeliveredFromPush`):
+
+- The receipt names the message (`ApiService.notificationDelivered`).
+- No answer, a timeout, 408, 429 or 5xx is tried again after 1, 3 and 6
+  seconds (`deliveryAckRetryDelays`), within 20 seconds in all
+  (`deliveryAckBudget`), each try timing out at 8. Firebase guarantees a
+  push handler about ten seconds before Android may stop the process
+  ([Firebase blog](https://firebase.blog/posts/2017/03/using-firebase-cloud-messaging-with/));
+  a try cut off by that is not claimed. Any other answer is final.
+- A token the server refused is final: no session fallback. Only an older
+  server's push (no token) uses the saved session, and only when that
+  session is the account the push was for (a buyer's push is the buyer's;
+  a seller's is never the buyer's). From the background isolate it is
+  still never renewed.
+- A token that cannot be one (empty, over 4096 characters, with spaces) is
+  not sent. Expiry is the server's to judge, not the phone clock's.
+- The same push handled twice at once sends one receipt.
+- The notification and the receipt run side by side, in front and in the
+  background.
+- `markDeliveredFromPush` answers a `DeliveryAckOutcome`: `acknowledged`,
+  `skipped`, `refused` or `failed`. Only `acknowledged` came from the
+  server recording the receipt. A receipt that failed or was refused stays
+  undelivered until the app's own sweep reports the thread when it next
+  runs in front (`GlobalPollerService`, unchanged), or the chat is read.
+
+### Logs
+
+Phone (`debugPrint`, which reaches logcat in release builds as `flutter`),
+one line per step, each with `at=` (UTC), the conversation, buyer, side,
+message id and `transport=background|foreground`:
+
+```
+[Push] PUSH_RECEIVED type=new_message thread=<listing> buyer=<id> role=seller message=<id> fcm_id=<FCM message id> latency_ms=840 has_token=true transport=background
+[Push] DELIVERY_ACK_STARTED ... via=thread_token attempt=1
+[Push] DELIVERY_ACK_RETRY ... status=- reason=no_answer:SocketException attempt=2 after_ms=1000
+[Push] DELIVERY_ACK_SUCCESS ... status=200 attempt=2 advanced=true watermark=2026-11-12T09:00:00.123456Z
+[Push] DELIVERY_WATERMARK_UPDATED ... last_delivered_at=2026-11-12T09:00:00.123456Z
+[Push] DELIVERY_ACK_FAILED ... status=401 reason=token_rejected attempt=1 final=true
+[Push] DELIVERY_ACK_SKIPPED ... reason=zeno_only
+```
+
+API (`api.routers.negotiate`, INFO):
+
+```
+[negotiate] DELIVERY_WATERMARK_UPDATED thread=<listing>:<buyer> role=seller user=<id> message=<id> from=- to=2026-11-12T09:00:00.123456Z source=push_receipt
+[negotiate] DELIVERY_ACK_SUCCESS thread=<listing>:<buyer> role=seller user=<id> device=<fingerprint> message=<id> bounded=True advanced=True watermark=...
+[negotiate] DELIVERY_ACK_FAILED action=delivered status=401 reason=device_signed_out user=<id> device=<fingerprint> role=seller thread=<listing>:<buyer>
+```
+
+Never logged: the thread token, a push token (only its
+`token_fingerprint`), an access token, or what a message says.
+
+### Checking a phone
+
+Not device-tested: there was no Android device or SDK where this was
+written, so all of the above is code and unit-test evidence. On two
+phones, with `adb logcat -s flutter` on the recipient and the API log
+open, send a message to the recipient and expect `PUSH_RECEIVED`,
+`DELIVERY_ACK_SUCCESS` on the phone and `DELIVERY_WATERMARK_UPDATED` on
+the API, and the sender's tick turning to "Delivered" (not "Seen") within
+seconds, in each of these cases:
+
+| Case | Expect |
+|---|---|
+| App in front | `transport=foreground`; the notification shows at once |
+| App in background | `transport=background`; the notification is redrawn with Reply and Mark as read |
+| Swiped away (not force-stopped) | as in the background. A force-stopped app gets no pushes at all until reopened ([Firebase docs](https://firebase.google.com/docs/cloud-messaging/flutter/receive)) |
+| Screen locked for 30+ min (Doze) | `latency_ms` small for a high-priority push; possibly `DELIVERY_ACK_RETRY ... no_answer` before the success |
+| Network off, then on | nothing until the network is back; then the push arrives and is acknowledged. A message sent while offline stays "Sent" |
+| Signed in long ago (expired session) | still acknowledged: `via=thread_token` needs no session |
+| Account A signed out, B signed in on the same phone | a push for A still in flight is refused (`reason=device_signed_out` on the API, `status=401 ... final=true` on the phone), and B's session sends nothing for it |
+| Push more than 7 days late | `reason=token_expired`; delivered when the app next runs |
+
+On Tecno, Infinix and Xiaomi builds, also test with and without the
+battery exemption (section 2). Android's per-app "background data" switch
+blocks the receipt's request even when the push arrives; it shows as
+`DELIVERY_ACK_FAILED ... reason=no_answer:...`.
+
+### Not covered
+
+- iOS: the message push is an alert push without `content-available`, so
+  the app's handler does not run for it with the app in the background,
+  and no receipt is sent until the app is opened.
+- A receipt that has used up its 20 seconds is not kept for a later try;
+  the next push for the same conversation covers it (its receipt names a
+  newer message), and the app's sweep covers the rest when the app runs.
+- The sweep's own `mark-delivered` (and the chat's) still moves the
+  watermark to now: those follow a fresh fetch, but a message written in
+  the instant between the fetch and the receipt is counted.
+- FlutterFire may not run the handler for every push when many arrive at
+  once for a killed app
+  ([flutterfire#9549](https://github.com/firebase/flutterfire/issues/9549));
+  a later push's receipt covers the earlier messages.
+
+Tests: `backend/tests/test_push_delivery_receipts.py`,
+`flutter_app/test/background_delivery_receipt_test.dart`,
+`flutter_app/test/delivery_receipt_retry_test.dart`.
