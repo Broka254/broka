@@ -1344,10 +1344,6 @@ class NotificationService {
     }
   }
 
-  /// The team's reply to one of the user's submissions, drawn on the
-  /// Updates channel while the app is in front (Android draws it by itself
-  /// otherwise, from the push's notification block). One notification per
-  /// submission: a second reply replaces the first.
   /// The push a seller gets when a buyer marks one of their listings
   /// unavailable (backend listings/sold_out.py). Its tap opens the seller
   /// dashboard, which lists the listing with "Still available": the listing
@@ -1394,6 +1390,10 @@ class NotificationService {
     }
   }
 
+  /// The team's reply to one of the user's submissions, drawn on the
+  /// Updates channel while the app is in front (Android draws it by itself
+  /// otherwise, from the push's notification block). One notification per
+  /// submission: a second reply replaces the first.
   Future<void> showFeedbackUpdateFromPush(Map<String, dynamic> data) async {
     if (!_ready) return;
     final id = _nonEmpty(data['feedbackId']);

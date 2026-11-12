@@ -472,3 +472,48 @@ an empty message and 429 too many.
 
 Tests: `backend/tests/test_notification_actions.py`,
 `flutter_app/test/notification_actions_test.dart`.
+
+## A listing marked unavailable: a text and a push to the seller (2026-11-12)
+
+Raised by the owner: when a buyer marked a listing unavailable it
+disappeared at once, and the seller had no way to say it was still for
+sale. The listing left every list buyers browse, and the seller's own
+dashboard too, since the dashboard reads the same live listings. The only
+word of it was a push (`listing_sold_out_reported`) whose tap opened
+nothing. Asked for: an SMS to the seller straight away, an FCM push as
+well, and a way to revoke the report.
+
+The first report of a listing (`listings/sold_out.py`) still hides it at
+once, and after the reporter has their answer (the request's
+`BackgroundTasks`) it:
+
+- **pushes the seller**: "A buyer marked your listing unavailable" /
+  `"<name>" is hidden from buyers. Still for sale? Open your dashboard and
+  tap "Still available".`, data `{type: listing_sold_out_reported,
+  listing_id, listing_name, title, body}`. A tap opens the Seller Dashboard
+  (`/seller-dashboard`; on a signed-out phone, sign-in). With the app in
+  front the app draws it itself on the Updates channel, one per listing
+  (`NotificationService.showListingReportedFromPush`).
+- **texts the seller**, one 160-character GSM-7 part: `Hey <first name>,
+  it's Zeno from BROKA. A buyer marked your listing "<name>" unavailable, so
+  it's hidden. Not true? Revoke it on your BROKA dashboard.` A long listing
+  name is shortened to keep it to one part. The text goes at any hour:
+  unlike the availability nudge, which waits out quiet hours, every hour it
+  waits is an hour the listing is hidden from every buyer. The listing's
+  "SMS me" switch (`Listing.sms_alerts`) is honoured; turned off, the push
+  and the dashboard still tell the seller.
+- **once per report**: the text is claimed on
+  `Listing.sold_out_texted_at` before it is sent, so the request's task and
+  the sweep cannot both send it. A text the provider did not take gives the
+  claim back, and the one-minute nudge loop (`send_due_texts`) tries again
+  for 24 hours. The seller revoking clears the claim, so a later report is
+  texted again. A seller with no number that can take a text is skipped.
+
+The dashboard lists the seller's reported listings above the catalogue
+(`GET /listings/reported-unavailable`, `ReportedUnavailablePanel`):
+**Still available** revokes every open report
+(`DELETE /listings/{id}/sold-out`) and puts the listing back in front of
+buyers; **It's sold** removes it, after asking.
+
+Tests: `backend/tests/test_sold_out_reports.py` (`TestTellingTheSeller`),
+`flutter_app/test/listing_unavailable_test.dart`.

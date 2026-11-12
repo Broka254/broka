@@ -104,6 +104,33 @@ Design points worth knowing:
   distinguishable from "fast". Still stored and sent as
   `median_response_minutes`, which older app builds read.
 
+**The first message only (2026-11-12).** Every buyer message after a
+seller's reply used to start a new clock, and one still waiting at the end
+of a thread was charged as an unanswered wait. That assumed every message
+needs an answer: a seller who answered "is it still available?" in minutes
+was charged up to 48 hours for not replying to "ok, thanks". A buyer
+deciding whether to message a seller wants to know how soon the first
+answer comes, so now one thread is one observation
+(`trust/response_time.py`):
+
+- **The first ask** is the earliest message in the thread that asks the
+  seller something they can see: the buyer's own direct message (not their
+  private words to Zeno, not a call card, not deleted) or a Zeno message
+  addressed to the seller (`recipient_role='seller'`), such as Zeno asking
+  whether the item is still available. A Zeno message with no audience set
+  is not an ask: it is shown to nobody.
+- **The answer** is the seller's first message after it, however it was
+  sent: typed, through Zeno, a photo, or a call they made. Nothing later in
+  the thread counts.
+- **Unanswered** first asks are still censored at time-so-far, capped at
+  48h, so ignoring buyers still rates as slow.
+- **The window** takes threads whose first ask falls in the last 30 days.
+  A thread that started earlier is out, even if its messages continue.
+
+The store rating (`stores/rating.py`) reads the same rows through the same
+`thread_rows_clause`, so a store and its owner are rated by one rule. The
+tile under the number reads "to a buyer's first message".
+
 **`GET /listings/seller/{id}/metrics?days=90`** returns current standing
 (with the component breakdown Phase 3's advice panel needs) plus the daily
 history series. Own metrics only — response time, backlog and rank position

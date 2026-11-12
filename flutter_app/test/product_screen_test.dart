@@ -251,7 +251,10 @@ void main() {
       await open(tester, _listing());
       expect(textIn(tester, const Key('standing-rating')), contains('8.5/10'));
       expect(textIn(tester, const Key('standing-dcr')), allOf(contains('92%'), contains('of deals completed')));
-      expect(textIn(tester, const Key('standing-response')), allOf(contains('25m'), contains('average reply time')));
+      // What it measures since 2026-11-12: the wait for the seller's first
+      // answer to a buyer's first message, not for every reply.
+      expect(textIn(tester, const Key('standing-response')),
+          allOf(contains('25m'), contains("to a buyer's first message")));
       expect(textIn(tester, const Key('standing-deal-time')),
           allOf(contains('2.5h'), contains('agreed to paid · 12 deals')));
       // In the dashboard's colours: all four are in its green band.
@@ -544,6 +547,220 @@ void main() {
     }
   });
 
+  // 2026-11-12: Like and Save were two half-width 52dp slabs, and the price
+  // and Start Negotiation sat in a bordered panel with two links under it.
+  group('the foot of the screen', () {
+    testWidgets('Like and Save are compact pills that still take a full tap', (tester) async {
+      await open(tester, _listing());
+      for (final k in ['product-like', 'product-save']) {
+        final size = tester.getSize(find.byKey(Key(k)));
+        // 36dp to see, 48dp to tap.
+        expect(size.height, 48, reason: k);
+        expect(size.width, lessThan(200), reason: k);
+      }
+      // Side by side at the start of the row, not stretched across it.
+      final like = tester.getRect(find.byKey(const Key('product-like')));
+      final save = tester.getRect(find.byKey(const Key('product-save')));
+      expect(save.left, greaterThan(like.right));
+      expect(save.right, lessThan(400));
+    });
+
+    testWidgets('the price and Start Negotiation stand at the bottom, with no panel or links', (tester) async {
+      await open(tester, _listing());
+      final screen = tester.getRect(find.byType(ProductScreen));
+      final bar = find.byKey(const Key('product-cta-bar'));
+      // closeTo: the Scaffold places the bar at (height - barHeight), so
+      // its bottom can be a rounding step off the screen's.
+      expect(tester.getRect(bar).bottom, closeTo(screen.bottom, 0.5));
+      expect(find.descendant(of: bar, matching: find.byKey(const Key('product-cta'))), findsOneWidget);
+      expect(find.descendant(of: bar, matching: find.text('Start Negotiation')), findsOneWidget);
+      // The two "something is wrong" links moved into the page.
+      for (final k in ['product-report', 'product-report-sold-out']) {
+        expect(find.descendant(of: bar, matching: find.byKey(Key(k))), findsNothing, reason: k);
+        expect(find.byKey(Key(k)), findsOneWidget, reason: k);
+      }
+      // No panel: a fade into the page, with no fill or border of its own.
+      final deco = tester.widget<DecoratedBox>(bar).decoration as BoxDecoration;
+      expect(deco.border, isNull);
+      expect(deco.color, isNull);
+      expect((deco.gradient! as LinearGradient).colors.first.opacity, 0);
+      // The page runs on under the two, to the foot of the screen...
+      expect(tester.getRect(find.byType(SingleChildScrollView)).bottom, closeTo(screen.bottom, 0.5));
+      // ...and its end stops above them, so the last thing on it is readable.
+      await tester.ensureVisible(find.byKey(const Key('product-report')));
+      await tester.pumpAndSettle();
+      expect(tester.getRect(find.byKey(const Key('product-report'))).bottom,
+          lessThan(tester.getRect(find.byKey(const Key('product-cta'))).top));
+    });
+  });
+
+  group('marking it unavailable', () {
+    Map<String, dynamic> reportedJson() => {
+          'id': 'listing-1',
+          'name': 'iPhone 13 128GB',
+          'category': 'Electronics',
+          'price': 78000,
+          'listing_type': 'direct',
+          'status': 'active',
+          'seller_id': 'seller-1',
+          'seller_name': 'Grace Akinyi',
+          'views': 42,
+          'created_at': '2026-11-01T10:00:00',
+          'sold_out': true,
+          'reported_sold_out': true,
+        };
+
+    testWidgets('a buyer finds it by the stock line, and is told the seller can undo it', (tester) async {
+      var reported = false;
+      setFakeRoute((uri) {
+        if (uri.path == '/listings/listing-1/sold-out') {
+          reported = true;
+          return {'listing_id': 'listing-1', 'reported_sold_out': true};
+        }
+        if (uri.path == '/listings/listing-1' && reported) return reportedJson();
+        return null;
+      });
+      await open(tester, _listing());
+      // A strip in the page under the stock line, saying what happens next -
+      // it was 11.5px grey text under the buy button.
+      final strip = find.byKey(const Key('product-availability'));
+      expect(find.descendant(of: strip, matching: find.byKey(const Key('product-report-sold-out'))),
+          findsOneWidget);
+      expect(textIn(tester, const Key('product-availability')),
+          allOf(contains('Mark as unavailable'), contains('The seller is texted and can undo it')));
+      expect(tester.getRect(strip).top, greaterThan(tester.getRect(find.byKey(const Key('units-left'))).bottom));
+
+      List<FakeRequest> reports() => fakeRequests
+          .where((r) => r.method == 'POST' && r.uri.path == '/listings/listing-1/sold-out').toList();
+      await tester.ensureVisible(find.byKey(const Key('product-report-sold-out')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('product-report-sold-out')));
+      await tester.pumpAndSettle();
+      expect(find.text('Mark as unavailable?'), findsOneWidget);
+      expect(find.textContaining('the seller gets a text'), findsOneWidget);
+      expect(reports(), isEmpty, reason: 'nothing is sent before the buyer confirms');
+
+      await tester.tap(find.byKey(const Key('confirm-mark-unavailable')));
+      await tester.pumpAndSettle();
+      expect(reports(), hasLength(1));
+      expect(find.textContaining('The seller has been told and can undo it'), findsOneWidget);
+      // Hidden now: the foot of the screen says so, and nothing is offered.
+      expect(textIn(tester, const Key('product-unavailable')),
+          allOf(contains('Marked unavailable'), contains('The seller has been texted')));
+      expect(find.byKey(const Key('product-availability')), findsNothing);
+      expect(find.byKey(const Key('product-cta')), findsNothing);
+    });
+
+    final notOffered = {
+      "the seller's own listing": () => _listing(sellerId: 'buyer-1'),
+      'an auction': () => _listing(listingType: 'auction'),
+      'a listing already sold out': () => _listing(status: 'pending', soldOut: true),
+    };
+    for (final e in notOffered.entries) {
+      testWidgets('is not offered on ${e.key}', (tester) async {
+        await open(tester, e.value());
+        expect(find.byKey(const Key('product-report-sold-out')), findsNothing);
+        expect(find.byKey(const Key('product-availability')), findsNothing);
+      });
+    }
+  });
+
+  group("the seller's number", () {
+    testWidgets('is on the seller card, to call or copy', (tester) async {
+      setFakeRoute((uri) => uri.path == '/auth/user/seller-1'
+          ? {'id': 'seller-1', 'name': 'Grace Akinyi', 'phone': '0712345678'}
+          : null);
+      String? copied;
+      final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.setData') copied = (call.arguments as Map)['text'] as String?;
+        return null;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(SystemChannels.platform, null));
+
+      await open(tester, _listing());
+      // As a Kenyan number reads, however the account stored it.
+      expect(tester.widget<Text>(find.byKey(const Key('seller-card-phone-number'))).data,
+          '+254 712 345 678');
+      await tester.ensureVisible(find.byKey(const Key('seller-card-phone-copy')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('seller-card-phone-copy')));
+      await tester.pumpAndSettle();
+      expect(copied, '+254712345678');
+      expect(find.text('Number copied'), findsOneWidget);
+    });
+
+    testWidgets('a guest is asked to sign in for it', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      await ApiService.loadSavedSession();
+      await open(tester, _listing());
+      expect(find.byKey(const Key('seller-card-phone-number')), findsNothing);
+      expect(find.byKey(const Key('seller-card-phone-sign-in')), findsOneWidget);
+    });
+
+    testWidgets('a seller without one shows no number row', (tester) async {
+      await open(tester, _listing());
+      expect(find.byKey(const Key('seller-card-phone')), findsNothing);
+      expect(find.byKey(const Key('seller-card-phone-sign-in')), findsNothing);
+    });
+  });
+
+  // A free account asks Zeno about two listings a day (backend
+  // premium/zeno_sessions.py); the card says so before the limit is met.
+  group("today's free Zeno sessions", () {
+    Map<String, dynamic> today(List<String> askedAbout, {int left = 1, bool limited = true}) => {
+          'limited': limited,
+          'day': '2026-11-12',
+          'renews_at': '2026-11-12T21:00:00',
+          'listing': {
+            'limit': limited ? 2 : null,
+            'used': 2 - left,
+            'left': limited ? left : null,
+            'listing_ids': askedAbout,
+          },
+          'agent': {'limit': limited ? 2 : null, 'used': 0, 'left': limited ? 2 : null},
+        };
+
+    void answer(Map<String, dynamic> sessions) => setFakeRoute((uri) => switch (uri.path) {
+          '/zeno/sessions/today' => sessions,
+          '/auth/user/seller-1' => {'id': 'seller-1', 'name': 'Grace Akinyi'},
+          _ => null,
+        });
+
+    testWidgets('the Zeno card says how many are left', (tester) async {
+      answer(today(['listing-7']));
+      await open(tester, _listing());
+      expect(textIn(tester, const Key('zeno-sessions-left')),
+          contains('1 of 2 free Zeno sessions left today'));
+    });
+
+    testWidgets('a listing already asked about today costs nothing more', (tester) async {
+      answer(today(['listing-1']));
+      await open(tester, _listing());
+      expect(textIn(tester, const Key('zeno-sessions-left')), contains('ask as much as you like'));
+    });
+
+    testWidgets('used up, it says when they come back', (tester) async {
+      answer(today(['listing-7', 'listing-8'], left: 0));
+      await open(tester, _listing());
+      expect(textIn(tester, const Key('zeno-sessions-left')),
+          allOf(contains("used today's 2 free Zeno sessions"), contains('midnight')));
+    });
+
+    testWidgets('nothing is counted with a plan', (tester) async {
+      answer(today(const [], limited: false));
+      await open(tester, _listing());
+      expect(find.byKey(const Key('zeno-sessions-left')), findsNothing);
+    });
+
+    testWidgets("the seller's own listing is never counted, so nothing is asked", (tester) async {
+      answer(today(const []));
+      await open(tester, _listing(sellerId: 'buyer-1'));
+      expect(find.byKey(const Key('zeno-sessions-left')), findsNothing);
+      expect(fakeRequests.where((r) => r.uri.path == '/zeno/sessions/today'), isEmpty);
+    });
+  });
+
   group('reporting a problem', () {
     testWidgets('a buyer reports the listing with it and its seller attached', (tester) async {
       RouteSettings? report;
@@ -561,6 +778,9 @@ void main() {
       ));
       await tester.pumpAndSettle();
       expect(find.text('Report a problem'), findsOneWidget);
+      // At the end of the page since 2026-11-12, not under the buy button.
+      await tester.ensureVisible(find.byKey(const Key('product-report')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('product-report')));
       await tester.pumpAndSettle();
       expect(report, isNotNull);

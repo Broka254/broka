@@ -498,10 +498,11 @@ to **159 / 479 / 1,199 a month**.
 
 **Free tries (2026-10-12).** Without a plan, a new user gets **three tries
 each of voice mode (3 voice requests), the Buying Agent and Zeno's
-insights**, then needs a plan. A Buying Agent try is a search that brought
-back listings, or a watch started (one at a time); Zeno's questions before
-the results are free. With a plan the Buying Agent and insights are not
-counted (only watches at once, by plan). Also, once:
+insights**, then needs a plan. A Buying Agent try is a watch started (one
+at a time); until 2026-11-12 a search that brought back listings was one
+too, and the hunts themselves are now daily sessions (below). With a plan
+the Buying Agent and insights are not counted (only watches at once, by
+plan). Also, once:
 **1 AI cover try** -
 about KES 5, an acquisition cost, and the only way a seller learns what a
 cover does to a listing before paying for more - and, since 2026-10-08,
@@ -511,6 +512,33 @@ Plus made on the seller's own item. Nothing else is on trial.
 While `PREMIUM_ENABLED` is off, AI covers are off too (the other premium
 features are free then): with no plans sold, every cover would be paid for
 by BROKA alone.
+
+**Daily Zeno sessions (2026-11-12, `premium/zeno_sessions.py`).** An account
+without a plan gets **2 sessions a day of questions to Zeno about a listing**
+(the listing's "Is this a fair price?", "Is this seller reliable?", "Find
+me something similar", or anything typed) and **2 Buying Agent hunts a
+day**, in two separate pools (`ZENO_FREE_LISTING_SESSIONS_PER_DAY`,
+`ZENO_FREE_AGENT_SESSIONS_PER_DAY`). A session is the whole conversation,
+not a message:
+
+- **About a listing:** one listing, one Kenyan day. Every question about it
+  that day is the same session, so a buyer who has asked once can go on
+  asking. The seller's own listing, the escrow walkthrough, and a listing
+  that is gone are never counted.
+- **A hunt:** a conversation with the Buying Agent that starts from nothing
+  starts one; every turn after it is the same hunt, however many questions
+  it takes. "Find me something similar" from a listing already asked about
+  today is part of that listing's session, not one of the day's hunts.
+- **Given back** when Zeno could not answer (the model failed, or answered
+  with its fallback), so a failure costs nothing.
+- **Renewing at midnight** in Kenya (21:00 UTC). A row per session in
+  `zeno_sessions`, with unique keys so two requests racing for the last
+  session cannot both get it.
+
+These limits apply whether `PREMIUM_ENABLED` is on or off: they cap what
+free accounts cost in model calls, which is the same with or without plans
+on sale. With a plan nothing is counted. `GET /zeno/sessions/today` says
+what is used and left; the listing's Zeno card shows it.
 
 **Zeno's selling help** (2026-10-05) is what the listing wizard offers to
 make a listing sell faster, and the wizard's own case for a plan: a
@@ -580,8 +608,11 @@ failed to make, a text that did not send, a negotiation already open.
 
 **Refusing.** A 402 with `{code, message, feature, plan, upgrade_to}`:
 `PREMIUM_REQUIRED` when no plan includes it, `ALLOWANCE_USED` when this
-month's is spent. The message says what to do in words, because older app
-builds show it as it is. Background work has nobody to show a 402 to:
+month's is spent, `ZENO_SESSIONS_USED` when today's free Zeno sessions are
+(with `limit` and `renews_at`; `upgrade_to` is a plan only while plans are
+on sale, and without one the app shows the words and no plans). The
+message says what to do in words, because older app builds show it as it
+is. Background work has nobody to show a 402 to:
 
 | Feature | Refused in the app | Refused in the background |
 |---|---|---|
@@ -589,7 +620,8 @@ builds show it as it is. Background work has nobody to show a 402 to:
 | Description by Zeno (and Zeno listing it for you) | The Description step's card, and the Photos step's "Let Zeno list it", offer the plans instead of asking; writing your own stays free. Answering Zeno's questions about the photo is free once a plan has it: only the look at the photo is counted | - |
 | Pricing with Zeno | The Price step's card offers Pro; the conversation itself is free once a plan has it, and only the BROKA check is counted | - |
 | Voice mode | Zeno says why, stops listening, offers the plans; typing still works | - |
-| Buying Agent search (no plan, free tries used) | Zeno says why in the conversation and offers the plans; refused before the model runs | - |
+| Buying Agent hunt (no plan, today's 2 used) | Zeno says why and when they renew in the conversation, and offers the plans while one is on sale; refused before the model runs | - |
+| Questions to Zeno about a listing (no plan, today's 2 listings used) | The same, in the listing's conversation; asking more about a listing already asked about today is not refused | - |
 | Zeno insights (no plan, free looks used) | The screen says why, offers the plans and closes | - |
 | Buying Agent watch | 402 (the Zeno tab's action: `FAILED` with the plan code) and the plans | - |
 | Zeno negotiating for you | 402 and the plans | The automatic opener on a new match skips the buyer |
