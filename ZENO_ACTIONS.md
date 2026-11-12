@@ -161,6 +161,63 @@ the seller's description or not at all - so:
   remembering which listing), and not through Zeno's session: the session's
   turns carry no listing.
 
+## The listing card's three questions, reassessed (2026-11-12)
+
+The card offers "Is this a fair price?", "Is this seller reliable?" and
+"Find me something similar". The owner asked for them to be checked. Each
+had a flaw:
+
+- **"Is this a fair price?"** The prompt said BROKA had no market figures
+  and told Zeno to estimate from general knowledge, whatever BROKA knew. A
+  price question (`listing_context.is_price_question`, in English or
+  Swahili, or a follow-up to one) now gets what similar live listings from
+  other sellers ask: count, lowest, median, highest and the middle half,
+  where this price sits against the median, their conditions, and this
+  listing's own price changes. Numbers only: the other listings' titles are
+  their sellers' words and stay out of the prompt. They are found with the
+  Buying Agent's search and kept only when their title shares at least half
+  of this one's words. The search's score alone let a "used" pair of
+  earbuds into a used phone's median on condition alone (0.53 against a
+  0.5 bar). With none found, Zeno says BROKA has nothing to compare it
+  with right now and gives a general estimate, saying it is one.
+- **"Is this seller reliable?"** With `DCR_ENABLED` off (the default) every
+  seller was described as having "no completed deals through BROKA", dozens
+  or not. Zeno now reads the seller's time on BROKA, completed deals,
+  buyers' reviews, ID verification, rating and first-reply time
+  (SELLER_METRICS.md), and says nothing about a completion rate BROKA does
+  not publish. The words "reviews", "trust" or "sales" pulled the asking
+  user's own profile into the prompt beside the seller's figures; asked
+  from someone else's listing they are about the seller, unless the user
+  says "my".
+- **"Find me something similar"** reached the Buying Agent as the query
+  "something similar": no category and no item. The agent asked what they
+  were looking for, and the listing itself could come back as a result. A
+  query that only means "like this one" (`intents.refers_to_listing`) now
+  becomes "Something like <title>", with the listing's category,
+  subcategory and title as the Buying Agent's slots, and every
+  `FIND_FOR_ME` from a listing carries `from_listing_id`. The Buying Agent
+  leaves that listing out and searches on the first turn. A query with
+  words of its own keeps them and gets no category, since category is a
+  hard filter and "a laptop" asked from a phone's listing is not a phone.
+
+Also:
+
+- **Availability is a fact.** A listing a buyer marked unavailable, or with
+  no units left, says so in the prompt, so "is it still available?" is not
+  answered from a price and a description.
+- **A listing that is gone** (removed, unpaid, lapsed) is answered by rule
+  ("I can't open that listing any more...") instead of by the model reading
+  nothing. Its turns are not stored against it, which on PostgreSQL was a
+  foreign-key 500.
+- **Daily sessions.** Without a plan, questions about 2 listings a day, and
+  2 Buying Agent hunts (PRICING.md, `premium/zeno_sessions.py`). Every
+  question about one listing that day is one session, and a hunt handed
+  over from it belongs to that session. The card shows what is left
+  (`GET /zeno/sessions/today`). Used up, the turn is refused with a 402
+  `ZENO_SESSIONS_USED` before the model runs. The seller's own listing and
+  the escrow walkthrough are never counted, and a session is given back
+  when Zeno could not answer.
+
 ## Showing Zeno a photo (2026-10-02)
 
 The Zeno tab's composer has a photo button (BROKA's camera or the gallery,

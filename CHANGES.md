@@ -1,3 +1,164 @@
+# The listing page: smaller Like and Save, the price at the foot of the screen, "Mark as unavailable" that texts the seller, the seller's number, reply time to the first message, Zeno's three questions fixed, and two free Zeno sessions a day (2026-11-12)
+
+Asked for: Like and Save were too large; the price and Start Negotiation
+should sit at the bottom of the screen without the panel around them;
+"Mark as unavailable" was hard to see and made the listing disappear with
+no way for the seller to correct it - the seller should get an SMS ("Hey
+Xavier, it's me Zeno from Broka, your listing ... has been marked
+unavailable, if not true you can revoke this on your dashboard") and a
+push, and be able to revoke it; the seller card should have the seller's
+phone number; response time should measure the reply to the first message
+(the buyer's, or Zeno's availability question), not assume every message
+needs an answer; "Is this a fair price?", "Is this seller reliable?" and
+"Find me something similar" should be checked and made to work; and free
+accounts should use those, and the Buying Agent, twice a day, where a use
+is a whole session, not a message.
+
+**Like, Save and the foot of the screen**
+
+- Like and Save were two half-width, 52dp-tall slabs. They are now pills
+  sized to their word, 36dp to see and 48dp to tap: the 6dp above and below
+  each pill are part of its tap.
+- The price and Start Negotiation (or Contact Seller, and Visit Store for a
+  store's product) sat in a full-width bordered panel with two links under
+  it. The panel is gone. The two stand at the foot of the screen over a
+  fade into the page's background, and the page scrolls under them
+  (`extendBody`) with its end kept clear of them.
+- "Report a problem" moved from under the buy button to the end of the
+  page.
+
+**Mark as unavailable: the seller is texted, pushed, and can revoke it**
+
+- It was 11.5px grey text under the buy button ("No longer available? Mark
+  it sold out"). It is now an outlined button in a strip under the stock
+  line and the chips: "Sold already? Let other buyers know. The seller is
+  texted and can undo it." The dialog says the same before anything is
+  sent.
+- The listing still hides at once. The seller is now told, right after the
+  reporter has their answer (the request's `BackgroundTasks`):
+  - **an SMS**: `Hey <first name>, it's Zeno from BROKA. A buyer marked
+    your listing "<name>" unavailable, so it's hidden. Not true? Revoke it
+    on your BROKA dashboard.` One 160-character GSM-7 part; a long listing
+    name is shortened to keep it so. Sent at any hour, since the listing is
+    hidden from every buyer while it waits. Once per report: claimed on the
+    new `listings.sold_out_texted_at` before it is sent, so the request and
+    the sweep can't both send it. One the provider didn't take is retried
+    by the one-minute nudge loop for 24 hours (`send_due_texts`). The
+    listing's own SMS switch (`sms_alerts`, Zeno's "should I text you?"
+    when it was listed) is honoured, as the availability and expiry texts
+    honour it.
+  - **a push** (`listing_sold_out_reported`). Its tap opened nothing; it
+    opens the Seller Dashboard now (sign-in first on a signed-out phone).
+    With the app in front, the app draws it.
+- **Revoking.** A report took the listing out of the dashboard's catalogue
+  too, since the catalogue reads the same live listings, so the seller had
+  nowhere to find it. The dashboard now lists the seller's reported
+  listings above the catalogue on Overview and Products
+  (`GET /listings/reported-unavailable`): **Still available** revokes every
+  open report and puts it back on sale (`DELETE /listings/{id}/sold-out`,
+  as before); **It's sold** removes it, after asking.
+- The bars say "Marked unavailable" instead of "Reported sold out".
+
+**The seller's number**
+
+- The seller card shows the seller's phone number from their profile
+  (`/auth/user/{id}`, which only signed-in users can read; the profile
+  screen already showed it), as `+254 712 345 678` however it was stored.
+  A tap calls it; the copy button or a long press copies it. A guest sees
+  "Sign in to see the seller's number".
+
+**Response time: the reply to the first message**
+
+- Every buyer message after a seller's reply started a new clock, and one
+  left unanswered at the end of a thread was charged up to 48 hours: a
+  seller who answered "is it still available?" in minutes was charged for
+  not replying to "ok, thanks". Now a thread is one wait, from the first
+  message that asks the seller something they can see (the buyer's own
+  direct message, or Zeno's message to the seller) to the seller's first
+  message after it. Unanswered first messages still count, capped at 48h.
+  The store rating uses the same rule. SELLER_METRICS.md has the details.
+- The tile under the figure reads "to a buyer's first message".
+
+**Zeno's three questions** (ZENO_ACTIONS.md)
+
+- **"Is this a fair price?"** The prompt told Zeno BROKA had no market
+  figures and to estimate. A price question now gets what similar live
+  listings from other sellers ask (lowest, median, highest, where this
+  price sits) and the listing's own price changes. Similar means the Buying
+  Agent's search plus at least half the title's words: the search's score
+  alone let a used pair of earbuds into a used phone's median.
+- **"Is this seller reliable?"** With `DCR_ENABLED` off (the default) every
+  seller was described as having "no completed deals through BROKA". Zeno
+  now reads their time on BROKA, completed deals, buyers' reviews, ID
+  verification, rating and first-reply time. A question about the seller's
+  reviews or trust also pulled the asking user's own profile into the
+  prompt beside the seller's figures; from someone else's listing those
+  words are about the seller unless the user says "my".
+- **"Find me something similar"** reached the Buying Agent as the words
+  "something similar", with no category or item, and the listing itself
+  could come back as a result. It now arrives as "Something like
+  <title>" with the listing's category, subcategory and title, the Buying
+  Agent searches on its first turn, and the listing is left out of the
+  results (`from_listing_id`).
+- Also: a listing reported unavailable or sold out says so in Zeno's facts.
+  A question about a listing that is gone gets a plain answer instead of a
+  model reading nothing, and its turns are no longer stored against the
+  missing listing, which PostgreSQL refused with a 500.
+
+**Two free Zeno sessions a day** (PRICING.md)
+
+- An account without a plan asks Zeno about 2 listings a day and starts 2
+  Buying Agent hunts a day (`ZENO_FREE_LISTING_SESSIONS_PER_DAY`,
+  `ZENO_FREE_AGENT_SESSIONS_PER_DAY`). Every question about one listing
+  that day is one session; a hunt is one however many turns it takes; a
+  "Find me something similar" hunt belongs to its listing's session. Not
+  counted: the seller's own listing, the escrow walkthrough, a listing that
+  is gone, and a turn Zeno could not answer (given back). Renewed at
+  midnight in Kenya. Plan holders are never counted.
+- Counted whether or not `PREMIUM_ENABLED` is on, so production limits free
+  accounts from this release. The refusal is a 402 `ZENO_SESSIONS_USED`
+  saying when they renew; it names a plan only while plans are on sale, and
+  without one the app shows the words and no plans sheet.
+- The listing's Zeno card says what is left: "1 of 2 free Zeno sessions
+  left today", or that a listing already asked about costs nothing more
+  (`GET /zeno/sessions/today`).
+- New table `zeno_sessions` (unique keys hold the limit under two requests
+  at once); schema revision 16.
+- The Buying Agent's three lifetime tries counted a search that brought
+  back listings; a try is now a watch started, and its searches are the
+  daily hunts.
+- Side effect: a retried voice turn whose reply the server had already
+  stored is handed back without spending another voice request. The check
+  for a stored reply now runs before the charge, so that the session check
+  can sit between them.
+
+**Needs the owner**
+
+- The Terms (`flutter_app/assets/legal/terms.md`, section 10) say buyers
+  and sellers call and message "without sharing phone numbers". The listing
+  now shows the seller's number, as the profile screen already did. The
+  Terms need changing to match, or the number taken off.
+- A phone number typed into a chat is still a contact leak that lowers the
+  seller's rank, while the listing shows the number.
+- The unavailable texts are paid SMS, sent at any hour.
+
+Not done: none of this has been run on a phone; it is CI's unit and widget
+tests only.
+
+Tests: `backend/tests/test_zeno_sessions.py`,
+`backend/tests/test_response_time_db.py`, and new cases in
+`test_sold_out_reports.py` (`TestTellingTheSeller`), `test_response_time.py`
+(the first message only), `test_zeno_assistant.py`
+(`TestTheListingCardsQuestions`), `test_buy_agent_conversation.py`
+(`TestSomethingSimilarFromAListing`) and `test_schema_migrations.py`
+(revision 16); `flutter_app/test/listing_unavailable_test.dart`,
+`flutter_app/test/zeno_sessions_test.dart`, and new cases in
+`product_screen_test.dart` (the pills, the foot of the screen, marking it
+unavailable, the seller's number, the sessions line). Existing tests
+changed: `test_premium.py`'s two Buying Agent tests (a try is a watch now),
+`test_zeno_assistant.py`'s wording, and `product_screen_test.dart`'s
+reply-time wording and the report button's new place.
+
 # Messages that arrive sooner, the delivered tick, Reply and Mark as read on notifications, photo albums, saving photos, calmer chat colours, and calls you can hear ringing (2026-11-11)
 
 Asked for: a sent message took long to reach the other person; of sent,

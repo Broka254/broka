@@ -198,6 +198,15 @@ async def _nudge_loop(interval_seconds: int = NUDGE_SWEEP_SECONDS) -> None:
                     await task_check_interest_nudges({})
                 except Exception as exc:
                     logger.error("[nudge] availability sweep failed: %s", exc)
+                # A seller whose listing a buyer marked unavailable is texted
+                # as the report lands; this retries a text that didn't go.
+                # The listing is hidden from every buyer meanwhile, so it
+                # rides the one-minute loop (listings/sold_out.py).
+                try:
+                    from api.domains.listings.sold_out import send_due_texts
+                    await send_due_texts()
+                except Exception as exc:
+                    logger.error("[nudge] unavailable-report text sweep failed: %s", exc)
                 # Auctions ride this 60s loop rather than the 300s sweep - an
                 # auction end is a deadline bidders are watching in real time. See
                 # task_close_due_auctions.

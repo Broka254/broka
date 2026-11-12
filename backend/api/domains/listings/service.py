@@ -1179,6 +1179,53 @@ class ListingService:
             for l in rows
         ]
 
+    async def reported_unavailable(self, seller_id: str, limit: int = 50) -> list:
+        """The seller's own listings a buyer marked unavailable, newest
+        report first (GET /listings/reported-unavailable).
+
+        Every list a buyer browses leaves these out (paid.live_clause), and
+        so did the seller's own dashboard, which reads the same lists: a
+        seller whose item was still for sale could not find it to say so.
+        Paid or not, store or personal - it is the seller's to put back.
+        """
+        from api.models.sold_out_report import SoldOutReport
+
+        rows = (await self.db.execute(
+            select(Listing).where(
+                Listing.seller_id == seller_id,
+                Listing.status == ListingStatus.active,
+                Listing.sold_out_reported_at.is_not(None),
+            ).order_by(desc(Listing.sold_out_reported_at)).limit(limit)
+        )).scalars().all()
+        if not rows:
+            return []
+        open_reports = dict((await self.db.execute(
+            select(SoldOutReport.listing_id, func.count(SoldOutReport.id))
+            .where(SoldOutReport.listing_id.in_([l.id for l in rows]),
+                   SoldOutReport.revoked_at.is_(None))
+            .group_by(SoldOutReport.listing_id)
+        )).all())
+        seller = await self.db.get(User, seller_id)
+        store_ids = {l.store_id for l in rows if l.store_id}
+        stores = {}
+        if store_ids:
+            stores = {s.id: s for s in (await self.db.execute(
+                select(Store).where(Store.id.in_(store_ids)))).scalars().all()}
+        assets = await load_listing_media(self.db, rows, [seller] if seller else [])
+        out = []
+        for l in rows:
+            d = self._listing_dict(l, seller=seller, store=stores.get(l.store_id),
+                                   assets=assets, card=True)
+            d.update({
+                "sold_out": True,
+                "reported_sold_out": True,
+                "reported_at": l.sold_out_reported_at.isoformat(),
+                "open_reports": int(open_reports.get(l.id, 0)),
+                "seller_texted": l.sold_out_texted_at is not None,
+            })
+            out.append(d)
+        return out
+
     # ── Likes (2026-10-09) ────────────────────────────────────────────────
     #
     # A like is a buyer saying "I like this"; a save keeps it in their

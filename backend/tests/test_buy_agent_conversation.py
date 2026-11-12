@@ -87,6 +87,41 @@ def _stub_ai(monkeypatch, *, turn: dict, narration: str = "Here's what I found."
     monkeypatch.setattr(AIBrokerService, "_call_ai", fake_call)
 
 
+class TestSomethingSimilarFromAListing:
+    @pytest.mark.asyncio
+    async def test_it_searches_at_once_and_never_returns_the_listing_itself(
+        self, client, buyer_token, seller_token, monkeypatch
+    ):
+        """"Find me something similar" on a listing hands the hunt over with
+        that listing's category and title (zeno_assistant/service.py). It
+        asked "what is it you're looking for?" - and the listing the buyer
+        came from could come back as the first result."""
+        made = []
+        for _ in range(2):
+            r = await client.post("/listings/", json={
+                "description": "Well kept, works perfectly - selling because I upgraded.",
+                "name": "Oraimo Spacebuds", "category": "Electronics", "price": 1500,
+                "lat": -1.286, "lng": 36.817,
+            }, headers={"Authorization": f"Bearer {seller_token}"})
+            assert r.status_code == 201, r.text
+            made.append(r.json()["id"])
+        source, other = made
+        # The turn model would ask; a hunt handed over from a listing is
+        # already a whole brief, so it is not consulted.
+        _stub_ai(monkeypatch, turn={"action": "ASK", "reply": "What are you after?", "slots": {}},
+                 narration="Here's another pair like it.")
+        res = await client.post("/buy-agent-requests/converse", json={
+            "message": "Something like Oraimo Spacebuds", "history": [], "questions_asked": 0,
+            "slots": {"category": "Electronics", "query": "Oraimo Spacebuds"},
+            "from_listing_id": source,
+        }, headers={"Authorization": f"Bearer {buyer_token}"})
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["phase"] == "RESULTS"
+        ids = [m["id"] for m in body["matches"]]
+        assert other in ids and source not in ids
+
+
 class TestConversationalBuyingAgent:
     @pytest.mark.asyncio
     async def test_vague_opening_gets_a_question_not_a_search(self, client, buyer_token, monkeypatch):

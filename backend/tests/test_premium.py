@@ -398,21 +398,26 @@ class TestBuyingAgent:
         assert refused.json()["detail"]["upgrade_to"] == "plus"
 
     @pytest.mark.asyncio
-    async def test_a_search_is_a_try_only_once_it_brings_back_listings(self, client, premium_on, monkeypatch):
+    async def test_a_hunt_is_a_daily_session_not_one_of_the_free_tries(self, client, premium_on, monkeypatch):
+        # Since 2026-11-12 a free account's Buying Agent hunts are counted
+        # as daily sessions (premium/zeno_sessions.py, test_zeno_sessions.py);
+        # the free tries count only the watches it starts.
         answers = [{"phase": "ASKING"}, {"phase": "RESULTS", "listings": []}]
         monkeypatch.setattr("api.domains.buy_agent.conversation.converse",
                             AsyncMock(side_effect=lambda **_: answers.pop(0)))
         _, free = await _user()
-        turn = {"message": "a phone under 20k"}
-        assert (await client.post("/buy-agent-requests/converse", headers=free, json=turn)).status_code == 200
+        first = {"message": "a phone under 20k"}
+        then = {"message": "a Samsung", "history": [{"role": "user", "content": "a phone under 20k"},
+                                                    {"role": "assistant", "content": "Which brand?"}]}
+        assert (await client.post("/buy-agent-requests/converse", headers=free, json=first)).status_code == 200
+        assert (await client.post("/buy-agent-requests/converse", headers=free, json=then)).status_code == 200
         me = (await client.get("/premium/me", headers=free)).json()
-        assert me["usage"]["agent_tries"]["used"] == 0, "Zeno's questions are free"
-        assert (await client.post("/buy-agent-requests/converse", headers=free, json=turn)).status_code == 200
-        me = (await client.get("/premium/me", headers=free)).json()
-        assert me["usage"]["agent_tries"]["used"] == 1
+        assert me["usage"]["agent_tries"]["used"] == 0, "a search no longer spends a try"
+        today = (await client.get("/zeno/sessions/today", headers=free)).json()
+        assert today["agent"]["used"] == 1, "both turns are one hunt"
 
     @pytest.mark.asyncio
-    async def test_a_spent_trial_is_refused_before_the_model_runs(self, client, premium_on, monkeypatch):
+    async def test_spent_tries_no_longer_stop_a_hunt(self, client, premium_on, monkeypatch):
         model = AsyncMock(return_value={"phase": "RESULTS"})
         monkeypatch.setattr("api.domains.buy_agent.conversation.converse", model)
         user, free = await _user()
@@ -420,8 +425,8 @@ class TestBuyingAgent:
             for _ in range(3):
                 await entitlements.consume(db, user.id, Feature.AGENT_TRY)
         r = await client.post("/buy-agent-requests/converse", headers=free, json={"message": "phones"})
-        assert r.status_code == 402
-        model.assert_not_called()
+        assert r.status_code == 200
+        model.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_a_plan_holder_is_never_counted(self, client, premium_on, monkeypatch):

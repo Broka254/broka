@@ -150,9 +150,17 @@ class ZenoActionRunner {
         await push(MaterialPageRoute(builder: (_) => ListingSearchScreen(initialQuery: action.query)));
         return true;
       case ZenoActionType.findForMe:
+        // From a listing's questions, the hunt starts knowing what "similar"
+        // means and which listing it came from (ZenoAction.slots,
+        // fromListingId).
         await push(MaterialPageRoute(
             settings: const RouteSettings(name: buyingAgentRoute),
-            builder: (_) => ZenoScreen(mode: ZenoMode.buyingAgent, initialQuery: action.query)));
+            builder: (_) => ZenoScreen(
+                  mode: ZenoMode.buyingAgent,
+                  initialQuery: action.query,
+                  initialSlots: action.slots.isEmpty ? null : action.slots,
+                  fromListingId: action.fromListingId,
+                )));
         return true;
       case ZenoActionType.openChat:
         final c = action.target;

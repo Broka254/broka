@@ -48,6 +48,7 @@ import '../features/listings/presentation/replace_photos.dart';
 import '../features/stores/presentation/store_entry.dart';
 import '../features/stores/presentation/widgets/menu_store_section.dart';
 import '../features/seller_dashboard/data/seller_dashboard_repository.dart';
+import '../features/seller_dashboard/presentation/reported_unavailable_panel.dart';
 import '../widgets/stale_data_banner.dart';
 
 class SellerDashboardScreen extends StatefulWidget {
@@ -1126,6 +1127,10 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         ),
       // A listing buyers can't see is the thing costing sales right now.
       AwaitingPaymentPanel(reloadSignal: _feeReload),
+      // ...and so is one a buyer marked unavailable: hidden from buyers and
+      // from the catalogue below until the seller says it's still for sale.
+      // The text and the push about it send the seller here.
+      ReportedUnavailablePanel(reloadSignal: _feeReload, onChanged: _refresh),
       _buildCommandHeader(),
       _buildStoreSection(),
       _buildRadialStatCards(),
@@ -2319,30 +2324,43 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   // ════════════════════════════════════════════════════════════════════════════
   Widget _buildProductsTab() {
     if (_listings.isEmpty) {
-      return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Container(width: 72, height: 72,
-          decoration: BoxDecoration(shape: BoxShape.circle, color: BrokaColors.bgCard,
-              border: Border.all(color: BrokaColors.gold.withOpacity(0.25))),
-          child: const Icon(Icons.storefront_outlined, color: BrokaColors.textLow, size: 36)),
-        const SizedBox(height: 16),
-        const Text('No products yet',
-            style: TextStyle(color: BrokaColors.textMid, fontSize: 16)),
-        const SizedBox(height: 8),
-        const Text("Tap 'Sell' to list your first product",
-            style: TextStyle(color: BrokaColors.textMid, fontSize: 13)),
-        const SizedBox(height: 20),
-        PressableScale(
-          onTap: () => Navigator.pushNamed(context, '/sell'),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 13),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(colors: [BrokaColors.gold, BrokaColors.neonBlue]),
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: [BoxShadow(color: BrokaColors.gold.withOpacity(0.30), blurRadius: 12)]),
-            child: const Text('List a Product',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)))),
-      ]));
+      // A seller whose only listing a buyer marked unavailable has an empty
+      // catalogue - that listing is out of it - and must still see it here.
+      return Column(children: [
+        ReportedUnavailablePanel(reloadSignal: _feeReload, onChanged: _refresh),
+        Expanded(child: _buildNoProducts()),
+      ]);
     }
+    return _buildProductList();
+  }
+
+  Widget _buildNoProducts() {
+    return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+      Container(width: 72, height: 72,
+        decoration: BoxDecoration(shape: BoxShape.circle, color: BrokaColors.bgCard,
+            border: Border.all(color: BrokaColors.gold.withOpacity(0.25))),
+        child: const Icon(Icons.storefront_outlined, color: BrokaColors.textLow, size: 36)),
+      const SizedBox(height: 16),
+      const Text('No products yet',
+          style: TextStyle(color: BrokaColors.textMid, fontSize: 16)),
+      const SizedBox(height: 8),
+      const Text("Tap 'Sell' to list your first product",
+          style: TextStyle(color: BrokaColors.textMid, fontSize: 13)),
+      const SizedBox(height: 20),
+      PressableScale(
+        onTap: () => Navigator.pushNamed(context, '/sell'),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 13),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(colors: [BrokaColors.gold, BrokaColors.neonBlue]),
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [BoxShadow(color: BrokaColors.gold.withOpacity(0.30), blurRadius: 12)]),
+          child: const Text('List a Product',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)))),
+    ]));
+  }
+
+  Widget _buildProductList() {
     return RefreshIndicator(
       onRefresh: _refresh,
       color: BrokaColors.gold,
@@ -2367,6 +2385,12 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
             return FadeSlideIn(
               index: 0,
               child: Column(children: [
+                // Out of the catalogue below, so they are listed above it.
+                ReportedUnavailablePanel(
+                  reloadSignal: _feeReload,
+                  onChanged: _refresh,
+                  margin: const EdgeInsets.only(bottom: 14),
+                ),
                 _buildProductsHeader(),
                 if (_offers != null)
                   LaunchOffersCard(

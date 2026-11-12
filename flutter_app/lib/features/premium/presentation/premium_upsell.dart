@@ -29,6 +29,13 @@ import '../domain/premium.dart';
 /// A premium feature's refusal (backend api/domains/premium/entitlements.py).
 bool isPlanRefusal(int? statusCode) => statusCode == 402;
 
+/// Whether a 402 should offer the plans. Always, except today's free Zeno
+/// sessions running out while no plan is on sale (backend
+/// premium/zeno_sessions.py, upgrade_to null): there is nothing to buy then,
+/// and the server's words already say when they renew.
+bool offersPlans(String? code, Map<String, dynamic>? details) =>
+    !(code == 'ZENO_SESSIONS_USED' && details?['upgrade_to'] == null);
+
 /// The plan the refusal suggests, when it says (ApiException.details).
 String? upgradeToOf(ApiException e) => e.details?['upgrade_to'] as String?;
 

@@ -473,6 +473,11 @@ class Listing(Base):
     # out of every list buyers browse until its seller says it is still
     # there. A column, not a ListingStatus, for the reason above.
     sold_out_reported_at = Column(DateTime, nullable=True)
+    # When the seller was texted about that report (listings/sold_out.py).
+    # Claimed before the text goes, cleared if it fails and when the seller
+    # revokes the report, so each report is texted once and a failed text
+    # is retried by the sweep.
+    sold_out_texted_at   = Column(DateTime, nullable=True)
 
     __table_args__ = (
         Index("uq_listings_seller_client_ref", "seller_id", "client_ref", unique=True),
@@ -1488,7 +1493,7 @@ async def _apply_optional_statements(conn, statements) -> None:
         await conn.execute(text(prepared))
 
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 SCHEMA_REVISIONS = (
     (1, "legacy_schema_adoption"),
     (2, "durable_payment_intents_and_callbacks"),
@@ -1529,6 +1534,11 @@ SCHEMA_REVISIONS = (
     # ALTER below). Without the revision a replica could read history
     # against a database missing the column - every chat would fail to load.
     (15, "chat_photo_albums"),
+    # Zeno's daily sessions for free accounts (api/models/zeno_session.py,
+    # create_all) and Listing.sold_out_texted_at (the ALTER below): a
+    # replica serving the listing questions or a sold-out report against a
+    # database without them would fail every one.
+    (16, "zeno_sessions_and_unavailable_texts"),
 )
 
 # Tables/columns that must exist before an API process is safe to serve
@@ -1783,6 +1793,7 @@ async def _init_db_impl():
         )),
         ("api.models.push_device", ("PushDevice",)),
         ("api.models.sold_out_report", ("SoldOutReport",)),
+        ("api.models.zeno_session", ("ZenoSession",)),
         ("api.models.payment_callback", ("PaymentCallback",)),
         ("api.models.legal", ("LegalAcceptance",)),
         ("api.models.feedback", ("UserFeedback",)),
@@ -2077,6 +2088,9 @@ async def _init_db_impl():
             "ALTER TABLE listings ADD COLUMN paid_until TIMESTAMP",
             # Reported sold out by a buyer (Listing.sold_out_reported_at).
             "ALTER TABLE listings ADD COLUMN sold_out_reported_at TIMESTAMP",
+            # The seller was texted about that report (rev 16,
+            # Listing.sold_out_texted_at).
+            "ALTER TABLE listings ADD COLUMN sold_out_texted_at TIMESTAMP",
             # Units per deal (Deal.quantity). NULL on every existing deal:
             # each was for one unit.
             "ALTER TABLE deals ADD COLUMN quantity INTEGER",

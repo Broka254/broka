@@ -17,12 +17,12 @@ Exactly the ones asked for, and nothing invented:
   Reviews        0.55  The star quality buyers gave THIS store. Bayesian
                        smoothed toward a prior, so three 5-star reviews do
                        not beat two years of 4.6.
-  Response time  0.30  Measured from threads about THIS store's products.
-                       Unanswered inbound counts (censored at 48 h) and a
-                       burst of buyer messages is one wait — the same rules
-                       as the seller record (trust/response_time.py), so
-                       the two numbers cannot disagree about what a reply
-                       is.
+  Response time  0.30  Measured from threads about THIS store's products:
+                       one wait per conversation, from the buyer's first
+                       message to the shop's first answer, and an unanswered
+                       one counts (censored at 48 h) — the same rules as the
+                       seller record (trust/response_time.py), so the two
+                       numbers cannot disagree about what a reply is.
   Time on BROKA  0.15  `stores.created_at`, saturating at six months. It is
                        weak evidence of quality, but it is evidence: a
                        month-old shop has not had the chance to earn or lose
@@ -62,7 +62,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import Listing, NegotiationMessage, Review
 from api.models.store import Store, StoreRatingSnapshot
-from api.domains.trust.response_time import WINDOW_DAYS, compute_response_times_by
+from api.domains.trust.response_time import (
+    WINDOW_DAYS, compute_response_times_by, thread_rows_clause,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -200,7 +202,9 @@ async def store_response_minutes(
         .join(Listing, Listing.id == NegotiationMessage.listing_id)
         .where(
             Listing.store_id.is_not(None),
-            NegotiationMessage.created_at >= since,
+            # The seller record's rule, word for word: one wait per
+            # conversation, from its first message to the shop's answer.
+            thread_rows_clause(since),
         )
         .order_by(
             Listing.store_id,

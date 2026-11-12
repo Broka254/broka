@@ -23,7 +23,7 @@ from api.core.rate_limit import zeno_chat_limiter
 from api.core.vision import ImageRejected, prepare_for_model
 from api.database import get_db
 from api.security import get_current_user
-from . import autolist, selling, service
+from . import autolist, listing_context, selling, service
 
 router = APIRouter()
 
@@ -108,6 +108,7 @@ async def assistant_turn(
     (/negotiate/chat): most turns are a model call.
     """
     await zeno_chat_limiter.check_and_record(current_user["id"])
+    uid = current_user["id"]
     image = None
     if body.image_base64:
         # Before the voice entitlement below: a photo that can't be used
@@ -116,43 +117,70 @@ async def assistant_turn(
             image = await prepare_for_model(body.image_base64)
         except ImageRejected as exc:
             raise HTTPException(status_code=422, detail=str(exc))
+    sticky_mode = (body.conversation_mode or "").strip().lower() or None
+    if sticky_mode not in (None, "assistant", "buying"):
+        raise HTTPException(status_code=400, detail="conversation_mode must be 'assistant' or 'buying'")
+    sticky_client_id = (body.client_turn_id or "").strip() or None
+    listing_id = (body.listing_id or "").strip() or None
+    access = await service.listing_access(db, uid, listing_id) if listing_id else None
+    # A listing that isn't there has no conversation to store: its id is a
+    # foreign key, and PostgreSQL refused the row - a 500 on the turn.
+    persist = bool(sticky_mode) and access != listing_context.GONE
+    if persist and sticky_client_id:
+        # Retry of a turn whose reply was lost: the assistant answer stored
+        # after the user turn is the durable result to hand back.
+        from . import persistence as _persistence
+
+        replay = await _persistence.replay_turn(db, uid, sticky_mode, listing_id, sticky_client_id)
+        if replay is not None:
+            return replay
+    # Questions about someone else's listing are one of the day's Zeno
+    # sessions for a free account (premium/zeno_sessions.py): every question
+    # about one listing that day is one session, opened by its first. Taken
+    # before anything is paid for, and refused with a 402 once the day's
+    # are used. Not for the user's own listing, nor a step of the escrow
+    # walkthrough (no model answers it, and paying safely isn't rationed).
+    from api.domains.premium import zeno_sessions
+
+    admission = None
+    if access == listing_context.VISIBLE and not service.is_free_turn(body.message, body.history, image):
+        admission = await zeno_sessions.admit_listing(db, uid, listing_id)
     if body.mode == "voice":
         # Voice mode is premium (PRICING.md). The microphone streams from
         # the phone straight to the speech provider, where BROKA cannot
         # count it; each spoken turn reaches this endpoint, so the turn is
         # what the plan's voice requests count. Typed turns stay free.
         from api.domains.premium import entitlements
-        await entitlements.consume(db, current_user["id"], entitlements.Feature.VOICE)
-    sticky_mode = (body.conversation_mode or "").strip().lower() or None
-    if sticky_mode not in (None, "assistant", "buying"):
-        raise HTTPException(status_code=400, detail="conversation_mode must be 'assistant' or 'buying'")
-    sticky_client_id = (body.client_turn_id or "").strip() or None
-    if sticky_mode and sticky_client_id:
-        # Retry of a turn whose reply was lost: the assistant answer stored
-        # after the user turn is the durable result to hand back.
+        try:
+            await entitlements.consume(db, uid, entitlements.Feature.VOICE)
+        except HTTPException:
+            # Refused: the session this turn opened was not used.
+            await zeno_sessions.release(db, admission)
+            raise
+    if persist:
         from . import persistence as _persistence
 
-        replay = await _persistence.replay_turn(db, current_user["id"], sticky_mode,
-                                                body.listing_id, sticky_client_id)
-        if replay is not None:
-            return replay
-    if sticky_mode:
-        from . import persistence as _persistence
-
-        await _persistence.append_turn(db, current_user["id"], sticky_mode,
-                                       body.listing_id, "user", body.message,
+        await _persistence.append_turn(db, uid, sticky_mode, listing_id, "user", body.message,
                                        sticky_client_id)
-    turn = await service.assistant_turn(
-        db=db,
-        user_id=current_user["id"],
-        message=body.message,
-        history=body.history,
-        language=body.language,
-        voice=body.mode == "voice",
-        listing_id=body.listing_id,
-        image_base64=image,
-    )
-    if sticky_mode:
+    try:
+        turn = await service.assistant_turn(
+            db=db,
+            user_id=uid,
+            message=body.message,
+            history=body.history,
+            language=body.language,
+            voice=body.mode == "voice",
+            listing_id=listing_id,
+            image_base64=image,
+        )
+    except Exception:
+        await zeno_sessions.release(db, admission)
+        raise
+    if isinstance(turn, dict) and turn.get("source") == "fallback":
+        # No model answered ("Sorry, that wasn't successful"): the user got
+        # nothing for the session this turn opened, so it is given back.
+        await zeno_sessions.release(db, admission)
+    if persist:
         from . import persistence as _persistence
 
         reply_text = ""
@@ -160,10 +188,24 @@ async def assistant_turn(
             reply_text = str(turn.get("reply", ""))
         except Exception:
             reply_text = ""
-        await _persistence.append_turn(db, current_user["id"], sticky_mode,
-                                       body.listing_id, "assistant", reply_text,
+        await _persistence.append_turn(db, uid, sticky_mode, listing_id, "assistant", reply_text,
                                        None)
     return turn
+
+
+@router.get("/sessions/today")
+async def zeno_sessions_today(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Today's Zeno sessions for the signed-in account: how many of the
+    free listing sessions and Buying Agent hunts are used and left, when
+    they renew, and which listings were already asked about today (asking
+    about one of them again costs nothing). With a plan nothing is counted:
+    `limited` is false. See premium/zeno_sessions.py."""
+    from api.domains.premium import zeno_sessions
+
+    return await zeno_sessions.today(db, current_user["id"])
 
 
 class ZenoConversationAppendIn(BaseModel):

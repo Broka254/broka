@@ -29,6 +29,12 @@ os.environ.setdefault("ESCROW_GUIDANCE_ENABLED", "true")
 # (test_listing_fee_payment.py, test_founding_sellers.py).
 os.environ.setdefault("FREE_LISTINGS_PER_SELLER", "0")
 os.environ.setdefault("FOUNDING_SELLER_TIERS", "")  # test_founding_sellers.py
+# A free account gets two Zeno sessions a day for listing questions and two
+# Buying Agent hunts (premium/zeno_sessions.py). Most suites talk to Zeno
+# from one module-wide account far more often than that; the limits
+# themselves are tested at their real values in test_zeno_sessions.py.
+os.environ.setdefault("ZENO_FREE_LISTING_SESSIONS_PER_DAY", "1000")
+os.environ.setdefault("ZENO_FREE_AGENT_SESSIONS_PER_DAY", "1000")
 
 
 def pytest_configure(config):

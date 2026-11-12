@@ -167,8 +167,16 @@ async def converse(
     questions_asked: int,
     viewer_lat: Optional[float] = None,
     viewer_lng: Optional[float] = None,
+    exclude_listing_id: Optional[str] = None,
+    search_now: bool = False,
 ) -> dict:
-    """One turn. Returns either a question or a finished search."""
+    """One turn. Returns either a question or a finished search.
+
+    `exclude_listing_id`: the listing the hunt was handed over from -
+    "something similar" to it is never it. `search_now`: the criteria
+    already say what to look for (they came from that listing), so search
+    without asking - when there is something to search for.
+    """
     cat_names, subs_by_cat, top_by_name, children_by_cat = await _taxonomy(db)
     # The client's copy of the criteria is cleaned exactly like the model's
     # before anything reads it - the prompt, the fallbacks below and the
@@ -181,17 +189,21 @@ async def converse(
     user_name = await _first_name(db, buyer_id)
 
     try:
-        turn = await AIBrokerService().buy_agent_turn(
-            message=message,
-            history=history,
-            slots=slots,
-            valid_categories=cat_names,
-            subcategories_by_category=subs_by_cat,
-            attribute_hints=_attribute_hints(slots.get("category"), slots.get("subcategory")),
-            user_name=user_name,
-            questions_asked=questions_asked,
-            max_questions=MAX_QUESTIONS,
-        )
+        if search_now and slots.get("query"):
+            # No model needed to decide: the turn policy below searches.
+            turn = {"action": "SEARCH", "reply": "", "slots": slots}
+        else:
+            turn = await AIBrokerService().buy_agent_turn(
+                message=message,
+                history=history,
+                slots=slots,
+                valid_categories=cat_names,
+                subcategories_by_category=subs_by_cat,
+                attribute_hints=_attribute_hints(slots.get("category"), slots.get("subcategory")),
+                user_name=user_name,
+                questions_asked=questions_asked,
+                max_questions=MAX_QUESTIONS,
+            )
     except Exception as exc:
         # Every AI provider being down must not take the Buying Agent screen
         # with it. _call_ai already walks four providers and a cache before
@@ -241,6 +253,7 @@ async def converse(
         db, new_slots, buyer_id,
         top_by_name=top_by_name, children_by_cat=children_by_cat,
         viewer_lat=viewer_lat, viewer_lng=viewer_lng,
+        exclude_ids={exclude_listing_id} if exclude_listing_id else None,
     )
     verdict = _verdict(results)
 
@@ -280,6 +293,7 @@ async def search_for(
     children_by_cat: Dict[str, Dict[str, Any]],
     viewer_lat: Optional[float] = None,
     viewer_lng: Optional[float] = None,
+    exclude_ids: Optional[set] = None,
 ) -> tuple[List[dict], List[str]]:
     """Hard-filter to what would otherwise be plain wrong, then score.
 
@@ -321,7 +335,9 @@ async def search_for(
 
     # A buyer's own listings are never an answer to their own search - same
     # rule the standing-request matcher applies (core/buy_agent_subscribers.py).
-    candidates = [p for p in pool if p.get("seller_id") != buyer_id]
+    # Nor is the listing a "something similar" hunt started from.
+    excluded = exclude_ids or set()
+    candidates = [p for p in pool if p.get("seller_id") != buyer_id and p.get("id") not in excluded]
 
     criteria = {
         "query": slots.get("query"),

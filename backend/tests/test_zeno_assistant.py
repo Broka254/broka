@@ -628,7 +628,12 @@ class TestAskingAboutAListing:
         assert "Condition: used" in p
         assert "Seller's overall BROKA rating: 8.5/10" in p
         assert "Seller's deal completion rate: 92%" in p
-        assert "Seller's typical reply time: 25 minutes" in p
+        # The first-message measure (trust/response_time.py, 2026-11-12).
+        assert "Seller's typical first-reply time: 25 minutes" in p
+        # How long they've been here, what they completed, what buyers said.
+        assert "Seller on BROKA since:" in p
+        assert "Seller's completed deals through BROKA: 14" in p
+        assert "Seller's reviews from buyers: none yet" in p
         # The seller's words, inside it.
         fenced = p[p.index("<<<LISTING"):p.index("LISTING>>>")]
         assert "Title: iPhone 13 128GB" in fenced
@@ -660,8 +665,11 @@ class TestAskingAboutAListing:
         _model(monkeypatch, reply="This one has 4GB. Want me to look for 8GB laptops?",
                action={"type": "FIND_FOR_ME", "query": "laptop with 8GB RAM"})
         out = await _turn(client, buyer, "I need 8GB of RAM", listing_id=listing.id)
+        # The hunt it offers comes from this listing: the Buying Agent leaves
+        # it out of the results, and it is part of this listing's Zeno
+        # session (premium/zeno_sessions.py). Its own words, so no category.
         assert out["action"] == {"type": "FIND_FOR_ME", "query": "laptop with 8GB RAM",
-                                 "requires_confirmation": True}
+                                 "from_listing_id": listing.id, "requires_confirmation": True}
         assert out["reply"] == "This one has 4GB. Want me to look for 8GB laptops?"
         # Away from a listing, a search Zeno picks still just happens.
         out = await _turn(client, buyer, "I need a laptop with 8GB of RAM")
@@ -725,3 +733,117 @@ class TestAskingAboutAListing:
         resp = await client.post("/zeno/assistant/turn", headers=_auth(me),
                                   json={"message": "hi", "listing_id": "x" * 65})
         assert resp.status_code == 422
+
+
+# ── The listing card's three questions (2026-11-12) ──────────────────────────
+#
+# "Is this a fair price?", "Is this seller reliable?" and "Find me something
+# similar", checked for what each is actually answered from.
+
+class TestTheListingCardsQuestions:
+    @pytest.mark.asyncio
+    async def test_find_me_something_similar_hunts_for_listings_like_this_one(self, client, monkeypatch):
+        """It reached the Buying Agent as the query "something similar" - no
+        item, no category - and the agent asked what to look for."""
+        seller = await _seller("Earbud Seller")
+        buyer = await _user("Similar Buyer")
+        listing = await _for_sale(seller, name="Oraimo Spacebuds", price=1500.0)
+        _no_model(monkeypatch)
+        out = await _turn(client, buyer, "Find me something similar", listing_id=listing.id)
+        action = out["action"]
+        assert action["type"] == "FIND_FOR_ME"
+        assert action["query"] == "Something like Oraimo Spacebuds"
+        assert action["slots"] == {"category": "Electronics", "query": "Oraimo Spacebuds"}
+        assert action["from_listing_id"] == listing.id
+        assert "requires_confirmation" not in action, "the buyer asked for it: it runs"
+        assert "Oraimo Spacebuds" in out["reply"]
+        # Kiswahili asks the same.
+        out = await _turn(client, buyer, "nitafutie kitu kama hiki", listing_id=listing.id)
+        assert out["action"]["query"] == "Something like Oraimo Spacebuds"
+
+    @pytest.mark.asyncio
+    async def test_a_price_question_is_answered_against_similar_listings(self, client, monkeypatch):
+        """The prompt said BROKA had no market figures and to estimate from
+        general knowledge, whatever BROKA had."""
+        seller = await _seller("Priced Seller")
+        listing = await _for_sale(seller, name="JBL Flip 5 speaker", price=9000.0)
+        for price in (8000.0, 10000.0, 12000.0):
+            other = await _seller(f"Other Seller {price:.0f}")
+            await _for_sale(other, name="JBL Flip 5 speaker", price=price)
+        buyer = await _user("Thrifty Buyer")
+        prompts = []
+        _model(monkeypatch, reply="About right.", prompts=prompts)
+        await _turn(client, buyer, "Is this a fair price?", listing_id=listing.id)
+        p = prompts[0]
+        assert "Similar live listings on BROKA from other sellers: 3" in p
+        assert "median KES 10,000" in p
+        assert "10% below the median" in p
+        assert "compare the asking price with the similar BROKA listings" in p
+        assert "have no market average" not in p
+        # Numbers only: other sellers' titles stay out of the prompt's facts.
+        facts = p[:p.index("<<<LISTING")]
+        assert facts.count("JBL Flip 5 speaker") == 0
+
+    @pytest.mark.asyncio
+    async def test_a_seller_with_deals_is_not_called_new_while_dcr_is_off(self, client, monkeypatch):
+        """With DCR_ENABLED off (the default) every seller was described as
+        having "no completed deals through BROKA", dozens or not."""
+        seller = await _seller("Busy Seller", verified=True)
+        async with AsyncSessionLocal() as db:
+            (await db.get(User, seller.id)).completed_deals = 14
+            await db.commit()
+        listing = await _for_sale(seller)
+        await _standing(seller)
+        for stars in (5, 4):
+            await _review(seller, stars)
+        buyer = await _user("Careful Buyer")
+        prompts = []
+        _model(monkeypatch, reply="A solid record.", prompts=prompts)
+        await _turn(client, buyer, "Is this seller reliable?", listing_id=listing.id)
+        p = prompts[0]
+        assert "no completed deals" not in p
+        assert "Seller's completed deals through BROKA: 14" in p
+        assert "Seller's reviews from buyers: 4.5 out of 5 from 2 reviews" in p
+        assert "Seller ID-verified: yes" in p
+        assert "Never call a seller safe or a scam" in p
+
+    @pytest.mark.asyncio
+    async def test_a_question_about_the_seller_brings_in_nothing_of_the_buyers_own(self, client, monkeypatch):
+        """"Does the seller have good reviews?" put the BUYER's own profile in
+        the prompt as "what you know about this user", beside the seller's
+        figures."""
+        seller = await _seller("Reviewed Seller")
+        listing = await _for_sale(seller)
+        buyer = await _user("Nosy Buyer")
+        await _review(buyer, 1)
+        prompts = []
+        _model(monkeypatch, reply="Two reviews so far.", prompts=prompts)
+        await _turn(client, buyer, "Does the seller have good reviews?", listing_id=listing.id)
+        assert "WHAT YOU KNOW ABOUT THIS USER" not in prompts[0]
+        # Their own, asked about as theirs, still is.
+        await _turn(client, buyer, "what's my rating?", listing_id=listing.id)
+        assert "WHAT YOU KNOW ABOUT THIS USER" in prompts[-1]
+
+    @pytest.mark.asyncio
+    async def test_a_listing_marked_unavailable_says_so(self, client, monkeypatch):
+        from datetime import datetime
+        seller = await _seller("Gone Seller")
+        listing = await _for_sale(seller, sold_out_reported_at=datetime.utcnow())
+        buyer = await _user("Late Buyer")
+        prompts = []
+        _model(monkeypatch, reply="A buyer said it's gone.", prompts=prompts)
+        await _turn(client, buyer, "is it still available?", listing_id=listing.id)
+        assert "a buyer reported on" in prompts[0] and "no longer available" in prompts[0]
+
+    @pytest.mark.asyncio
+    async def test_a_listing_that_is_gone_is_answered_without_a_model(self, client, monkeypatch):
+        """The model used to be asked "is this a fair price?" about nothing -
+        and on PostgreSQL the turn's storage refused the unknown listing id
+        (a 500)."""
+        buyer = await _user("Lost Buyer")
+        _no_model(monkeypatch)
+        resp = await client.post("/zeno/assistant/turn", headers=_auth(buyer), json={
+            "message": "Is this a fair price?", "listing_id": "no-such-listing",
+            "conversation_mode": "assistant", "client_turn_id": "t-gone-1"})
+        assert resp.status_code == 200, resp.text
+        assert "can't open that listing" in resp.json()["reply"]

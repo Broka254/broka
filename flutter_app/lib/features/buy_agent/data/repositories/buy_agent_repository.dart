@@ -52,6 +52,11 @@ class BuyAgentRepository {
   ///
   /// Stateless: [history] and [slots] are the conversation so far, handed
   /// straight back each turn, same as the general Zeno chat already does.
+  ///
+  /// [fromListingId]: the listing a "Find me something similar" hunt was
+  /// handed over from. Sent with every turn of that hunt: the listing never
+  /// comes back as a result, and the hunt is part of that listing's Zeno
+  /// session for the day rather than one of the day's hunts.
   Future<Result<Map<String, dynamic>>> converse({
     required String message,
     required List<Map<String, String>> history,
@@ -59,6 +64,7 @@ class BuyAgentRepository {
     int questionsAsked = 0,
     double? lat,
     double? lng,
+    String? fromListingId,
   }) async {
     try {
       final query = Uri(queryParameters: {
@@ -71,10 +77,14 @@ class BuyAgentRepository {
         'history': history,
         if (slots != null) 'slots': slots,
         'questions_asked': questionsAsked,
+        if (fromListingId != null) 'from_listing_id': fromListingId,
       });
       return Success(res as Map<String, dynamic>);
     } on ApiException catch (e) {
-      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
+      // The code and the rest of a 402: the day's free hunts used up offer
+      // the plans only while there is one to buy (upgrade_to).
+      return Failure(sanitizeErrorText(e.message),
+          statusCode: e.statusCode, code: e.code, details: e.details);
     } catch (e) {
       return Failure(userFacingError(e));
     }

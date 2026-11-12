@@ -143,6 +143,12 @@ class ConverseTurnIn(BaseModel):
     # How many questions Zeno has already asked in this conversation. Caps
     # the interrogation - see conversation.MAX_QUESTIONS.
     questions_asked: int = Field(default=0, ge=0, le=20)
+    # The listing this hunt was handed over from ("Find me something
+    # similar" on a listing's Zeno card). It never comes back as a result,
+    # and the hunt is part of that listing's Zeno session for the day
+    # (premium/zeno_sessions.py). Only an id: nothing about the listing is
+    # taken from the request.
+    from_listing_id: Optional[str] = Field(default=None, max_length=64)
 
     @field_validator("history", mode="before")
     @classmethod
@@ -196,24 +202,37 @@ async def converse_with_zeno(
     most expensive thing in the feature.
     """
     await ai_chat_limiter.check_and_record(current_user["id"])
-    # Without a plan the Buying Agent is three tries (PRICING.md). A try is
-    # a conversation that brought back listings, so Zeno's questions before
-    # them are free - but the last try is refused up front, not after the
-    # model has already been paid for.
-    from api.domains.premium import entitlements
-    await entitlements.require_left(db, current_user["id"], entitlements.Feature.AGENT_TRY)
-    result = await conversation.converse(
-        db=db,
-        buyer_id=current_user["id"],
-        message=body.message,
-        history=body.history,
-        slots=body.slots,
-        questions_asked=body.questions_asked,
-        viewer_lat=lat,
-        viewer_lng=lng,
-    )
-    if isinstance(result, dict) and result.get("phase") == "RESULTS":
-        await entitlements.try_consume(db, current_user["id"], entitlements.Feature.AGENT_TRY)
+    # Without a plan the Buying Agent is a few hunts a day (2026-11-12,
+    # premium/zeno_sessions.py; it was three tries for good). A hunt is one
+    # session however many turns it takes: a turn with no conversation
+    # before it starts one, every other turn continues the day's newest.
+    # Refused up front, before the model is paid for. A hunt handed over
+    # from a listing's questions is part of that listing's session.
+    from api.domains.premium import zeno_sessions
+    from_listing_id = (body.from_listing_id or "").strip() or None
+    fresh = not body.history
+    admission = await zeno_sessions.admit_agent(
+        db, current_user["id"], fresh=fresh, from_listing_id=from_listing_id)
+    try:
+        result = await conversation.converse(
+            db=db,
+            buyer_id=current_user["id"],
+            message=body.message,
+            history=body.history,
+            slots=body.slots,
+            questions_asked=body.questions_asked,
+            viewer_lat=lat,
+            viewer_lng=lng,
+            exclude_listing_id=from_listing_id,
+            # "Something like this one" is already a whole brief - its
+            # category and title - so the first turn of a hunt handed over
+            # from a listing searches instead of asking what to look for.
+            search_now=fresh and from_listing_id is not None,
+        )
+    except Exception:
+        # The turn that opened the hunt failed: it isn't a use.
+        await zeno_sessions.release(db, admission)
+        raise
     return result
 
 

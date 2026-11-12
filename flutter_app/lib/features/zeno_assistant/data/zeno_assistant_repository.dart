@@ -63,7 +63,10 @@ class ZenoAssistantRepository {
           return Success(ZenoTurnResult(reply: reply));
         } catch (_) {}
       }
-      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
+      // The code and the rest of a 402: the day's free Zeno sessions used
+      // up offer the plans only while there is one to buy (upgrade_to).
+      return Failure(sanitizeErrorText(e.message),
+          statusCode: e.statusCode, code: e.code, details: e.details);
     } catch (e) {
       return Failure(userFacingError(e));
     }

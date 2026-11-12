@@ -27,8 +27,20 @@
 //    model for a one-off verdict, and a price comparison against an endpoint
 //    that is never mounted (api/routers/listings.py), so it always said there
 //    was nothing to compare.
+//
+// 2026-11-12: Like and Save are compact pills sized to their word, not two
+// half-width 52dp slabs. The price and Start Negotiation stand on their own
+// at the foot of the screen, with the page scrolling under them - no panel
+// behind them and no links below them. "Mark as unavailable" is a plain
+// button by the stock line, where a buyer who has just heard "it's gone"
+// looks, and says the seller is texted and can undo it (it was grey 11px
+// text under the buy button); "Report a problem" closes the page. The
+// seller card has the seller's phone number, to call or copy, and the Zeno
+// card says how many of the day's free Zeno sessions are left.
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../features/categories/domain/category_visual.dart';
 import '../features/listings/data/repositories/listings_repository.dart';
 import '../features/listings/domain/models/listing_engagement.dart';
@@ -38,7 +50,9 @@ import '../features/stores/presentation/storefront_launcher.dart';
 import '../core/utils/result.dart';
 import '../features/safe_payment/escrow_callout.dart';
 import '../features/safe_payment/payments_shown.dart';
+import '../features/zeno_assistant/data/zeno_sessions_repository.dart';
 import '../features/zeno_assistant/domain/zeno_about_listing.dart';
+import '../features/zeno_assistant/domain/zeno_sessions.dart';
 import '../main.dart';
 import '../models/listing.dart';
 import '../models/seller_names.dart';
@@ -47,6 +61,7 @@ import '../services/api_service.dart';
 import '../services/last_screen_tracker.dart';
 import '../utils/handover.dart';
 import '../utils/land_size.dart';
+import '../utils/phone_format.dart';
 import '../utils/price_unit.dart';
 import '../utils/auth_gate.dart';
 import '../utils/backend_time.dart';
@@ -85,6 +100,11 @@ class _ProductScreenState extends State<ProductScreen> {
   bool _saving = false;
   bool _liking = false;
 
+  /// Today's free Zeno sessions (backend premium/zeno_sessions.py), for
+  /// the line under the Zeno card. Null for a guest, the seller, a plan
+  /// holder's "nothing counted" aside, or when it can't be read.
+  ZenoSessionsToday? _zenoSessions;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -95,6 +115,7 @@ class _ProductScreenState extends State<ProductScreen> {
         _loadSeller();
         _refreshListing(args.id);
         _loadEngagement();
+        _loadZenoSessions();
         LastScreenTracker.save('/product', {'listingId': args.id});
       } else if (args is Map && args['listingId'] is String) {
         // Restored from a relaunch - we only persisted the ID, fetch fresh.
@@ -111,6 +132,7 @@ class _ProductScreenState extends State<ProductScreen> {
       setState(() => _listing = listing);
       _loadSeller();
       _loadEngagement();
+      _loadZenoSessions();
       LastScreenTracker.save('/product', {'listingId': listingId});
       if (openChat && !_isAuction && !_unavailable) _startChat(listing);
     } catch (_) {
@@ -138,6 +160,16 @@ class _ProductScreenState extends State<ProductScreen> {
     final result = await listingsRepository.engagement(l.id);
     if (!mounted) return;
     if (result case Success(:final data)) setState(() => _engagement = data);
+  }
+
+  /// How many of today's free Zeno sessions are left, for a buyer who is
+  /// signed in. Asking about the seller's own listing is never counted.
+  Future<void> _loadZenoSessions() async {
+    final l = _listing;
+    if (l == null || ApiService.currentUserId == null || _isMine) return;
+    final today = await zenoSessionsRepository.today();
+    if (!mounted) return;
+    setState(() => _zenoSessions = today);
   }
 
   /// Likes the listing, or takes the like back. Shown at once; put back,
@@ -309,12 +341,14 @@ class _ProductScreenState extends State<ProductScreen> {
     if (l == null) return;
     if (!await requireAuth(context, reason: 'to ask Zeno about this listing')) return;
     if (!mounted) return;
-    Navigator.of(context).push(MaterialPageRoute<void>(
+    await Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => ZenoScreen(
         aboutListing: ZenoAboutListing.fromListing(l),
         initialQuery: question,
       ),
     ));
+    // A question asked there may have opened one of today's sessions.
+    if (mounted) _loadZenoSessions();
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
@@ -351,9 +385,15 @@ class _ProductScreenState extends State<ProductScreen> {
       if (_hasMapData) _buildMapPreview(l),
       _buildDescSection(l),
       _buildZenoInsight(l),
+      if (!_isMine) _buildReportProblem(l),
     ];
     return Scaffold(
       backgroundColor: BrokaColors.bg,
+      // The page runs under the price and Start Negotiation at the foot of
+      // the screen (_buildCTA), which stand on it with no panel behind them.
+      // The body's bottom padding then holds the bar's height, and the
+      // scroll view keeps that much clear at its end.
+      extendBody: true,
       // The constellation Home and every screen reached from it sit on, with
       // the listing's category colour washing down from the top the way it
       // does in the category's Zone.
@@ -373,14 +413,18 @@ class _ProductScreenState extends State<ProductScreen> {
             child: Column(children: [
               _buildHeader(l),
               Expanded(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.only(bottom: 28),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      for (int i = 0; i < sections.length; i++)
-                        FadeSlideIn(index: i, child: sections[i]),
-                    ],
+                // Under the Scaffold: its MediaQuery's bottom padding is the
+                // bar's height (extendBody), so nothing ends up behind it.
+                child: Builder(
+                  builder: (inner) => SingleChildScrollView(
+                    padding: EdgeInsets.only(bottom: 28 + MediaQuery.paddingOf(inner).bottom),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (int i = 0; i < sections.length; i++)
+                          FadeSlideIn(index: i, child: sections[i]),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -456,11 +500,12 @@ class _ProductScreenState extends State<ProductScreen> {
     });
   }
 
-  /// Like and Save as big, labelled actions under the photo — where a
-  /// buyer is already looking — not two 22px glyphs squeezed into the
-  /// header beside the sale badge. Each is a full-width-half pill, 52dp
-  /// tall with a 24px icon and a word, so liking or saving is an obvious
-  /// tap, and its on-state fills so it reads at a glance.
+  /// Like and Save as labelled actions under the photo — where a buyer is
+  /// already looking — not two 22px glyphs squeezed into the header beside
+  /// the sale badge. Compact pills sized to their word (2026-11-12): they
+  /// were half the screen's width each and 52dp tall, the loudest thing on
+  /// the page after the photo. Their on-state still fills, so a like or a
+  /// save reads at a glance, and each keeps a 48dp tap target.
   Widget _buildEngagementBar(Listing l) {
     if (_isMine) {
       final e = _engagement;
@@ -473,11 +518,11 @@ class _ProductScreenState extends State<ProductScreen> {
     }
     return Padding(
       key: const Key('product-engagement'),
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       child: Row(children: [
-        Expanded(child: _likeButton()),
-        const SizedBox(width: 10),
-        Expanded(child: _saveButton()),
+        _likeButton(),
+        const SizedBox(width: 8),
+        _saveButton(),
       ]),
     );
   }
@@ -501,31 +546,38 @@ class _ProductScreenState extends State<ProductScreen> {
           child: GestureDetector(
             key: key,
             onTap: onPressed,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              height: 52,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: on ? onColor.withOpacity(0.18) : BrokaColors.bgCard.withOpacity(0.6),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                    color: on ? onColor : BrokaColors.border, width: on ? 1.6 : 1),
-              ),
-              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 200),
-                  transitionBuilder: (child, anim) =>
-                      ScaleTransition(scale: anim, child: child),
-                  child: Icon(on ? onIcon : offIcon,
-                      key: ValueKey(on),
-                      color: on ? onColor : BrokaColors.textHigh, size: 24),
+            // The pill is 36dp; the 6dp above and below it are part of the
+            // tap, so the target is still the 48dp a thumb needs.
+            behavior: HitTestBehavior.opaque,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                height: 36,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: on ? onColor.withOpacity(0.18) : BrokaColors.bgCard.withOpacity(0.6),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(
+                      color: on ? onColor : BrokaColors.border, width: on ? 1.4 : 1),
                 ),
-                const SizedBox(width: 8),
-                Text(label,
-                    style: TextStyle(
-                        color: on ? onColor : BrokaColors.textHigh,
-                        fontSize: 15, fontWeight: FontWeight.w800)),
-              ]),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 200),
+                    transitionBuilder: (child, anim) =>
+                        ScaleTransition(scale: anim, child: child),
+                    child: Icon(on ? onIcon : offIcon,
+                        key: ValueKey(on),
+                        color: on ? onColor : BrokaColors.textHigh, size: 18),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(label,
+                      style: TextStyle(
+                          color: on ? onColor : BrokaColors.textHigh,
+                          fontSize: 13, fontWeight: FontWeight.w700)),
+                ]),
+              ),
             ),
           ),
         ),
@@ -782,8 +834,78 @@ class _ProductScreenState extends State<ProductScreen> {
           _chip('~${_distanceKm!.toStringAsFixed(1)} km from you (±1km)',
               Icons.near_me_rounded, BrokaColors.gold),
       ]),
+      if (_canReportUnavailable) _buildAvailabilityStrip(l),
     ]),
   );
+
+  /// "Mark as unavailable" for a buyer, while it is on sale. Sold out or
+  /// removed, the bar at the foot of the screen says so instead; an auction
+  /// ends by itself.
+  bool get _canReportUnavailable => !_isMine && !_unavailable && !_isAuction;
+
+  /// Where a buyer who has just heard "it's gone" looks: by the stock line.
+  /// It was 11.5px grey text under the buy button that few found. It says
+  /// what happens next - the seller is texted and can put it back - so a
+  /// buyer isn't afraid of being wrong, and the seller isn't left hidden.
+  Widget _buildAvailabilityStrip(Listing l) {
+    final button = OutlinedButton.icon(
+      key: const Key('product-report-sold-out'),
+      onPressed: _reportingSoldOut ? null : () => _reportSoldOut(l),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: BrokaColors.warning,
+        side: BorderSide(color: BrokaColors.warning.withOpacity(0.75)),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        minimumSize: const Size(0, 40),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      icon: _reportingSoldOut
+          ? const SizedBox(width: 14, height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2, color: BrokaColors.warning))
+          : const Icon(Icons.remove_shopping_cart_outlined, size: 17),
+      label: const Text('Mark as unavailable',
+          style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800)),
+    );
+    const words = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text('Sold already?',
+            style: TextStyle(color: BrokaColors.textHigh, fontSize: 13, fontWeight: FontWeight.w800)),
+        SizedBox(height: 2),
+        Text('Let other buyers know. The seller is texted and can undo it.',
+            style: TextStyle(color: BrokaColors.textMid, fontSize: 11, height: 1.3)),
+      ],
+    );
+    final scale = MediaQuery.textScalerOf(context).scale(10) / 10;
+    return Container(
+      key: const Key('product-availability'),
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+      decoration: BoxDecoration(
+        color: BrokaColors.warning.withOpacity(0.07),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: BrokaColors.warning.withOpacity(0.32)),
+      ),
+      child: LayoutBuilder(builder: (context, c) {
+        // A narrow phone, or large text: the button under the words, full
+        // width, rather than the words squeezed to a word a line.
+        if (c.maxWidth < 330 * scale) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [words, const SizedBox(height: 8), button],
+          );
+        }
+        return Row(children: [
+          const Icon(Icons.inventory_2_outlined, color: BrokaColors.warning, size: 18),
+          const SizedBox(width: 10),
+          const Expanded(child: words),
+          const SizedBox(width: 8),
+          button,
+        ]);
+      }),
+    );
+  }
 
   Widget _chip(String label, IconData icon, Color color) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -1056,6 +1178,10 @@ class _ProductScreenState extends State<ProductScreen> {
     ].firstWhere((p) => p != null && p.trim().isNotEmpty, orElse: () => null);
     final location = _sellerInfo?['location_name'] as String? ?? l.locationName;
     final memberSince = _sellerInfo?['created_at'] as String?;
+    // The seller's number, from their public profile (auth/service.py,
+    // _public_user_dict: "shown so buyers can reach the seller"). The
+    // profile screen showed it; the listing a buyer is deciding on didn't.
+    final phone = ((_sellerInfo?['phone'] as String?) ?? l.sellerPhone)?.trim();
 
     // The server's own reading of last_seen (api/core/presence.py), the one
     // the chat header and inbox show. This screen parsed last_seen itself,
@@ -1179,6 +1305,16 @@ class _ProductScreenState extends State<ProductScreen> {
                     ]),
                   ]),
                 ),
+              if (phone != null && phone.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: _sellerPhoneRow(phone),
+                )
+              else if (ApiService.currentUserId == null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: _signInForPhone(),
+                ),
             ]),
           ),
         ),
@@ -1187,6 +1323,91 @@ class _ProductScreenState extends State<ProductScreen> {
       ]),
     );
   }
+
+  /// The seller's number: a tap calls it, the copy button (or a long
+  /// press) copies it. Its own taps - the card around it opens the
+  /// seller's profile.
+  Widget _sellerPhoneRow(String phone) {
+    final shape = RoundedRectangleBorder(borderRadius: BorderRadius.circular(12));
+    return Material(
+      color: BrokaColors.neonGreen.withOpacity(0.08),
+      shape: shape.copyWith(side: BorderSide(color: BrokaColors.neonGreen.withOpacity(0.3))),
+      child: InkWell(
+        key: const Key('seller-card-phone'),
+        customBorder: shape,
+        onTap: () => _callSeller(phone),
+        onLongPress: () => _copyPhone(phone),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 2, 4, 2),
+          child: Row(children: [
+            const Icon(Icons.phone_rounded, size: 16, color: BrokaColors.neonGreen),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(formatPhone(phone),
+                  key: const Key('seller-card-phone-number'),
+                  maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: BrokaColors.textHigh, fontSize: 14,
+                      fontWeight: FontWeight.w700, letterSpacing: 0.3)),
+            ),
+            IconButton(
+              key: const Key('seller-card-phone-copy'),
+              tooltip: 'Copy number',
+              visualDensity: VisualDensity.compact,
+              onPressed: () => _copyPhone(phone),
+              icon: const Icon(Icons.copy_rounded, size: 17, color: BrokaColors.textMid),
+            ),
+            const Padding(
+              padding: EdgeInsets.only(right: 8),
+              child: Text('Call', style: TextStyle(color: BrokaColors.neonGreen,
+                  fontSize: 12.5, fontWeight: FontWeight.w800)),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _callSeller(String phone) async {
+    var opened = false;
+    try {
+      opened = await launchUrl(Uri(scheme: 'tel', path: dialablePhone(phone)));
+    } catch (_) {}
+    if (opened || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text("Couldn't open the dialer. The number is ${formatPhone(phone)}."),
+    ));
+  }
+
+  Future<void> _copyPhone(String phone) async {
+    await Clipboard.setData(ClipboardData(text: dialablePhone(phone)));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      duration: Duration(seconds: 2),
+      content: Text('Number copied'),
+    ));
+  }
+
+  /// A guest: profiles, and the number with them, are for signed-in users.
+  Widget _signInForPhone() => InkWell(
+    key: const Key('seller-card-phone-sign-in'),
+    borderRadius: BorderRadius.circular(12),
+    onTap: () async {
+      if (!await requireAuth(context, reason: "to see the seller's number")) return;
+      if (!mounted) return;
+      _loadSeller();
+      _loadEngagement();
+      _loadZenoSessions();
+    },
+    child: const Padding(
+      padding: EdgeInsets.symmetric(vertical: 6),
+      child: Row(children: [
+        Icon(Icons.lock_outline_rounded, size: 15, color: BrokaColors.textMid),
+        SizedBox(width: 8),
+        Flexible(child: Text("Sign in to see the seller's number",
+            style: TextStyle(color: BrokaColors.textMid, fontSize: 12, fontWeight: FontWeight.w600))),
+      ]),
+    ),
+  );
 
   /// The seller's standing, in the dashboard's colours: green where the
   /// dashboard shades green.
@@ -1476,6 +1697,17 @@ class _ProductScreenState extends State<ProductScreen> {
                         ),
                       ),
                   ]),
+                  if (_sessionsLine(l) case final line?) ...[
+                    const SizedBox(height: 10),
+                    Row(key: const Key('zeno-sessions-left'), children: [
+                      const Icon(Icons.bolt_rounded, size: 14, color: BrokaColors.neonCyan),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(line, style: const TextStyle(
+                            color: BrokaColors.textMid, fontSize: 11.5, height: 1.3)),
+                      ),
+                    ]),
+                  ],
                 ]),
               ),
             ),
@@ -1484,6 +1716,45 @@ class _ProductScreenState extends State<ProductScreen> {
       ]),
     );
   }
+
+  /// What today's free Zeno sessions leave this buyer (backend
+  /// premium/zeno_sessions.py), under the card's questions - so the limit
+  /// is known before it is met, and asking more about a listing already
+  /// asked about is known to be free. Nothing for a plan holder, the
+  /// seller, a guest, or when it can't be read.
+  String? _sessionsLine(Listing l) {
+    final s = _zenoSessions;
+    if (s == null || !s.limited || _isMine) return null;
+    if (s.listingIds.contains(l.id)) {
+      return "You've asked Zeno about this listing today - ask as much as you like.";
+    }
+    final left = s.listingLeft;
+    final limit = s.listingLimit;
+    if (left == null || limit == null) return null;
+    if (left <= 0) {
+      return "You've used today's $limit free Zeno ${limit == 1 ? 'session' : 'sessions'} "
+          '- they renew at midnight.';
+    }
+    return '$left of $limit free Zeno ${limit == 1 ? 'session' : 'sessions'} left today - '
+        'every question about one listing counts as one.';
+  }
+
+  /// A complaint about the listing or its seller - at the end of the page,
+  /// where a buyer who has read it all decides something is wrong. It sat
+  /// under the buy button, which now stands on its own.
+  Widget _buildReportProblem(Listing l) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 18, 16, 0),
+    child: Center(
+      child: TextButton.icon(
+        key: const Key('product-report'),
+        onPressed: () => _reportProblem(l),
+        style: TextButton.styleFrom(foregroundColor: BrokaColors.textMid),
+        icon: const Icon(Icons.flag_outlined, size: 16),
+        label: const Text('Report a problem',
+            style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+      ),
+    ),
+  );
 
   // ── CTA ───────────────────────────────────────────────────────────────────
 
@@ -1505,7 +1776,7 @@ class _ProductScreenState extends State<ProductScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min, children: [
           Text(_removed ? 'Removed by the seller'
-                  : (_listing?.reportedSoldOut ?? false) ? 'Reported sold out' : 'Sold out',
+                  : (_listing?.reportedSoldOut ?? false) ? 'Marked unavailable' : 'Sold out',
               style: const TextStyle(color: BrokaColors.textHigh,
                   fontSize: 16, fontWeight: FontWeight.w800)),
           const SizedBox(height: 2),
@@ -1513,7 +1784,8 @@ class _ProductScreenState extends State<ProductScreen> {
             _removed
                 ? 'This listing is no longer on BROKA.'
                 : (_listing?.reportedSoldOut ?? false)
-                    ? "A buyer said it has sold. It comes back if the seller says it's still available."
+                    ? "A buyer said it's no longer available. The seller has been texted - "
+                      "it comes back if they say it's still for sale."
                     : "Every unit is sold. It comes back if a sale falls through.",
             style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5, height: 1.35)),
         ])),
@@ -1521,75 +1793,57 @@ class _ProductScreenState extends State<ProductScreen> {
     ),
   );
 
-  Widget _buildCTA(Listing l) => SafeArea(
-    top: false,
-    child: Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      decoration: BoxDecoration(
-        color: BrokaColors.bgMid.withOpacity(0.97),
-        border: const Border(top: BorderSide(color: BrokaColors.border)),
+  /// The price and the main action at the foot of the screen, on their own
+  /// (2026-11-12). They sat in a full-width panel with a border, and two
+  /// links under them pushed them up off the bottom; the panel is gone,
+  /// the links moved into the page (_buildAvailabilityStrip,
+  /// _buildReportProblem), and the page scrolls under the two. The only
+  /// thing behind them is a fade into the page's background, which keeps
+  /// the price readable over whatever passes beneath.
+  Widget _buildCTA(Listing l) => DecoratedBox(
+    key: const Key('product-cta-bar'),
+    decoration: BoxDecoration(
+      gradient: LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [BrokaColors.bg.withOpacity(0), BrokaColors.bg.withOpacity(0.94)],
+        stops: const [0.0, 0.45],
       ),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        // A store product: the price above two full buttons on the lower
-        // bar — Visit Store beside the main action. There is no Add to
-        // cart here: a buyer who wants the shop goes to it, and a buyer
-        // who wants this item starts the negotiation. Everything else
-        // keeps the one-row bar.
-        if (_sellsFromStore(l))
-          Column(mainAxisSize: MainAxisSize.min, children: [
-            _ctaPrice(l),
-            const SizedBox(height: 10),
-            Row(children: [
-              Expanded(child: _visitStoreButton(l)),
-              const SizedBox(width: 10),
-              Expanded(child: _ctaButton(l)),
-            ]),
-          ])
-        else
-          Row(children: [
-            Expanded(child: _ctaPrice(l)),
-            const SizedBox(width: 12),
-            _ctaButton(l),
-          ]),
-        // The two "something is wrong with this listing" actions side by
-        // side; a Wrap, so a narrow phone at a large text size puts them on
-        // two lines instead of overflowing the bar.
-        Wrap(
-          alignment: WrapAlignment.center,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          spacing: 2,
-          children: [
-            if (!_isAuction)
-              TextButton(
-                key: const Key('product-report-sold-out'),
-                onPressed: _reportingSoldOut ? null : () => _reportSoldOut(l),
-                style: TextButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(vertical: 2)),
-                child: const Text('No longer available? Mark it sold out',
-                    style: TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
-              ),
-            TextButton.icon(
-              key: const Key('product-report'),
-              onPressed: () => _reportProblem(l),
-              style: TextButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2)),
-              icon: const Icon(Icons.flag_outlined, size: 14, color: BrokaColors.textMid),
-              label: const Text('Report a problem',
-                  style: TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
-            ),
-          ],
-        ),
-      ]),
+    ),
+    child: SafeArea(
+      top: false,
+      minimum: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+        // A store product: the price above two full buttons — Visit Store
+        // beside the main action. There is no Add to cart here: a buyer who
+        // wants the shop goes to it, and a buyer who wants this item starts
+        // the negotiation. Everything else is the one row.
+        child: _sellsFromStore(l)
+            ? Column(mainAxisSize: MainAxisSize.min, children: [
+                Align(alignment: Alignment.centerLeft, child: _ctaPrice(l)),
+                const SizedBox(height: 10),
+                Row(children: [
+                  Expanded(child: _visitStoreButton(l)),
+                  const SizedBox(width: 10),
+                  Expanded(child: _ctaButton(l)),
+                ]),
+              ])
+            : Row(children: [
+                Expanded(child: _ctaPrice(l)),
+                const SizedBox(width: 12),
+                _ctaButton(l),
+              ]),
+      ),
     ),
   );
 
   bool _reportingSoldOut = false;
 
   /// Payments happen outside BROKA, so the app never learns an item sold;
-  /// a buyer who hears "it's gone" says so. The seller is told and can put
-  /// it back (DELETE /listings/{id}/sold-out).
+  /// a buyer who hears "it's gone" says so. The seller gets a text and a
+  /// push, and puts it back from their dashboard if it's still for sale
+  /// (backend listings/sold_out.py).
   Future<void> _reportSoldOut(Listing l) async {
     final authed = await requireAuth(context, reason: 'to report this listing');
     if (!authed || !mounted) return;
@@ -1597,20 +1851,24 @@ class _ProductScreenState extends State<ProductScreen> {
       context: context,
       builder: (d) => AlertDialog(
         backgroundColor: BrokaColors.bgMid,
-        title: const Text('Mark it sold out?', style: TextStyle(color: BrokaColors.textHigh)),
+        title: const Text('Mark as unavailable?', style: TextStyle(color: BrokaColors.textHigh)),
         content: const Text(
-            "Only if the seller told you it's gone. It's hidden from buyers until "
-            "the seller says it's still available.",
+            "Only if the seller told you it's sold or gone. It will be hidden from buyers, "
+            "and the seller gets a text so they can undo it if it's still for sale.",
             style: TextStyle(color: BrokaColors.textMid)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(d, true), child: const Text('Mark sold out')),
+          TextButton(
+            key: const Key('confirm-mark-unavailable'),
+            onPressed: () => Navigator.pop(d, true),
+            child: const Text('Mark unavailable'),
+          ),
         ],
       ),
     );
     if (ok != true || !mounted) return;
     setState(() => _reportingSoldOut = true);
-    String message = 'Thanks - marked sold out. The seller has been told.';
+    String message = 'Thanks - marked unavailable. The seller has been told and can undo it.';
     try {
       await apiClient.post('/listings/${l.id}/sold-out', const <String, dynamic>{});
       await _refreshListing(l.id);
@@ -1638,7 +1896,7 @@ class _ProductScreenState extends State<ProductScreen> {
         const Icon(Icons.inventory_2_outlined, color: BrokaColors.warning, size: 22),
         const SizedBox(width: 12),
         const Expanded(child: Text(
-            'A buyer said this has sold, so buyers can\'t see it. Still have it?',
+            'A buyer marked this unavailable, so buyers can\'t see it. Still have it?',
             style: TextStyle(color: BrokaColors.textHigh, fontSize: 12.5, height: 1.35))),
         const SizedBox(width: 8),
         FilledButton(

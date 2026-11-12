@@ -2,6 +2,11 @@
 
 Derived entirely from existing message history, so these tests are about
 the threading and censoring rules rather than about instrumentation.
+
+Since 2026-11-12 one wait per conversation is measured: from the buyer's
+first message to the seller's first reply. The database-level rules - which
+rows count as asking the seller, and conversations older than the window -
+are in test_response_time_db.py.
 """
 from datetime import datetime, timedelta
 
@@ -135,3 +140,58 @@ def test_ranking_and_the_seller_facing_score_use_the_same_curve():
     from api.domains.trust.seller_rating import response_score
     for m in (None, 0, 25, 60, 2880):
         assert response_time_score(m) == response_score(m)
+
+
+# ── The first message, not every message (2026-11-12) ────────────────────────
+
+def test_only_the_first_message_of_a_conversation_is_timed():
+    """A buyer's "ok, thanks" after the answer is not a question kept waiting.
+
+    Every inbound message used to start a clock, and one still unanswered at
+    the end of a thread was charged as a wait - so a seller who answered in
+    five minutes was charged an hour and a half for not replying to
+    "thanks". What a buyer needs to know is how long the first answer takes.
+    """
+    rows = []
+    for i in range(3):
+        rows += [_m("first", f"L{i}", f"B{i}", "buyer", "seller", 100),
+                 _m("first", f"L{i}", f"B{i}", "seller", "buyer", 95),
+                 _m("first", f"L{i}", f"B{i}", "buyer", "seller", 90)]
+    assert _run(rows)["first"] == pytest.approx(5.0)
+
+
+def test_a_later_question_in_the_conversation_starts_no_new_clock():
+    """Only the opening ask is timed; the conversation after it is not."""
+    rows = []
+    for i in range(3):
+        rows += [_m("later", f"L{i}", f"B{i}", "buyer", "seller", 300),
+                 _m("later", f"L{i}", f"B{i}", "seller", "buyer", 290),
+                 _m("later", f"L{i}", f"B{i}", "buyer", "seller", 200),
+                 _m("later", f"L{i}", f"B{i}", "seller", "buyer", 20)]
+    assert _run(rows)["later"] == pytest.approx(10.0)
+
+
+def test_a_zeno_row_with_no_audience_is_not_an_ask():
+    """PRIVACY.md: a broker row naming no audience is shown to nobody, so
+    the seller never saw it and cannot owe it an answer."""
+    rows = []
+    for i in range(3):
+        rows += [_m("ghostrow", f"L{i}", f"B{i}", "broker", None, 100),
+                 _m("ghostrow", f"L{i}", f"B{i}", "buyer", "seller", 50),
+                 _m("ghostrow", f"L{i}", f"B{i}", "seller", "buyer", 45)]
+    assert _run(rows)["ghostrow"] == pytest.approx(5.0)
+
+
+def test_a_seller_writing_first_is_not_an_answer_to_anything():
+    rows = []
+    for i in range(3):
+        rows += [_m("opener", f"L{i}", f"B{i}", "seller", "buyer", 100),
+                 _m("opener", f"L{i}", f"B{i}", "buyer", "seller", 50),
+                 _m("opener", f"L{i}", f"B{i}", "seller", "buyer", 40)]
+    assert _run(rows)["opener"] == pytest.approx(10.0)
+
+
+def test_a_first_message_never_answered_still_counts_against_the_seller():
+    """The trap the module is built around, under the new rule too."""
+    rows = [_m("quiet", f"L{i}", f"B{i}", "buyer", "seller", 600) for i in range(3)]
+    assert _run(rows)["quiet"] == pytest.approx(600.0)

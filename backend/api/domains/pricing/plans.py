@@ -198,8 +198,9 @@ PREMIUM_BY_ID: dict[str, PremiumPlan] = {p.id: p for p in PREMIUM_PLANS}
 #     whole of it on their own item, which is the case for a plan.
 #   * three each of voice requests, Buying Agent tries and looks at Zeno's
 #     insights (2026-10-12): a new user tries each three times, then needs a
-#     plan. A Buying Agent try is a search that brought back listings, or a
-#     watch started.
+#     plan. A Buying Agent try is a watch started; its searches are counted
+#     as daily sessions since 2026-11-12 (premium/zeno_sessions.py), as are
+#     the questions asked about a listing.
 FREE_TRIAL: dict[str, int] = {
     "ai_covers": 1, "ai_descriptions": 1,
     "voice_requests": 3, "agent_tries": 3, "zeno_insights": 3,
