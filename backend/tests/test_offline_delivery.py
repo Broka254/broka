@@ -753,6 +753,31 @@ async def test_a_store_conversation_is_tracked_and_synced_too(client):
 
 
 @pytest.mark.asyncio
+async def test_tracking_failing_never_loses_the_message(client, caplog, monkeypatch):
+    """The delivery rows are written in the message's own transaction. If
+    writing them fails - a missing table, a bad statement - the message must
+    still be saved: on PostgreSQL a failed statement aborts the whole
+    transaction unless it ran in its own savepoint."""
+    from sqlalchemy import text
+
+    def _broken(conn, messages):
+        conn.execute(text("SELECT no_such_column FROM no_such_table"))
+
+    monkeypatch.setattr(message_delivery, "_write_rows", _broken)
+    listing_id, seller_id, buyer_id = await _people()
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        msg = await _direct(client, buyer_id, "buyer", listing_id, "Saved however tracking fares")
+    async with AsyncSessionLocal() as db:
+        stored = await db.get(NegotiationMessage, msg["id"])
+    assert stored is not None and stored.content == "Saved however tracking fares"
+    assert await _rows(msg["id"]) == []
+    assert any(r.levelname == "ERROR" and r.getMessage().startswith("MESSAGE_TRACKING_FAILED")
+               for r in caplog.records if r.name == LOGGER)
+    saved = next(l for l in _lines(caplog, "MESSAGE_SAVED") if msg["id"] in l)
+    assert "tracked=false" in saved
+
+
+@pytest.mark.asyncio
 async def test_the_delivery_log_never_carries_tokens_or_words(client, fcm, caplog):
     listing_id, seller_id, buyer_id = await _people()
     phone = await _register(client, seller_id, f"secret-fcm-token-{uuid.uuid4().hex}")

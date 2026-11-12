@@ -168,28 +168,48 @@ def record_new_messages(session, messages: list) -> None:
     a savepoint, so the message still commits. Tracking a message must never
     be what loses it.
     """
-    conn = session.connection()
+    try:
+        conn = session.connection()
+        if conn.dialect.name == "postgresql":
+            # Both statements in the savepoint: on PostgreSQL a failed
+            # statement aborts the whole transaction - the message's too.
+            with conn.begin_nested():
+                summaries = _write_rows(conn, messages)
+        else:
+            summaries = _write_rows(conn, messages)
+    except Exception as exc:
+        logger.error("MESSAGE_TRACKING_FAILED stage=record messages=%d error=%s",
+                     len(messages), type(exc).__name__)
+        summaries = [{
+            "message_id": m.id, "listing_id": None if (m.store_id and not m.listing_id) else m.listing_id,
+            "store_id": m.store_id if (m.store_id and not m.listing_id) else None,
+            "buyer_id": m.buyer_id, "sender_id": m.sender_id, "recipient_id": None,
+            "recipient_role": ",".join(sorted(roles)), "push_attempts": 0,
+            "from_zeno": m.role == "broker", "kind": m.msg_type or "text", "untracked": True,
+        } for m, roles in messages]
+    session.info.setdefault(_SAVED_KEY, []).extend(summaries)
+
+
+def _write_rows(conn, messages: list) -> list[dict]:
+    """record_new_messages' two statements: who the recipients are, and
+    their rows. Returns what MESSAGE_SAVED will say about each."""
     # The seller of every conversation involved, not only those with a
     # message for the seller: a seller writing in a thread on their own
     # listing (buyer_id == seller) has nobody to deliver to either way.
     sellers: dict = {}
     listing_ids = {m.listing_id for m, _ in messages if m.listing_id}
     store_ids = {m.store_id for m, _ in messages if m.store_id and not m.listing_id}
-    try:
-        if listing_ids:
-            for lid, seller in conn.execute(
-                select(Listing.id, Listing.seller_id).where(Listing.id.in_(listing_ids))
-            ):
-                sellers[("listing", lid)] = seller
-        if store_ids:
-            from api.models.store import Store
-            for sid, owner in conn.execute(
-                select(Store.id, Store.owner_id).where(Store.id.in_(store_ids))
-            ):
-                sellers[("store", sid)] = owner
-    except Exception as exc:
-        logger.error("MESSAGE_TRACKING_FAILED stage=recipients error=%s", type(exc).__name__)
-        return
+    if listing_ids:
+        for lid, seller in conn.execute(
+            select(Listing.id, Listing.seller_id).where(Listing.id.in_(listing_ids))
+        ):
+            sellers[("listing", lid)] = seller
+    if store_ids:
+        from api.models.store import Store
+        for sid, owner in conn.execute(
+            select(Store.id, Store.owner_id).where(Store.id.in_(store_ids))
+        ):
+            sellers[("store", sid)] = owner
 
     now = _now()
     rows = []
@@ -225,19 +245,9 @@ def record_new_messages(session, messages: list) -> None:
             }
             rows.append(row)
             summaries.append({**row, "kind": m.msg_type or "text"})
-    if not rows:
-        return
-    try:
-        if conn.dialect.name == "postgresql":
-            with conn.begin_nested():
-                conn.execute(insert(MessageDelivery.__table__), rows)
-        else:
-            conn.execute(insert(MessageDelivery.__table__), rows)
-    except Exception as exc:
-        logger.error("MESSAGE_TRACKING_FAILED stage=insert messages=%d error=%s",
-                     len({r["message_id"] for r in rows}), type(exc).__name__)
-        summaries = [{**s, "untracked": True} for s in summaries]
-    session.info.setdefault(_SAVED_KEY, []).extend(summaries)
+    if rows:
+        conn.execute(insert(MessageDelivery.__table__), rows)
+    return summaries
 
 
 def _new_id() -> str:
