@@ -79,6 +79,27 @@ Future<void> notificationActionBackgroundHandler(NotificationResponse response) 
       actionId: response.actionId, payload: response.payload, input: response.input);
 }
 
+/// What became of one message push's delivery receipt
+/// (NotificationService.markDeliveredFromPush).
+enum DeliveryAckOutcome {
+  /// The server recorded it: the sender's single tick is the double tick.
+  acknowledged,
+
+  /// Nothing to report: not a message push, only Zeno's news, no
+  /// conversation named, or the same receipt already on its way.
+  skipped,
+
+  /// Refused for good, or not this phone's to send: an expired or invalid
+  /// token, a phone signed out of that account, another account signed in
+  /// here, a conversation that is gone. Not tried again, and not claimed.
+  refused,
+
+  /// No answer, or a server error, after every try. Not claimed either:
+  /// the sender keeps the single tick until the app's own sweep reports
+  /// the thread or the chat is read.
+  failed,
+}
+
 class NotificationService {
   NotificationService._();
   static final NotificationService instance = NotificationService._();
@@ -634,13 +655,18 @@ class NotificationService {
       return;
     }
     if (data['type'] == 'new_message') {
+      _logMessagePush(data, 'foreground');
       // This phone has the message now - that is "delivered", whether or
       // not anyone has opened the chat. Without this the sender's tick
       // sat on a single check until the chat was opened, then jumped
       // straight to "seen": the dull double tick for received-but-unread
-      // never appeared for a message that arrived by push.
-      await markDeliveredFromPush(data);
-      await showMessageFromPush(data);
+      // never appeared for a message that arrived by push. Side by side
+      // with showing it: the receipt can spend seconds trying again, and
+      // the notification must not wait on it.
+      await Future.wait<void>([
+        markDeliveredFromPush(data),
+        showMessageFromPush(data),
+      ]);
       return;
     }
     if (data['type'] == 'service_communication') {
@@ -884,6 +910,7 @@ class NotificationService {
         }
         return;
       case 'new_message':
+        _logMessagePush(data, 'background');
         // Android drew it from the push already. Record it as announced,
         // so the app's own sweep doesn't announce it a second time when
         // the app next runs.
@@ -891,14 +918,19 @@ class NotificationService {
         // The phone received the message even though the app never came
         // to the front: tell the server, so the sender sees the dull
         // double tick (received, unread) instead of one tick until the
-        // chat is opened and it jumps to "seen". This isolate has no
-        // session in memory, so restore the saved one first - the same
-        // pattern notificationActionBackgroundHandler uses. Best effort:
-        // the next foreground sweep posts it again if this fails.
-        await markDeliveredFromPush(data, restoreSession: true);
-        await svc.initialize(
-            navKey: GlobalKey<NavigatorState>(), requestPermission: false);
-        await svc.addFaceToPushed(data);
+        // chat is opened and it jumps to "seen". With the push's thread
+        // token no session is needed; an older server's push uses the
+        // saved one (restoreSession). Side by side with drawing the
+        // notification again with its Reply and Mark as read: a receipt
+        // trying again for a few seconds must not hold those back.
+        await Future.wait<void>([
+          markDeliveredFromPush(data, restoreSession: true),
+          () async {
+            await svc.initialize(
+                navKey: GlobalKey<NavigatorState>(), requestPermission: false);
+            await svc.addFaceToPushed(data);
+          }(),
+        ]);
         return;
       case 'service_communication':
         // An admin announcement: Android drew it from the push already
@@ -1082,6 +1114,34 @@ class NotificationService {
     } catch (_) {}
   }
 
+  /// How long a push's delivery receipt waits before each further try
+  /// ([markDeliveredFromPush]). A phone woken from Doze for a push often
+  /// has no network for its first request or two, and from a closed app
+  /// nothing else reports the receipt until the app next runs - so one
+  /// failed request used to leave the sender on a single tick.
+  @visibleForTesting
+  static List<Duration> deliveryAckRetryDelays = const [
+    Duration(seconds: 1),
+    Duration(seconds: 3),
+    Duration(seconds: 6),
+  ];
+
+  /// All the time one receipt's tries may take, waits included; past it the
+  /// receipt is left to the app's own sweep. Android guarantees a push
+  /// handler only about ten seconds, and may stop the process after that:
+  /// the later tries are worth having for when it doesn't, and a try cut
+  /// off is never counted as delivered.
+  @visibleForTesting
+  static Duration deliveryAckBudget = const Duration(seconds: 20);
+
+  /// One try's timeout, cut to what is left of [deliveryAckBudget].
+  @visibleForTesting
+  static Duration deliveryAckAttemptTimeout = const Duration(seconds: 8);
+
+  // Receipts on their way, by conversation and message: FCM can hand the
+  // same push over twice, and one receipt is enough.
+  static final Set<String> _deliveryAcksInFlight = <String>{};
+
   /// A message push reached this phone: record the thread as delivered
   /// (received, not read) so the sender's tick can show it.
   ///
@@ -1094,77 +1154,269 @@ class NotificationService {
   /// notification's own Mark as read - this must never move the purple
   /// "seen" tick.
   ///
-  /// Best effort and silent: [restoreSession] reloads the saved sign-in
-  /// for the FCM background isolate, which starts with no session in
-  /// memory (the pattern notificationActionBackgroundHandler uses). A
-  /// failure here is recovered by the foreground sweep's own delivered
-  /// posts when the app next runs.
-  ///
   /// With the thread token the push carries (2026-11-11) no session is
-  /// needed at all. Without one (an older server), the background isolate
-  /// sends the saved access token as it is and never renews it: renewing
-  /// there raced the app's own renewal for the same refresh token, and a
-  /// phone whose app sat in the background could come back signed out.
-  static Future<void> markDeliveredFromPush(
+  /// needed: the token names the conversation, the side and this phone.
+  /// The receipt names the message the push announced (messageId), and the
+  /// server moves the watermark up to it, not to whenever the receipt
+  /// lands. No answer or a server error is tried again
+  /// ([deliveryAckRetryDelays], within [deliveryAckBudget]); a refusal
+  /// (expired token, phone signed out, gone) is final. A refused token is
+  /// not swapped for the saved session: that session can be another BROKA
+  /// account signed in on this phone since the push was sent, and its
+  /// receipt would tick a delivery on a thread this phone never received.
+  ///
+  /// Without a token (an older server) the saved session reports it, but
+  /// only when it is the account the push was for, and from the background
+  /// isolate ([restoreSession], which loads it) it is sent as it is and
+  /// never renewed: renewing there raced the app's own renewal for the
+  /// same refresh token, and a phone whose app sat in the background could
+  /// come back signed out.
+  ///
+  /// Whatever fails is logged and left undelivered - never recorded as
+  /// delivered here. The app's own sweep reports the thread when it next
+  /// runs in front.
+  static Future<DeliveryAckOutcome> markDeliveredFromPush(
     Map<String, dynamic> data, {
     bool restoreSession = false,
   }) async {
-    if (data['type'] != 'new_message') return;
+    if (data['type'] != 'new_message') return DeliveryAckOutcome.skipped;
+    final threadId = _threadIdFromPayload(data);
+    final buyerId = _nonEmpty(data['buyerId']);
+    final messageId = _nonEmpty(data['messageId']);
+    final ids = <String, Object?>{
+      'thread': threadId,
+      'buyer': buyerId,
+      'role': _nonEmpty(data['myRole']),
+      'message': messageId,
+      'transport': restoreSession ? 'background' : 'foreground',
+    };
     // A push whose newest message is Zeno's still brings the other
     // person's messages counted with it (directUnread): those are delivered.
     if (data['screen'] == 'zeno' &&
         (int.tryParse('${data['directUnread'] ?? ''}') ?? 0) <= 0) {
-      return;
+      _logDelivery('DELIVERY_ACK_SKIPPED', {...ids, 'reason': 'zeno_only'});
+      return DeliveryAckOutcome.skipped;
     }
-    final listingId = data['listingId'] as String?;
-    final storeId = data['storeId'] as String?;
-    final isStore = storeId != null && storeId.isNotEmpty;
-    if (isStore ? (storeId == null || storeId.isEmpty) : (listingId == null || listingId.isEmpty)) return;
-    final token = _nonEmpty(data['threadToken']);
-    if (token != null) {
-      final status = await ApiService.notificationAction('delivered', token);
-      if (status == 200) return;
-      // Expired, or refused: try the way an older server is told.
+    if (threadId == null) {
+      _logDelivery('DELIVERY_ACK_SKIPPED', {...ids, 'reason': 'no_thread'});
+      return DeliveryAckOutcome.skipped;
+    }
+    final key = '$threadId|${buyerId ?? ''}|${messageId ?? ''}';
+    if (!_deliveryAcksInFlight.add(key)) {
+      _logDelivery('DELIVERY_ACK_SKIPPED', {...ids, 'reason': 'in_flight'});
+      return DeliveryAckOutcome.skipped;
     }
     try {
-      if (restoreSession) {
-        // SharedPreferences caches per isolate, and the app may have
-        // rotated the token since this isolate last read it.
-        try {
-          await (await SharedPreferences.getInstance()).reload();
-        } catch (_) {}
-        // Remember whose session this isolate already holds: loading the
-        // saved one must not wipe it (in the app's main isolate - and in
-        // tests driving this handler there - that would sign the sweep
-        // out from under itself). The background isolate holds nothing,
-        // so it simply keeps what it loaded.
-        final previousUserId = ApiService.currentUserId;
-        await ApiService.loadSavedSession();
-        try {
-          if (!ApiService.isLoggedIn) return;
-          // renew: false - see above. An expired token here means no
-          // receipt from this push; the sweep posts it when the app runs.
-          if (isStore) {
-            await ApiService.markStoreDelivered(
-              storeId!, buyerId: data['buyerId'] as String?, renew: false);
-          } else {
-            await ApiService.markThreadDelivered(
-              listingId!, buyerId: data['buyerId'] as String?, renew: false);
-          }
-        } finally {
-          if (previousUserId != null) ApiService.currentUserId = previousUserId;
+      final presented = _nonEmpty(data['threadToken']);
+      final usable = usableThreadToken(presented);
+      if (usable != null) {
+        final String token = usable;
+        return await _sendDeliveryReceipt(ids, 'thread_token',
+            (timeout) => ApiService.notificationDelivered(token,
+                messageId: messageId, timeout: timeout));
+      }
+      if (presented != null) {
+        // Not a token the server could take: not sent, and not swapped
+        // for the session either (see above).
+        _logDelivery('DELIVERY_ACK_FAILED',
+            {...ids, 'via': 'thread_token', 'reason': 'token_malformed', 'final': true});
+        return DeliveryAckOutcome.refused;
+      }
+      return await _deliverWithSession(data, ids, restoreSession: restoreSession);
+    } catch (e) {
+      // Never let a receipt take the push's handler down with it.
+      _logDelivery('DELIVERY_ACK_FAILED',
+          {...ids, 'reason': 'error:${e.runtimeType}', 'final': true});
+      return DeliveryAckOutcome.failed;
+    } finally {
+      _deliveryAcksInFlight.remove(key);
+    }
+  }
+
+  /// The thread token as the push carried it, or null when it cannot be one
+  /// the server takes: empty, longer than its 4096 characters, or with
+  /// spaces in it (a token is one URL-safe word). Its contents are the
+  /// server's to judge - expiry included: the phone's clock is not to be
+  /// trusted with that.
+  @visibleForTesting
+  static String? usableThreadToken(String? token) {
+    if (token == null || token.isEmpty || token.length > 4096) return null;
+    if (token.contains(RegExp(r'\s'))) return null;
+    return token;
+  }
+
+  /// An older server's push (no thread token): the saved session reports
+  /// it - when that session is the account the push was for.
+  static Future<DeliveryAckOutcome> _deliverWithSession(
+    Map<String, dynamic> data,
+    Map<String, Object?> ids, {
+    required bool restoreSession,
+  }) async {
+    final sessionIds = {...ids, 'via': 'session'};
+    String? previousUserId;
+    if (restoreSession) {
+      // SharedPreferences caches per isolate, and the app may have rotated
+      // the token since this isolate last read it.
+      try {
+        await (await SharedPreferences.getInstance()).reload();
+      } catch (_) {}
+      // Remember whose session this isolate already holds: loading the
+      // saved one must not wipe it (in the app's main isolate - and in
+      // tests driving this handler there - that would sign the sweep out
+      // from under itself). The background isolate holds nothing, so it
+      // simply keeps what it loaded.
+      previousUserId = ApiService.currentUserId;
+      await ApiService.loadSavedSession();
+    }
+    try {
+      if (!ApiService.isLoggedIn) {
+        _logDelivery('DELIVERY_ACK_FAILED',
+            {...sessionIds, 'reason': 'no_session', 'final': true});
+        return DeliveryAckOutcome.refused;
+      }
+      final notThisAccount = _notThisAccountsPush(data, ApiService.currentUserId);
+      if (notThisAccount != null) {
+        _logDelivery('DELIVERY_ACK_FAILED',
+            {...sessionIds, 'reason': notThisAccount, 'final': true});
+        return DeliveryAckOutcome.refused;
+      }
+      final storeId = _nonEmpty(data['storeId']);
+      final listingId = storeId == null ? _nonEmpty(data['listingId']) : null;
+      final buyerId = _nonEmpty(data['buyerId']);
+      // renew: false from the background isolate - see markDeliveredFromPush.
+      // An expired access token there means no receipt from this push.
+      return await _sendDeliveryReceipt(ids, 'session',
+          (timeout) => ApiService.postThreadDelivered(listingId,
+              storeId: storeId, buyerId: buyerId, renew: !restoreSession,
+              timeout: timeout));
+    } finally {
+      if (previousUserId != null) ApiService.currentUserId = previousUserId;
+    }
+  }
+
+  /// Why the signed-in session cannot report this push's delivery, or null
+  /// when it can. An older server's push names its conversation and the
+  /// side it is for, not the account, so the side is what there is to go
+  /// on: a buyer's push is the buyer's own, and a seller's is never the
+  /// buyer's. With two BROKA accounts on one phone, a push for the one
+  /// signed out can arrive after the switch - and answering it as the other
+  /// would mark their thread delivered for a message they never got.
+  static String? _notThisAccountsPush(Map<String, dynamic> data, String? me) {
+    if (me == null) return 'recipient_unknown';
+    final buyerId = _nonEmpty(data['buyerId']);
+    switch (data['myRole']) {
+      case 'buyer':
+        return me == buyerId ? null : 'other_account';
+      case 'seller':
+        return buyerId != null && me != buyerId ? null : 'other_account';
+      default:
+        return 'recipient_unknown';
+    }
+  }
+
+  /// Send one delivery receipt, trying again while there is no answer or
+  /// the server errs, and stopping at the first definite one.
+  static Future<DeliveryAckOutcome> _sendDeliveryReceipt(
+    Map<String, Object?> ids,
+    String via,
+    Future<DeliveryReceiptAnswer> Function(Duration timeout) send,
+  ) async {
+    final started = DateTime.now();
+    final delays = deliveryAckRetryDelays;
+    var attempt = 1;
+    _logDelivery('DELIVERY_ACK_STARTED', {...ids, 'via': via, 'attempt': attempt});
+    while (true) {
+      final left = deliveryAckBudget - DateTime.now().difference(started);
+      final timeout = left < deliveryAckAttemptTimeout ? left : deliveryAckAttemptTimeout;
+      final answer = await send(
+          timeout > const Duration(seconds: 1) ? timeout : const Duration(seconds: 1));
+      final status = answer.status;
+      if (answer.ok) {
+        _logDelivery('DELIVERY_ACK_SUCCESS', {
+          ...ids,
+          'via': via,
+          'status': status,
+          'attempt': attempt,
+          'advanced': answer.advanced,
+          'watermark': answer.lastDeliveredAt,
+        });
+        if (answer.advanced == true) {
+          _logDelivery('DELIVERY_WATERMARK_UPDATED',
+              {...ids, 'via': via, 'last_delivered_at': answer.lastDeliveredAt});
         }
-        return;
+        return DeliveryAckOutcome.acknowledged;
       }
-      if (!ApiService.isLoggedIn) return;
-      if (isStore) {
-        await ApiService.markStoreDelivered(
-          storeId!, buyerId: data['buyerId'] as String?);
-      } else {
-        await ApiService.markThreadDelivered(
-          listingId!, buyerId: data['buyerId'] as String?);
+      final reason = _deliveryFailure(answer, via);
+      final retryable = status == null || status == 408 || status == 429 || status >= 500;
+      if (!retryable) {
+        _logDelivery('DELIVERY_ACK_FAILED', {
+          ...ids, 'via': via, 'status': status, 'reason': reason,
+          'attempt': attempt, 'final': true,
+        });
+        return DeliveryAckOutcome.refused;
       }
-    } catch (_) {}
+      final wait = attempt <= delays.length ? delays[attempt - 1] : null;
+      final elapsed = DateTime.now().difference(started);
+      if (wait == null || elapsed + wait >= deliveryAckBudget) {
+        _logDelivery('DELIVERY_ACK_FAILED', {
+          ...ids, 'via': via, 'status': status, 'reason': reason,
+          'attempt': attempt, 'elapsed_ms': elapsed.inMilliseconds, 'final': true,
+        });
+        return DeliveryAckOutcome.failed;
+      }
+      attempt++;
+      _logDelivery('DELIVERY_ACK_RETRY', {
+        ...ids, 'via': via, 'status': status, 'reason': reason,
+        'attempt': attempt, 'after_ms': wait.inMilliseconds,
+      });
+      await Future<void>.delayed(wait);
+    }
+  }
+
+  static String _deliveryFailure(DeliveryReceiptAnswer answer, String via) {
+    final status = answer.status;
+    if (status == null) return 'no_answer:${answer.error ?? 'unknown'}';
+    if (status == 401) return via == 'session' ? 'session_expired' : 'token_rejected';
+    if (status == 403) return 'not_on_that_side';
+    if (status == 404) return 'thread_or_message_gone';
+    if (status == 429) return 'rate_limited';
+    if (status >= 500) return 'server_error';
+    return 'http_$status';
+  }
+
+  /// One line per step of a message push's delivery receipt, whichever
+  /// isolate it runs in: PUSH_RECEIVED, DELIVERY_ACK_STARTED / _RETRY /
+  /// _SUCCESS / _FAILED / _SKIPPED, DELIVERY_WATERMARK_UPDATED - so a
+  /// missing double tick can be followed on the phone from the push's
+  /// arrival to the server's answer. Ids, statuses and reasons only: never
+  /// the thread token (it acts for the account), a push or access token,
+  /// or what the message says.
+  static void _logDelivery(String event, Map<String, Object?> fields) {
+    final parts = <String>[
+      'at=${DateTime.now().toUtc().toIso8601String()}',
+      for (final e in fields.entries) '${e.key}=${e.value ?? '-'}',
+    ];
+    debugPrint('[Push] $event ${parts.join(' ')}');
+  }
+
+  /// PUSH_RECEIVED for a message push: which conversation and message, how
+  /// long it took to arrive (FCM's sent time, which main.dart passes on),
+  /// and whether it carried a thread token - not the token.
+  static void _logMessagePush(Map<String, dynamic> data, String transport) {
+    if (data['type'] != 'new_message') return;
+    final sentAt = int.tryParse('${data['fcmSentAt'] ?? ''}');
+    _logDelivery('PUSH_RECEIVED', {
+      'type': 'new_message',
+      'thread': _threadIdFromPayload(data),
+      'buyer': _nonEmpty(data['buyerId']),
+      'role': _nonEmpty(data['myRole']),
+      'message': _nonEmpty(data['messageId']),
+      'fcm_id': _nonEmpty(data['fcmMessageId']),
+      'latency_ms':
+          sentAt == null ? null : DateTime.now().millisecondsSinceEpoch - sentAt,
+      'has_token': _nonEmpty(data['threadToken']) != null,
+      'transport': transport,
+    });
   }
 
   /// The server's message push with the app in front, where Android does

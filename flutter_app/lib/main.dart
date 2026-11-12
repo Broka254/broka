@@ -96,6 +96,11 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     ...message.data,
     if (message.notification?.title != null) 'title': message.notification!.title,
     if (message.notification?.body != null) 'body': message.notification!.body,
+    // For the PUSH_RECEIVED log line only: which FCM message this was, and
+    // how long it took to reach the phone.
+    if (message.messageId != null) 'fcmMessageId': message.messageId,
+    if (message.sentTime != null)
+      'fcmSentAt': '${message.sentTime!.millisecondsSinceEpoch}',
   });
 }
 
@@ -211,6 +216,9 @@ Future<void> _main() async {
         // in front (Android draws it only when the app is not).
         if (message.notification?.title != null) 'title': message.notification!.title,
         if (message.notification?.body != null) 'body': message.notification!.body,
+        if (message.messageId != null) 'fcmMessageId': message.messageId,
+        if (message.sentTime != null)
+          'fcmSentAt': '${message.sentTime!.millisecondsSinceEpoch}',
       });
     });
 

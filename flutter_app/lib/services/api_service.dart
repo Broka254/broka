@@ -1385,11 +1385,11 @@ class ApiService {
     return markThreadDelivered(null, storeId: storeId, buyerId: buyerId, renew: renew);
   }
 
-  /// Reply, Mark as read, or "this phone has it" from a message
-  /// notification (2026-11-11): POST /negotiate/notification/{action}
-  /// ('reply', 'read', 'delivered') with the thread token the push carried
-  /// - no access token, since this is sent from a closed app whose own has
-  /// usually expired, and renewing it there races the app's renewal.
+  /// Reply or Mark as read from a message notification (2026-11-11): POST
+  /// /negotiate/notification/{action} ('reply', 'read') with the thread
+  /// token the push carried - no access token, since this is sent from a
+  /// closed app whose own has usually expired, and renewing it there races
+  /// the app's renewal. ("This phone has it" is [notificationDelivered].)
   /// Answers the status code, or null when the server could not be reached.
   static Future<int?> notificationAction(
     String action,
@@ -1415,6 +1415,36 @@ class ApiService {
     } catch (e) {
       debugPrint('[Push] notification $action failed: ${e.runtimeType}');
       return null;
+    }
+  }
+
+  /// "This phone has the message the push announced": POST
+  /// /negotiate/notification/delivered with the push's thread token and
+  /// [messageId], its messageId. The server moves the sender's delivered
+  /// tick up to that message and no further, so a receipt that lands late
+  /// (a retry, a phone slow to wake) cannot claim messages written after
+  /// the push. No access token, as for [notificationAction].
+  ///
+  /// One attempt: NotificationService.markDeliveredFromPush decides whether
+  /// to try again, from the answer. [timeout] is short because the FCM
+  /// background isolate has only seconds before Android may stop it.
+  static Future<DeliveryReceiptAnswer> notificationDelivered(
+    String threadToken, {
+    String? messageId,
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$baseUrl/negotiate/notification/delivered'),
+        headers: const {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'thread_token': threadToken,
+          if (messageId != null) 'message_id': messageId,
+        }),
+      ).timeout(timeout);
+      return DeliveryReceiptAnswer.fromResponse(res);
+    } catch (e) {
+      return DeliveryReceiptAnswer(error: '${e.runtimeType}');
     }
   }
 
@@ -1508,6 +1538,18 @@ class ApiService {
   /// refresh token. An expired token there just means no receipt yet.
   static Future<bool> markThreadDelivered(String? listingId,
       {String? storeId, String? buyerId, bool renew = true}) async {
+    final answer = await postThreadDelivered(listingId,
+        storeId: storeId, buyerId: buyerId, renew: renew);
+    return answer.ok;
+  }
+
+  /// [markThreadDelivered], answering what the server said rather than
+  /// only whether it worked - for a caller that must tell a receipt to try
+  /// again (no answer, a server error) from one refused for good (an
+  /// expired session it may not renew).
+  static Future<DeliveryReceiptAnswer> postThreadDelivered(String? listingId,
+      {String? storeId, String? buyerId, bool renew = true,
+       Duration timeout = const Duration(seconds: 10)}) async {
     _requireExactlyOneThread(listingId, storeId);
     try {
       final path = storeId != null && storeId.isNotEmpty
@@ -1517,11 +1559,11 @@ class ApiService {
         Uri.parse('$baseUrl$path'),
         headers: _headers,
         body: jsonEncode({if (buyerId != null) 'buyer_id': buyerId}),
-      ).timeout(const Duration(seconds: 10));
+      ).timeout(timeout);
       final response = renew ? await _sendAuthed(send) : await send();
-      return response.statusCode == 200;
-    } catch (_) {
-      return false;
+      return DeliveryReceiptAnswer.fromResponse(response);
+    } catch (e) {
+      return DeliveryReceiptAnswer(error: '${e.runtimeType}');
     }
   }
 
@@ -2685,6 +2727,52 @@ class ApiService {
 
 }
 
+
+/// What the server answered a delivery receipt
+/// (ApiService.notificationDelivered, ApiService.postThreadDelivered).
+class DeliveryReceiptAnswer {
+  const DeliveryReceiptAnswer({
+    this.status,
+    this.error,
+    this.lastDeliveredAt,
+    this.advanced,
+  });
+
+  factory DeliveryReceiptAnswer.fromResponse(http.Response res) {
+    String? lastDeliveredAt;
+    bool? advanced;
+    if (res.statusCode == 200) {
+      try {
+        final body = jsonDecode(res.body);
+        if (body is Map) {
+          final at = body['last_delivered_at'];
+          final moved = body['advanced'];
+          if (at is String) lastDeliveredAt = at;
+          if (moved is bool) advanced = moved;
+        }
+      } catch (_) {}
+    }
+    return DeliveryReceiptAnswer(
+        status: res.statusCode, lastDeliveredAt: lastDeliveredAt, advanced: advanced);
+  }
+
+  /// The HTTP status; null when no answer came.
+  final int? status;
+
+  /// Why no answer came: the exception's type (a timeout, no network) -
+  /// never its message, which can quote the request.
+  final String? error;
+
+  /// The thread's delivery watermark after the receipt, as the server
+  /// sent it.
+  final String? lastDeliveredAt;
+
+  /// Whether the receipt moved the watermark (false: it was already
+  /// there). Null from a server that does not say.
+  final bool? advanced;
+
+  bool get ok => status == 200;
+}
 
 /// What the server said to Accept (ApiService.answerCall).
 enum CallAnswerResult {
