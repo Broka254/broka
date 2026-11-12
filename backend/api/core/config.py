@@ -681,6 +681,23 @@ class Settings:
         "MPESA_PREMIUM_CALLBACK_URL", ""
     ).strip())
 
+    # ── Zeno's daily sessions (premium/zeno_sessions.py) ─────────────────────
+    # How many times a day an account without a plan may use Zeno's listing
+    # insights ("Is this a fair price?", "Is this seller reliable?", "Find me
+    # something similar" - every question about one listing that day is one
+    # session) and the Buying Agent (one hunt, however many turns, is one).
+    # A hunt handed over from a listing's questions is part of that
+    # listing's session. Counted whether or not PREMIUM_ENABLED is on - with
+    # it off nobody can buy a plan, and the refusal says when they renew
+    # instead of offering one. Plan holders are never counted. Midnight in
+    # Kenya renews them. 0 lets a free account start none.
+    zeno_free_listing_sessions_per_day: int = field(default_factory=lambda: max(0, int(os.getenv(
+        "ZENO_FREE_LISTING_SESSIONS_PER_DAY", "2"
+    ) or 0)))
+    zeno_free_agent_sessions_per_day: int = field(default_factory=lambda: max(0, int(os.getenv(
+        "ZENO_FREE_AGENT_SESSIONS_PER_DAY", "2"
+    ) or 0)))
+
     # ── Store billing (PRICING.md §9) ────────────────────────────────────────
     # Off: opening and running a store is free. On: a store pays the one-off
     # opening fee plus a monthly plan priced by the listings it holds

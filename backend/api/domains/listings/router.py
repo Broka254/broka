@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Dict, List, Literal, Optional
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -190,6 +190,23 @@ async def saved_listings(
     """The caller's saved listings that are still on sale."""
     svc = ListingService(db)
     return await svc.saved_listings(current_user["id"])
+
+
+# Before /{listing_id} as well.
+@router.get("/reported-unavailable")
+async def reported_unavailable(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The caller's own listings a buyer marked unavailable (sold_out.py),
+    newest report first, each with `reported_at` and `open_reports`.
+
+    They are in no other list - a reported listing is out of every list
+    buyers browse, and the seller dashboard reads the same ones - so this
+    is where the seller finds them to say "Still available"
+    (DELETE /listings/{id}/sold-out)."""
+    svc = ListingService(db)
+    return await svc.reported_unavailable(current_user["id"])
 
 
 @router.get("/")
@@ -1196,13 +1213,15 @@ async def express_interest(
 @router.post("/{listing_id}/sold-out")
 async def report_sold_out(
     listing_id: str,
+    background: BackgroundTasks,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """A buyer found the item gone: the listing is marked sold out and taken
-    out of every list until its seller says otherwise (sold_out.py)."""
+    out of every list until its seller says otherwise (sold_out.py). The
+    seller is texted and pushed once the reporter has their answer."""
     from . import sold_out
-    return await sold_out.report(db, listing_id, current_user["id"])
+    return await sold_out.report(db, listing_id, current_user["id"], background=background)
 
 
 @router.delete("/{listing_id}/sold-out")

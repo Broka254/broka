@@ -476,6 +476,8 @@ class NotificationService {
       // handler or sweep) opens the announcement - the FCM-drawn ones
       // arrive via getInitialMessage instead.
       if (type == 'service_communication') return data;
+      // So does a "your listing was marked unavailable" one: the dashboard.
+      if (type == listingReportedType) return data;
       if (type != 'incoming_call') return null;
       // Also how a locked phone's fullScreenIntent launches the app - only
       // Accept answers; see navigateFromPayload.
@@ -654,6 +656,13 @@ class NotificationService {
       // A reply to the user's complaint or feedback. FCM draws nothing
       // while the app is in front, so the reply would go unnoticed.
       await showFeedbackUpdateFromPush(data);
+      return;
+    }
+    if (data['type'] == listingReportedType) {
+      // A buyer marked one of the user's listings unavailable: it is hidden
+      // from buyers until they say it isn't. FCM draws nothing while the
+      // app is in front, and every hour unseen is an hour hidden.
+      await showListingReportedFromPush(data);
       return;
     }
     if (data['type'] != 'incoming_call') return;
@@ -1339,6 +1348,52 @@ class NotificationService {
   /// Updates channel while the app is in front (Android draws it by itself
   /// otherwise, from the push's notification block). One notification per
   /// submission: a second reply replaces the first.
+  /// The push a seller gets when a buyer marks one of their listings
+  /// unavailable (backend listings/sold_out.py). Its tap opens the seller
+  /// dashboard, which lists the listing with "Still available": the listing
+  /// is out of every other list, the dashboard's catalogue included.
+  static const listingReportedType = 'listing_sold_out_reported';
+
+  /// [listingReportedType] while the app is in front: drawn here, as FCM
+  /// draws nothing then. One per listing (its tag), so a second report of
+  /// the same listing replaces the first instead of stacking.
+  Future<void> showListingReportedFromPush(Map<String, dynamic> data) async {
+    if (!_ready) return;
+    final id = _nonEmpty(data['listing_id']);
+    if (id == null) return;
+    final name = _nonEmpty(data['listing_name']);
+    final title = _nonEmpty(data['title']) ?? 'A buyer marked your listing unavailable';
+    final body = _nonEmpty(data['body']) ??
+        '${name == null ? 'Your listing' : '"$name"'} is hidden from buyers. Still for sale? '
+            'Open your dashboard and tap "Still available".';
+    final tag = 'listing_reported_$id';
+    try {
+      await _plugin.show(
+        0,
+        title,
+        body,
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            _updatesChannel.id,
+            _updatesChannel.name,
+            channelDescription: _updatesChannel.description,
+            importance: Importance.high,
+            priority: Priority.high,
+            category: AndroidNotificationCategory.status,
+            tag: tag,
+            icon: smallIcon,
+            color: _accent,
+            styleInformation: BigTextStyleInformation(body),
+          ),
+          iOS: DarwinNotificationDetails(threadIdentifier: tag),
+        ),
+        payload: jsonEncode({'type': listingReportedType, 'listing_id': id}),
+      );
+    } catch (e) {
+      debugPrint('[Notifications] showListingReported failed: $e');
+    }
+  }
+
   Future<void> showFeedbackUpdateFromPush(Map<String, dynamic> data) async {
     if (!_ready) return;
     final id = _nonEmpty(data['feedbackId']);
@@ -1510,6 +1565,21 @@ class NotificationService {
         return;
       }
       if (topRouteName(nav) != '/feedback') nav.pushNamed('/feedback');
+      return;
+    }
+    if (type == listingReportedType) {
+      // A buyer marked one of the user's listings unavailable. It opened
+      // nothing: the listing was out of every list, the seller's own
+      // dashboard included, so the seller could not find it to say it was
+      // still for sale. The dashboard lists it now, with "Still
+      // available" - the place the seller's text points to as well. Only
+      // the type is read from the payload; the dashboard fetches the
+      // user's own reported listings.
+      if (!ApiService.isLoggedIn) {
+        nav.pushNamed('/auth');
+        return;
+      }
+      if (topRouteName(nav) != '/seller-dashboard') nav.pushNamed('/seller-dashboard');
       return;
     }
     if (type == 'service_communication') {

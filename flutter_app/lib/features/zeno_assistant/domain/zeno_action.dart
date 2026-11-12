@@ -139,6 +139,8 @@ class ZenoAction {
     this.choices = const [],
     this.requiresConfirmation = false,
     this.guide,
+    this.slots = const {},
+    this.fromListingId,
   });
 
   final ZenoActionType type;
@@ -148,6 +150,17 @@ class ZenoAction {
 
   /// SEARCH and FIND_FOR_ME.
   final String? query;
+
+  /// FIND_FOR_ME from a listing's questions: what the Buying Agent already
+  /// knows to look for - "something similar" is that listing's category and
+  /// title (backend zeno_assistant/service.py, _aim_at_listing). Empty when
+  /// the hunt starts from the buyer's own words.
+  final Map<String, dynamic> slots;
+
+  /// FIND_FOR_ME from a listing's questions: that listing. The Buying Agent
+  /// leaves it out of its results, and the hunt is part of the listing's
+  /// Zeno session for the day.
+  final String? fromListingId;
 
   /// CALL and OPEN_CHAT: who, as the user said it.
   final String? contactText;
@@ -217,11 +230,20 @@ class ZenoAction {
       case ZenoActionType.search:
       case ZenoActionType.findForMe:
         final q = text('query');
+        final slots = json['slots'];
         // Offered rather than run when Zeno came up with it while answering
         // about a listing (zeno_assistant/service.py): the buyer taps it.
         return q == null
             ? null
-            : ZenoAction(type: type, query: q, requiresConfirmation: json['requires_confirmation'] == true);
+            : ZenoAction(
+                type: type,
+                query: q,
+                requiresConfirmation: json['requires_confirmation'] == true,
+                slots: type == ZenoActionType.findForMe && slots is Map
+                    ? Map<String, dynamic>.from(slots)
+                    : const {},
+                fromListingId: type == ZenoActionType.findForMe ? text('from_listing_id') : null,
+              );
       case ZenoActionType.call:
       case ZenoActionType.openChat:
         final target = ZenoContact.fromJson(json['target']);

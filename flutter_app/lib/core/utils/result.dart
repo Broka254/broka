@@ -17,7 +17,12 @@ final class Failure<T> extends Result<T> {
   /// The server's machine-readable reason, when it gave one
   /// (ApiException.code) - e.g. IN_APP_PAYMENTS_OFF.
   final String? code;
-  const Failure(this.message, {this.statusCode, this.code});
+
+  /// The rest of a structured refusal, when there is one
+  /// (ApiException.details) - a 402 says which plan would include the
+  /// feature ("upgrade_to"), or that none is on sale.
+  final Map<String, dynamic>? details;
+  const Failure(this.message, {this.statusCode, this.code, this.details});
 }
 
 extension ResultExtension<T> on Result<T> {

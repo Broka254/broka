@@ -15,7 +15,10 @@ Zeno insights.
 
 The Buying Agent and Zeno insights are TRIAL_ONLY: counted for someone
 without a plan (three tries, then a plan), never for a plan holder - a
-Buying Agent watch is still capped at once by the plan (watch_cap).
+Buying Agent watch is still capped at once by the plan (watch_cap). Since
+2026-11-12 a Buying Agent try is a watch started; the hunts themselves -
+and the questions asked about a listing - are a few free sessions a day
+instead (zeno_sessions.py).
 
 A refusal is a 402 whose detail the app reads: {"code", "message",
 "feature", "plan", "upgrade_to"}. PREMIUM_REQUIRED means the user has no

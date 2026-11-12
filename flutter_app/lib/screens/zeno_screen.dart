@@ -196,6 +196,17 @@ class ZenoScreen extends StatefulWidget {
   /// Assistant only: the listing the user opened Zeno from, to ask about.
   final ZenoAboutListing? aboutListing;
 
+  /// Buying Agent only, with [initialQuery]: what the hunt already knows to
+  /// look for - from a listing's "Find me something similar", that
+  /// listing's category and title (ZenoAction.slots).
+  final Map<String, dynamic>? initialSlots;
+
+  /// Buying Agent only, with [initialQuery]: the listing this hunt was
+  /// handed over from. Sent with each of its turns - the listing never
+  /// comes back as a result, and the hunt is part of that listing's Zeno
+  /// session for the day, not one of the day's hunts.
+  final String? fromListingId;
+
   /// False renders the constellation as one still frame - for tests.
   final bool animateBackground;
 
@@ -216,6 +227,8 @@ class ZenoScreen extends StatefulWidget {
     this.mode = ZenoMode.assistant,
     this.initialQuery,
     this.aboutListing,
+    this.initialSlots,
+    this.fromListingId,
     this.animateBackground = true,
     this.startInVoice = false,
     @visibleForTesting this.voiceService,
@@ -306,6 +319,11 @@ class _ZenoScreenState extends State<ZenoScreen>
   // spent ride along with every turn and come back updated.
   Map<String, dynamic> _slots = {};
   int _questionsAsked = 0;
+
+  /// The listing this hunt was handed over from (ZenoScreen.fromListingId),
+  /// for as long as it is this hunt: "New chat" starts one of the user's
+  /// own.
+  String? _fromListingId;
   // Zeno's own read of the last search, used to decide what to offer next -
   // "EXACT" | "PARTIAL" | "MIXED" | "EMPTY", computed server-side.
   String? _lastVerdict;
@@ -514,6 +532,13 @@ class _ZenoScreenState extends State<ZenoScreen>
   Future<void> _restore() async {
     final initial = widget.initialQuery?.trim() ?? '';
     final fresh = _isBuying && initial.isNotEmpty;
+    if (fresh) {
+      // "Find me something similar" from a listing: the hunt starts
+      // knowing what similar means, and which listing it came from.
+      _fromListingId = widget.fromListingId;
+      final seed = widget.initialSlots;
+      if (seed != null && seed.isNotEmpty) _slots = Map<String, dynamic>.of(seed);
+    }
     var saved = fresh ? null : await ZenoChatStore.load(_storeMode);
     // Questions about another listing are another conversation.
     if (_about != null && saved?.aboutListing != _about!.id) saved = null;
@@ -672,6 +697,7 @@ class _ZenoScreenState extends State<ZenoScreen>
       _history.clear();
       _slots = {};
       _questionsAsked = 0;
+      _fromListingId = null;
       _lastVerdict = null;
       _watching = false;
       _watchSetAt = null;
@@ -842,17 +868,22 @@ class _ZenoScreenState extends State<ZenoScreen>
         });
         _persist();
         unawaited(_afterReply(turn, epoch));
-      case Failure(:final message, statusCode: 402):
-        // Voice mode needs a plan, or this month's voice requests are used.
+      case Failure(:final message, statusCode: 402, :final code, :final details):
+        // Voice mode needs a plan, or this month's voice requests are used
+        // - or today's free questions about listings are (ZENO_SESSIONS_USED).
         // Not a retry: the same sentence would be refused again. The
-        // microphone closes, and the plans are one tap away.
+        // microphone closes, and the plans are one tap away when there is
+        // one to buy.
         setState(() {
           _addArriving(_Turn(Message(role: 'broker', content: message)));
           _typing = false;
         });
         _history.removeLast();
         await _endVoice();
-        if (mounted) await showPremiumUpsell(context, message: message);
+        if (mounted && offersPlans(code, details)) {
+          await showPremiumUpsell(context, message: message,
+              upgradeTo: details?['upgrade_to'] as String?);
+        }
       case Failure(:final message, statusCode: 422) when photo != null:
         // The server couldn't use the photo (not an image, damaged) - its
         // message says so. Sending the same file again won't help.
@@ -1086,6 +1117,7 @@ class _ZenoScreenState extends State<ZenoScreen>
       questionsAsked: _questionsAsked,
       lat: ApiService.currentUserLat,
       lng: ApiService.currentUserLng,
+      fromListingId: _fromListingId,
     );
     // An answer for a conversation that has since been started over. It
     // must not touch this one - not even to stop its "searching" caption,
@@ -1125,15 +1157,23 @@ class _ZenoScreenState extends State<ZenoScreen>
       },
       onFailure: (msg, code) {
         if (code == 402) {
-          // The free Buying Agent tries are used (backend: three, then a
-          // plan). Saying "try again" would only be refused again: the
-          // server's words say why, and the plans are one tap away.
+          // Today's free Buying Agent hunts are used (backend
+          // premium/zeno_sessions.py). Saying "try again" would only be
+          // refused again: the server's words say why and when they renew,
+          // and the plans are one tap away when there is one to buy.
           setState(() {
             _addArriving(_Turn(Message(role: 'broker', content: msg)));
             _typing = false;
           });
           if (_history.isNotEmpty && _history.last['role'] == 'user') _history.removeLast();
-          showPremiumUpsell(context, message: msg);
+          final refusal = switch (result) {
+            Failure<Map<String, dynamic>> f => f,
+            _ => null,
+          };
+          if (offersPlans(refusal?.code, refusal?.details)) {
+            showPremiumUpsell(context, message: msg,
+                upgradeTo: refusal?.details?['upgrade_to'] as String?);
+          }
           return;
         }
         _turnFailed(

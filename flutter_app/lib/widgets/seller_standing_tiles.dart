@@ -66,7 +66,11 @@ class SellerStandingTiles extends StatelessWidget {
           key: const Key('standing-response'),
           label: 'AVG RESPONSE',
           value: reply == null ? '—' : SellerStanding.formatMinutes(reply),
-          sub: reply == null ? 'Not measured yet' : 'average reply time',
+          // What it measures since 2026-11-12 (backend
+          // trust/response_time.py): how long a buyer waits for the
+          // seller's first answer to their first message - not every
+          // message in the chat.
+          sub: reply == null ? 'Not measured yet' : "to a buyer's first message",
           band: s.responseBand,
         ),
         _tile(

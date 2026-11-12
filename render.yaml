@@ -169,6 +169,14 @@ services:
                              # auctions need a plan, and plans are sold (PRICING.md). Only once
                              # the app build with the Premium screen is required.
                              # false: those stay free, but AI covers are off.
+      - key: ZENO_FREE_LISTING_SESSIONS_PER_DAY
+        value: "2"           # Listings an account without a plan may ask Zeno about each day
+                             # (every question about one listing that day, and "Find me
+                             # something similar" with its hunt, is one session). Counted
+                             # whatever PREMIUM_ENABLED says; plan holders never are.
+      - key: ZENO_FREE_AGENT_SESSIONS_PER_DAY
+        value: "2"           # Buying Agent hunts an account without a plan may start each day
+                             # (one hunt, however many turns, is one session).
       - key: MPESA_PREMIUM_CALLBACK_URL
         sync: false          # Optional. Unset = /premium/callback/<MPESA_CALLBACK_SECRET>
       - key: STORE_BILLING_ENABLED

@@ -149,6 +149,34 @@ _CHAT = re.compile(
     r"thread)\s+with|mtumie\s+ujumbe|ongea\s+na)\s+(?P<who>.+?)" + _POLITE_TAIL + r"$")
 
 
+# Words that, asked about a listing, name nothing but "this one":
+# "something similar", "one like this", "alternatives", "kitu kama hiki".
+# A search query made only of these is a reference to the listing - the
+# Buying Agent can't hunt for "something similar" without knowing similar
+# to what (service.py fills it in).
+_REFERENCE_WORDS = frozenset((
+    "something", "anything", "some", "any", "one", "ones", "thing", "things", "stuff",
+    "item", "items", "listing", "listings", "product", "products", "option", "options",
+    "alternative", "alternatives", "other", "others", "another", "more", "similar",
+    "like", "same", "kind", "sort", "type", "this", "that", "it", "these", "those",
+    "a", "an", "the", "to", "of", "me", "for", "please", "just", "else", "instead",
+    "kitu", "vitu", "kama", "hiki", "hii", "hiyo", "hicho", "hivi", "sawa", "na",
+    "nyingine", "kingine", "mwingine", "nyingi", "zaidi", "kuliko",
+))
+_REFERENCE_MARKERS = re.compile(
+    r"\b(?:similar|like (?:this|it|that|these|those)|same (?:one|kind|thing|type)|alternatives?|"
+    r"another one|other (?:ones|options)|kama (?:hii|hiki|hiyo|hicho|hivi))\b")
+
+
+def refers_to_listing(query: str) -> bool:
+    """Is [query] only "one like this" - nothing a search could look for
+    without the listing it was asked about?"""
+    t = normalise(query)
+    if not t or not _REFERENCE_MARKERS.search(t):
+        return False
+    return all(w in _REFERENCE_WORDS for w in re.findall(r"[a-z']+", t))
+
+
 def normalise(text: str) -> str:
     t = (text or "").strip().lower()
     t = re.sub(r"^(?:hey|hi|ok|okay|yo|hello)?\s*,?\s*zeno\s*[,:!.]?\s*", "", t)

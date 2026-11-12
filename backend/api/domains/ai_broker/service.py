@@ -836,10 +836,28 @@ class AIBrokerService:
                 "- Answer from the records and the seller's words above. When the listing does not "
                 "say, say so plainly and suggest they ask the seller in the negotiation - never guess "
                 "a spec, an accessory, a defect or what is included.\n"
-                "- On price, BROKA's records above have no market average: use your general knowledge "
-                "of Kenyan prices for this kind of item and say it is a general estimate.\n"
-                "- The seller's standing numbers are measured by BROKA; quote them as they are. A "
+                # The records carry what similar BROKA listings ask on a price
+                # question (listing_context._market_lines). The prompt used to
+                # say BROKA had no market figures and to estimate, whatever
+                # BROKA knew.
+                + ("- On price, compare the asking price with the similar BROKA listings in the records "
+                   "above: say how many it was compared with and whether it sits below, around or above "
+                   "their median, and that similar is not identical where condition or details may "
+                   "differ. If the seller changed the price, you may say so. If the records found no "
+                   "similar listings, say BROKA has none to compare it with right now and give a general "
+                   "estimate from your knowledge of Kenyan prices, saying it is an estimate. Never invent "
+                   "a BROKA listing or price.\n"
+                   if listing.get("market") else
+                   "- On price, these records hold no market comparison: use your general knowledge of "
+                   "Kenyan prices for this kind of item and say it is a general estimate.\n")
+                + "- The seller's standing numbers are measured by BROKA; quote them as they are. A "
                 "seller with no figure yet is new or unmeasured, not bad.\n"
+                "- Asked whether the seller is reliable or can be trusted, answer from those records - "
+                "time on BROKA, completed deals, buyers' reviews, ID verification, the rating and the "
+                "first-reply time - saying what they show and what is missing. Never call a seller "
+                "safe or a scam: records cannot prove either.\n"
+                "- If the records say a buyer reported it unavailable, or it is sold out, say that "
+                "first when they ask whether to buy it or whether it is available.\n"
                 + ("- Never tell them to pay, meet or continue outside BROKA - escrow protects them only "
                    "inside it.\n" if settings.in_app_payments_enabled else
                    "- BROKA doesn't handle payments right now: they pay the seller directly. For this "

@@ -144,14 +144,17 @@ def build_advice(current: Dict, history: List[dict]) -> Dict[str, List[Dict]]:
             old = past["response_minutes"]
             change_pct = (response - old) / old * 100
             if change_pct <= -MIN_RESPONSE_DELTA_PCT:
+                # The figure is the average wait for the first reply to a
+                # buyer's first message (trust/response_time.py), not a
+                # median of every message - say what it is.
                 pos.append(AdviceCard(
                     "positive", "response_up", "You're replying faster",
-                    f"Median reply time is down from {_fmt_duration(old)} to "
+                    f"Your average first reply to a buyer is down from {_fmt_duration(old)} to "
                     f"{_fmt_duration(response)}. Faster replies close more deals."))
             elif change_pct >= MIN_RESPONSE_DELTA_PCT:
                 neg.append(AdviceCard(
                     "negative", "response_down", "You're taking longer to reply",
-                    f"Median reply time has gone from {_fmt_duration(old)} to "
+                    f"Your average first reply to a buyer has gone from {_fmt_duration(old)} to "
                     f"{_fmt_duration(response)}. Buyers usually message several "
                     f"sellers at once.",
                     severity=3))
@@ -241,11 +244,15 @@ def _recommendations(current: Dict) -> List[Dict]:
         recs.append({
             "code": "rec_response",
             "title": "Cut your reply time",
+            # It used to say Zeno's answer stops the clock. It never did:
+            # the clock runs from a buyer's first message to the seller's
+            # own first reply (trust/response_time.py), and only that
+            # first reply counts.
             "detail": (
-                f"You are averaging {_fmt_duration(response)}. Turn on chat "
-                f"notifications and let Zeno answer availability questions "
-                f"while you are busy - the clock stops when the buyer gets an "
-                f"answer, not when you get to your phone."
+                f"Buyers wait {_fmt_duration(response)} on average for your first "
+                f"reply. Turn on chat notifications and answer \"is it still "
+                f"available?\" as soon as you see it - only that first reply is "
+                f"timed, not the conversation after it."
             ),
             "action": "notifications",
         })
