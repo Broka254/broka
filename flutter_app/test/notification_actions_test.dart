@@ -254,7 +254,8 @@ void main() {
             'screen': 'chat',
           }, restoreSession: true));
       final sent = posts('delivered').single;
-      expect(jsonDecode(sent.body), {'thread_token': 'thread-token-1'});
+      expect(jsonDecode(sent.body), {'thread_token': 'thread-token-1', 'message_id': 'm-1'},
+          reason: 'the receipt names the message the push announced');
       expect(requests.where((r) => r.url.path.endsWith('/mark-delivered')), isEmpty,
           reason: 'the token was enough');
     });
