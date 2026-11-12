@@ -66,6 +66,24 @@ async def client():
         yield c
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _pushes_settled():
+    """Let the re-push that POST /calls/register-token schedules finish
+    inside the test that started it. A test that ends straight after
+    registering a phone - or fails there - closed its event loop with that
+    task halfway through a read, and the SQLite connection it held kept the
+    file locked: every later test in the module failed with "database is
+    locked" instead of saying what was wrong."""
+    yield
+    loop = asyncio.get_running_loop()
+    while True:
+        pending = [t for t in list(message_push._inflight)
+                   if t.get_loop() is loop and not t.done()]
+        if not pending:
+            return
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
 @pytest_asyncio.fixture
 async def fcm():
     """FCM as configured: every send captured, and accepted the way Firebase
@@ -154,7 +172,7 @@ async def _ack(client, token, message_id=None):
 
 async def _inbox_row(client, uid, listing_id):
     rows = (await client.get(f"/negotiate/inbox/{uid}", headers=_auth(uid))).json()
-    return next(t for t in rows if t["listing_id"] == listing_id)
+    return next(t for t in rows if t.get("listing_id") == listing_id)
 
 
 # ── The watermark moves to the message the push announced ────────────────────
@@ -290,7 +308,7 @@ async def test_firebase_accepting_the_push_is_not_delivery_the_phones_receipt_is
     sent = r.json()["message"]
     await message_push.drain()
     [push] = [p for p in fcm.sent
-              if p["data"].get("type") == "new_message" and p["data"]["listingId"] == listing_id]
+              if p["data"].get("type") == "new_message" and p["data"].get("listingId") == listing_id]
     assert push["token"] == "fcm-accepted-phone"
 
     # Firebase took it, with a message id - and nothing says the phone has it.
