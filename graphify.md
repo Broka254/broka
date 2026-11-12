@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-341 endpoints served by `backend/main.py`. **Auth** is read from each
+343 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 80, optional 6, public 64, token 6, user 185.
+Counts: admin 80, optional 6, public 64, token 6, user 187.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -176,21 +176,21 @@ Counts: admin 80, optional 6, public 64, token 6, user 185.
 | GET | `/buy-agent-requests/me` | user | `get_my_buy_agent_request` (backend/api/domains/buy_agent/router.py:316) |
 | POST | `/buy-agent-requests/parse` | user | `parse_buy_request` (backend/api/domains/buy_agent/router.py:66) |
 | POST | `/buy-agent-requests/parse-intent` | user | `parse_search_intent` (backend/api/domains/buy_agent/router.py:97) |
-| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:1703) |
-| GET | `/calls/incoming` | user | `get_incoming_call` (backend/api/routers/calls.py:2431) |
-| POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:826) |
-| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:1424) |
-| GET | `/calls/pending/store/{store_id}` | user | `get_store_pending_call` (backend/api/routers/calls.py:2540) |
-| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:2560) |
-| POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:717) |
-| GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:657) |
-| POST | `/calls/unregister-token` | user | `unregister_token` (backend/api/routers/calls.py:806) |
-| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:1854) |
-| WS | `/calls/ws/{room_id}/ringing` | token | `call_signaling_ringing` (backend/api/routers/calls.py:1866) |
-| POST | `/calls/{room_id}/alerted` | public | `call_alerted` (backend/api/routers/calls.py:1073) |
-| POST | `/calls/{room_id}/answer` | public | `call_answered` (backend/api/routers/calls.py:1123) |
-| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:1050) |
-| POST | `/calls/{room_id}/turn-credentials` | public | `get_call_turn_credentials` (backend/api/routers/calls.py:695) |
+| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:1711) |
+| GET | `/calls/incoming` | user | `get_incoming_call` (backend/api/routers/calls.py:2439) |
+| POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:834) |
+| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:1432) |
+| GET | `/calls/pending/store/{store_id}` | user | `get_store_pending_call` (backend/api/routers/calls.py:2548) |
+| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:2568) |
+| POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:725) |
+| GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:665) |
+| POST | `/calls/unregister-token` | user | `unregister_token` (backend/api/routers/calls.py:814) |
+| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:1862) |
+| WS | `/calls/ws/{room_id}/ringing` | token | `call_signaling_ringing` (backend/api/routers/calls.py:1874) |
+| POST | `/calls/{room_id}/alerted` | public | `call_alerted` (backend/api/routers/calls.py:1081) |
+| POST | `/calls/{room_id}/answer` | public | `call_answered` (backend/api/routers/calls.py:1131) |
+| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:1058) |
+| POST | `/calls/{room_id}/turn-credentials` | public | `get_call_turn_credentials` (backend/api/routers/calls.py:703) |
 | GET | `/categories` | public | `list_categories` (backend/api/domains/categories/router.py:14) |
 | GET | `/categories/tree` | public | `category_tree` (backend/api/domains/categories/router.py:21) |
 | GET | `/categories/{category_id}/filters` | public | `list_filters` (backend/api/domains/categories/router.py:31) |
@@ -280,35 +280,37 @@ Counts: admin 80, optional 6, public 64, token 6, user 185.
 | POST | `/mpesa/query` | user | `query_payment_status` (backend/api/routers/mpesa.py:348) |
 | GET | `/mpesa/status/{deal_id}` | user | `get_deal_payment_status` (backend/api/routers/mpesa.py:792) |
 | POST | `/mpesa/stk-push` | user | `initiate_stk_push` (backend/api/routers/mpesa.py:154) |
-| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:5976) |
-| POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1880) |
+| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:6267) |
+| POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1881) |
 | POST | `/negotiate/chat` | user | `broker_chat` (backend/api/domains/ai_broker/router.py:44) **shadowed: never reached** |
-| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:5873) |
-| POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3748) |
+| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:6164) |
+| POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3749) |
 | POST | `/negotiate/dispute-analysis` | user | `dispute_analysis` (backend/api/domains/ai_broker/router.py:85) |
-| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:5315) |
-| POST | `/negotiate/message` | user | `send_message` (backend/api/routers/negotiate.py:1956) |
-| PATCH | `/negotiate/message/{message_id}` | user | `edit_message` (backend/api/routers/negotiate.py:3973) |
-| DELETE | `/negotiate/message/{message_id}` | user | `unsend_message` (backend/api/routers/negotiate.py:4032) |
-| POST | `/negotiate/notification/delivered` | public | `notification_delivered` (backend/api/routers/negotiate.py:5201) |
-| POST | `/negotiate/notification/read` | public | `notification_read` (backend/api/routers/negotiate.py:5234) |
-| POST | `/negotiate/notification/reply` | public | `notification_reply` (backend/api/routers/negotiate.py:5246) |
+| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:5606) |
+| POST | `/negotiate/message` | user | `send_message` (backend/api/routers/negotiate.py:1957) |
+| PATCH | `/negotiate/message/{message_id}` | user | `edit_message` (backend/api/routers/negotiate.py:3974) |
+| DELETE | `/negotiate/message/{message_id}` | user | `unsend_message` (backend/api/routers/negotiate.py:4033) |
+| POST | `/negotiate/notification/delivered` | public | `notification_delivered` (backend/api/routers/negotiate.py:5236) |
+| POST | `/negotiate/notification/read` | public | `notification_read` (backend/api/routers/negotiate.py:5282) |
+| POST | `/negotiate/notification/reply` | public | `notification_reply` (backend/api/routers/negotiate.py:5294) |
 | POST | `/negotiate/price-recommend` | user | `price_recommend` (backend/api/domains/ai_broker/router.py:69) |
 | POST | `/negotiate/scam-check` | user | `scam_check` (backend/api/domains/ai_broker/router.py:60) |
 | POST | `/negotiate/shopping-advisor` | user | `shopping_advisor` (backend/api/domains/ai_broker/router.py:104) |
-| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:5940) |
-| POST | `/negotiate/store/{store_id}/direct-message` | user | `store_direct_message` (backend/api/routers/negotiate.py:4855) |
-| GET | `/negotiate/store/{store_id}/history` | user | `get_store_history` (backend/api/routers/negotiate.py:4879) |
-| POST | `/negotiate/store/{store_id}/mark-delivered` | user | `mark_store_delivered` (backend/api/routers/negotiate.py:4986) |
-| POST | `/negotiate/store/{store_id}/mark-read` | user | `mark_store_read` (backend/api/routers/negotiate.py:5003) |
-| GET | `/negotiate/store/{store_id}/read-status` | user | `get_store_read_status` (backend/api/routers/negotiate.py:5020) |
-| GET | `/negotiate/store/{store_id}/thread-info` | user | `get_store_thread_info` (backend/api/routers/negotiate.py:4957) |
-| POST | `/negotiate/zeno-action/draft-sms` | user | `zeno_draft_sms` (backend/api/routers/negotiate.py:3460) |
-| GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:4090) |
-| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:4613) |
-| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:4657) |
-| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:4704) |
-| POST | `/negotiate/{listing_id}/zeno-read` | user | `mark_zeno_read` (backend/api/routers/negotiate.py:4681) |
+| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:6231) |
+| POST | `/negotiate/store/{store_id}/direct-message` | user | `store_direct_message` (backend/api/routers/negotiate.py:4888) |
+| GET | `/negotiate/store/{store_id}/history` | user | `get_store_history` (backend/api/routers/negotiate.py:4912) |
+| POST | `/negotiate/store/{store_id}/mark-delivered` | user | `mark_store_delivered` (backend/api/routers/negotiate.py:5019) |
+| POST | `/negotiate/store/{store_id}/mark-read` | user | `mark_store_read` (backend/api/routers/negotiate.py:5036) |
+| GET | `/negotiate/store/{store_id}/read-status` | user | `get_store_read_status` (backend/api/routers/negotiate.py:5054) |
+| GET | `/negotiate/store/{store_id}/thread-info` | user | `get_store_thread_info` (backend/api/routers/negotiate.py:4990) |
+| GET | `/negotiate/sync` | user | `sync_messages` (backend/api/routers/negotiate.py:5413) |
+| POST | `/negotiate/sync/ack` | user | `sync_ack` (backend/api/routers/negotiate.py:5513) |
+| POST | `/negotiate/zeno-action/draft-sms` | user | `zeno_draft_sms` (backend/api/routers/negotiate.py:3461) |
+| GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:4091) |
+| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:4645) |
+| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:4689) |
+| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:4737) |
+| POST | `/negotiate/{listing_id}/zeno-read` | user | `mark_zeno_read` (backend/api/routers/negotiate.py:4714) |
 | GET | `/payments/zetupay/payments/{reference}` | admin | `zetupay_payment_status` (backend/api/domains/payments/router.py:108) |
 | POST | `/payments/zetupay/test-charge` | admin | `zetupay_test_charge` (backend/api/domains/payments/router.py:77) |
 | POST | `/payments/zetupay/webhook` | public | `zetupay_webhook` (backend/api/domains/payments/router.py:35) |
@@ -641,6 +643,7 @@ Counts: admin 80, optional 6, public 64, token 6, user 185.
 - `ledger.py`
 - `legal_documents.py` — The legal documents a new BROKA account must accept, and the versions this backend accepts.
 - `media_storage.py` — Where image bytes live: Cloudflare R2, or the database as a fallback.
+- `message_delivery.py` — What happened to every chat message, per recipient - and the log of it.
 - `message_push.py` — Push every chat message to the person it is for, app open or not.
 - `message_visibility.py` — Who a NegotiationMessage row is allowed to reach.
 - `migrations_guide.py` — ⚠️ STATUS AS OF THIS HARDENING PASS (2026-09) — READ THIS FIRST ⚠️
@@ -691,6 +694,7 @@ Counts: admin 80, optional 6, public 64, token 6, user 185.
 - `listing_payment.py` — ListingPayment - one M-Pesa payment for a listing's monthly fee.
 - `marketing.py` — Marketing campaigns and the content generated for them.
 - `media.py` — Image assets - one uploaded image, stored as a few resized WebP files.
+- `message_delivery.py` — Message deliveries - what happened to each chat message, per recipient.
 - `payment.py` — FeaturedPayment and VerificationPayment models — re-exported from api.database (duplicate-table fix, see models/user.py).
 - `payment_callback.py` — Durable inbox for payment-provider callbacks that arrive before BROKA can match them to its own payment row.
 - `platform_cost.py` — PlatformCost model — every shilling BROKA spends to serve users.
@@ -766,6 +770,7 @@ Counts: admin 80, optional 6, public 64, token 6, user 185.
 | `marketing_creatives` | `MarketingCreative` | backend/api/models/marketing.py:100 |
 | `media_assets` | `MediaAsset` | backend/api/models/media.py:74 |
 | `media_blobs` | `MediaBlob` | backend/api/models/media.py:108 |
+| `message_deliveries` | `MessageDelivery` | backend/api/models/message_delivery.py:59 |
 | `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:1186 |
 | `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:518 |
 | `payment_callbacks` | `PaymentCallback` | backend/api/models/payment_callback.py:30 |
@@ -850,32 +855,32 @@ of a change.
 `task_*` functions in `backend/api/core/workers.py`: the in-process sweep
 (every 5 minutes) and ARQ workers.
 
-- `task_ai_summary` (backend/api/core/workers.py:2096)
-- `task_backfill_media` (backend/api/core/workers.py:406) — Convert a bounded batch of base64 images into image assets.
-- `task_check_call_expiry` (backend/api/core/workers.py:637) — Backstop cleanup for stale call sessions (api/core/call_state.py).
-- `task_check_deal_timers` (backend/api/core/workers.py:652) — Periodic sweep (see start_periodic_sweep): fires AI-announced auto-resolution timers once their deadline passes, IF the awaited party never…
-- `task_check_dispute_timers` (backend/api/core/workers.py:1736) — Sweep for DisputeTimer objects whose fires_at has passed.
-- `task_check_interest_nudges` (backend/api/core/workers.py:1169) — Periodic sweep (see start_periodic_sweep): if a buyer expressed interest in a listing and the seller hasn't replied within ~5 minutes, send…
-- `task_close_due_auctions` (backend/api/core/workers.py:2254) — Close auctions whose ends_at has passed, and hand winners to Deal.
-- `task_collect_abandoned_media` (backend/api/core/workers.py:415) — Remove uploads no listing, store or profile ever used, a week after they were made.
-- `task_expire_buy_agent_watches` (backend/api/core/workers.py:423) — End Zeno watches older than BUY_AGENT_WATCH_DAYS and tell their buyers.
-- `task_expire_featured_listings` (backend/api/core/workers.py:616)
-- `task_fraud_sweep` (backend/api/core/workers.py:2112)
-- `task_lapse_unpaid_auction_wins` (backend/api/core/workers.py:2429) — Release listings whose winner never paid.
-- `task_notify_auctions_ending_soon` (backend/api/core/workers.py:2347) — One reminder per auction, to everyone who has bid on it.
-- `task_notify_expiry_alerts` (backend/api/core/workers.py:324) — Text sellers 2 days before a listing/store goes offline (pricing/expiry_alerts.py).
-- `task_process_service_communications` (backend/api/core/workers.py:591) — One bounded scheduler/delivery pass.
-- `task_recompute_dcr_and_leaks` (backend/api/core/workers.py:1516) — Volume 2 §3.7: nightly leak-flagging + DCR/rank_score recompute.
-- `task_recompute_trust_score` (backend/api/core/workers.py:554)
-- `task_reconcile_econfirm_escrows` (backend/api/core/workers.py:348) — Periodic sweep (Phase 8 of the E-Confirm integration): E-Confirm's callbacks aren't exposed to BROKA (per the integration spec), so this is…
-- `task_reconcile_mpesa` (backend/api/core/workers.py:2135) — Settle pending STK prompts from provider evidence, never from age.
-- `task_reconcile_zetupay_payments` (backend/api/core/workers.py:391) — Ask ZetuPay about BROKA's own charges (listing fees, plans, boosts, badges) whose webhook never came - a lost delivery, or a prompt that ti…
-- `task_refresh_dispute_summary_cache` (backend/api/core/workers.py:1723) — Keeps the platform-wide dispute-resolution summary (Volume 2 §2.3) warm.
-- `task_refresh_store_ratings` (backend/api/core/workers.py:1482) — Recompute every store's rating, and write today's snapshot.
-- `task_retrain_ml_models` (backend/api/core/workers.py:1440) — Volume 2 §4.3's weekly retrain job, plus §4.4's "start logging collecting features from day one" (feature_extraction's queries run regardle…
-- `task_send_email_notification` (backend/api/core/workers.py:2091)
-- `task_send_fcm_notification` (backend/api/core/workers.py:598)
-- `task_sync_listing_stock` (backend/api/core/workers.py:335) — Show again a listing whose deals were refunded or cancelled, and mark one sold once every unit has been paid out (listings/stock.py).
+- `task_ai_summary` (backend/api/core/workers.py:2147)
+- `task_backfill_media` (backend/api/core/workers.py:453) — Convert a bounded batch of base64 images into image assets.
+- `task_check_call_expiry` (backend/api/core/workers.py:688) — Backstop cleanup for stale call sessions (api/core/call_state.py).
+- `task_check_deal_timers` (backend/api/core/workers.py:703) — Periodic sweep (see start_periodic_sweep): fires AI-announced auto-resolution timers once their deadline passes, IF the awaited party never…
+- `task_check_dispute_timers` (backend/api/core/workers.py:1787) — Sweep for DisputeTimer objects whose fires_at has passed.
+- `task_check_interest_nudges` (backend/api/core/workers.py:1220) — Periodic sweep (see start_periodic_sweep): if a buyer expressed interest in a listing and the seller hasn't replied within ~5 minutes, send…
+- `task_close_due_auctions` (backend/api/core/workers.py:2305) — Close auctions whose ends_at has passed, and hand winners to Deal.
+- `task_collect_abandoned_media` (backend/api/core/workers.py:462) — Remove uploads no listing, store or profile ever used, a week after they were made.
+- `task_expire_buy_agent_watches` (backend/api/core/workers.py:470) — End Zeno watches older than BUY_AGENT_WATCH_DAYS and tell their buyers.
+- `task_expire_featured_listings` (backend/api/core/workers.py:667)
+- `task_fraud_sweep` (backend/api/core/workers.py:2163)
+- `task_lapse_unpaid_auction_wins` (backend/api/core/workers.py:2480) — Release listings whose winner never paid.
+- `task_notify_auctions_ending_soon` (backend/api/core/workers.py:2398) — One reminder per auction, to everyone who has bid on it.
+- `task_notify_expiry_alerts` (backend/api/core/workers.py:371) — Text sellers 2 days before a listing/store goes offline (pricing/expiry_alerts.py).
+- `task_process_service_communications` (backend/api/core/workers.py:642) — One bounded scheduler/delivery pass.
+- `task_recompute_dcr_and_leaks` (backend/api/core/workers.py:1567) — Volume 2 §3.7: nightly leak-flagging + DCR/rank_score recompute.
+- `task_recompute_trust_score` (backend/api/core/workers.py:605)
+- `task_reconcile_econfirm_escrows` (backend/api/core/workers.py:395) — Periodic sweep (Phase 8 of the E-Confirm integration): E-Confirm's callbacks aren't exposed to BROKA (per the integration spec), so this is…
+- `task_reconcile_mpesa` (backend/api/core/workers.py:2186) — Settle pending STK prompts from provider evidence, never from age.
+- `task_reconcile_zetupay_payments` (backend/api/core/workers.py:438) — Ask ZetuPay about BROKA's own charges (listing fees, plans, boosts, badges) whose webhook never came - a lost delivery, or a prompt that ti…
+- `task_refresh_dispute_summary_cache` (backend/api/core/workers.py:1774) — Keeps the platform-wide dispute-resolution summary (Volume 2 §2.3) warm.
+- `task_refresh_store_ratings` (backend/api/core/workers.py:1533) — Recompute every store's rating, and write today's snapshot.
+- `task_retrain_ml_models` (backend/api/core/workers.py:1491) — Volume 2 §4.3's weekly retrain job, plus §4.4's "start logging collecting features from day one" (feature_extraction's queries run regardle…
+- `task_send_email_notification` (backend/api/core/workers.py:2142)
+- `task_send_fcm_notification` (backend/api/core/workers.py:649)
+- `task_sync_listing_stock` (backend/api/core/workers.py:382) — Show again a listing whose deals were refunded or cancelled, and mark one sold once every unit has been paid out (listings/stock.py).
 
 ## Configuration (environment variables)
 
@@ -886,7 +891,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-152 files in `backend/tests/`.
+153 files in `backend/tests/`.
 
 - `test_admin_additions.py` — Admin additions: SMS cost hook, timeseries, detail reads, users search.
 - `test_admin_alerts.py` — Admin alerts: event-driven creation, dedup, transitions, SSE smoke.
@@ -980,6 +985,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_notification_actions.py` — Reply and Mark as read on a message notification, and the phone saying it received the message (2026-11-11).
 - `test_notifications.py` — Notifications that reach a phone whose app is closed (2026-10-07).
 - `test_nudge_templates.py` — Tests for the system-generated availability-nudge SMS (api/core/nudge_templates.py).
+- `test_offline_delivery.py` — No message lost to an offline recipient, and a log that says so (2026-11-12).
 - `test_offline_message_recovery.py` — Offline-to-online recovery: a message sent while a phone was away must still be announced when that phone becomes reachable again.
 - `test_one_call_at_a_time.py` — One call at a time (2026-10-08).
 - `test_online_stores_update.py` — Online-store update: excluded listing categories, '6 km from you' distances, and KES 40-a-listing-per-two-months pricing.
@@ -1342,6 +1348,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `chat_gallery.dart` — Saving a chat photo to the phone's gallery (2026-11-11): nothing could keep a photo someone sent - it lived only inside the chat.
 - `chat_media_vault.dart` — BROKA - On-device vault for settled chat photos.
 - `chat_screen_memory.dart` — Which of a thread's two screens the user was last on: Zeno's negotiation room (/negotiate) or the direct chat with the other person (/direc…
+- `connectivity_monitor.dart` — BROKA - Connectivity Monitor
 - `counterparty_profile_cache.dart` — BROKA - Counterparty profile cache.
 - `deep_link_service.dart` — Store links opening in the app.
 - `deepgram_stt_service.dart` — lib/services/deepgram_stt_service.dart
@@ -1351,6 +1358,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `last_screen_tracker.dart` — BROKA - Last Screen Tracker Persists a lightweight descriptor of the most recently visited screen (route name + small JSON of primitive arg…
 - `listing_publisher.dart` — Publishing a listing from the sell wizard: the photos' ids, the showcase, then POST /listings - in a form that is safe to repeat.
 - `local_chat_store.dart` — BROKA - Local Chat Store
+- `message_sync_service.dart` — BROKA - Message Sync Service
 - `notification_avatar.dart` — BROKA - the face on a notification.
 - `notification_service.dart` — BROKA - Notification Service (local notifications + FCM foreground/tap handling)
 - `photo_capture.dart` — Taking or picking a photo, the same way everywhere BROKA asks for one.
@@ -1476,6 +1484,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `direct_chat_call_cards_test.dart` — The direct chat's call cards and header, as reported from a seller's phone (2026-10-06):
 - `direct_chat_delivery_test.dart` — The one-on-one chat, as reported from a phone (2026-10-02): the last two messages showed twice until the chat was reopened, a message the o…
 - `direct_chat_improvements_test.dart` — Direct-chat and Zeno reliability: replies, cached identity, merge.
+- `direct_chat_offline_sync_test.dart` — An open conversation and the offline sync (2026-11-12).
 - `direct_chat_reliability_test.dart` — Direct-chat reliability: typing presence, auto-flush, reply navigation, natural image aspect, and Zeno server restore.
 - `discovery_destinations_test.dart` — Covers the four non-category destinations on Home's discovery rail Trending, the Auction House, Traders and Stores - after the alignment pa…
 - `escrow_actions_test.dart` — Buyer protection dialogs (2026-10-02): paying in parts, releasing with the delivery check first, asking for a refund.
@@ -1495,6 +1504,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `listing_unavailable_test.dart` — A listing a buyer marked unavailable (2026-11-12, backend listings/sold_out.py): it was out of every list, the seller's own dashboard inclu…
 - `marketing_studio_test.dart` — The Marketing Studio's last step: a generated poster leaves the phone through the share sheet, and the server hears about it once - as a sa…
 - `menu_test.dart` — The Menu tab (formerly Profile), and the Profile and Settings screens it opens.
+- `message_sync_test.dart` — The offline sync on the phone (MessageSyncService, 2026-11-12).
 - `missed_call_notification_test.dart` — Missed calls and unread messages, as reported from a phone (2026-10-02): "notification for missed calls is not working", and nothing on Hom…
 - `mobile_data_test.dart` — What the app no longer downloads or sends on mobile data (mobile-data pass, 2026-11-07).
 - `negotiation_screens_test.dart` — The two negotiation screens on Home's visual system (2026-09-26): the Zeno negotiation room (NegotiateScreen) and the one-on-one chat (Nego…
@@ -1653,7 +1663,7 @@ Modules:
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `BUSINESS_MODEL_REVIEW.md` — BROKA's business model without the commission
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — The listing page: smaller Like and Save, the price at the foot of the screen, "Mark as unavailable" that texts the seller, the seller's num…
+- `CHANGES.md` — No message lost to an offline recipient: delivery tracked per message, pushes retried, the app syncs what it missed, and the log says what…
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
