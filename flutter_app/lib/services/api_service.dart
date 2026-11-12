@@ -1448,6 +1448,72 @@ class ApiService {
     }
   }
 
+  // ── Offline sync (MessageSyncService) ────────────────────────────────────
+
+  /// One page of the messages sent to this account that its phone has not
+  /// acknowledged yet - every conversation, oldest first: GET
+  /// /negotiate/sync. [after] is the previous page's cursor.
+  ///
+  /// [trigger], [attempt] and [previousError] are for the server's log:
+  /// why this sync runs, which try it is, and why the last one failed - so
+  /// a phone's failed syncs show in the API log once one gets through.
+  static Future<SyncPageAnswer> fetchSyncPage({
+    String? after,
+    int limit = 100,
+    required String trigger,
+    int attempt = 1,
+    String? syncId,
+    int page = 1,
+    String? previousError,
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    try {
+      final uri = Uri.parse('$baseUrl/negotiate/sync').replace(queryParameters: {
+        if (after != null) 'after': after,
+        'limit': '$limit',
+        'trigger': trigger,
+        'attempt': '$attempt',
+        if (syncId != null) 'sync_id': syncId,
+        'page': '$page',
+        if (previousError != null) 'previous_error': previousError,
+      });
+      final res = await _sendAuthed(
+          () => http.get(uri, headers: _headers).timeout(timeout));
+      return SyncPageAnswer.fromResponse(res);
+    } catch (e) {
+      return SyncPageAnswer(error: '${e.runtimeType}');
+    }
+  }
+
+  /// "This phone has stored these messages": POST /negotiate/sync/ack. The
+  /// server records each as delivered and moves the sender's double tick up
+  /// to the newest of them, never further. [source] says what put them on
+  /// the phone: 'sync', or 'chat' for an open conversation's own load.
+  /// [finalPage] marks the acknowledgement that completes a sync.
+  static Future<SyncAckAnswer> acknowledgeMessages(
+    List<String> messageIds, {
+    String source = 'sync',
+    String? syncId,
+    bool finalPage = false,
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    try {
+      final res = await _sendAuthed(() => http.post(
+            Uri.parse('$baseUrl/negotiate/sync/ack'),
+            headers: _headers,
+            body: jsonEncode({
+              'message_ids': messageIds,
+              'source': source,
+              if (syncId != null) 'sync_id': syncId,
+              if (finalPage) 'final': true,
+            }),
+          ).timeout(timeout));
+      return SyncAckAnswer.fromResponse(res);
+    } catch (e) {
+      return SyncAckAnswer(error: '${e.runtimeType}');
+    }
+  }
+
   static Future<void> markStoreRead(String storeId, {String? buyerId}) async {
     return markThreadRead(null, storeId: storeId, buyerId: buyerId);
   }
@@ -2772,6 +2838,94 @@ class DeliveryReceiptAnswer {
   final bool? advanced;
 
   bool get ok => status == 200;
+}
+
+/// One page of GET /negotiate/sync (ApiService.fetchSyncPage).
+class SyncPageAnswer {
+  const SyncPageAnswer({
+    this.status,
+    this.error,
+    this.messages = const [],
+    this.hasMore = false,
+    this.nextCursor,
+  });
+
+  factory SyncPageAnswer.fromResponse(http.Response res) {
+    if (res.statusCode != 200) return SyncPageAnswer(status: res.statusCode);
+    try {
+      final body = jsonDecode(res.body);
+      if (body is Map && body['messages'] is List) {
+        final cursor = body['next_cursor'];
+        return SyncPageAnswer(
+          status: 200,
+          messages: (body['messages'] as List)
+              .whereType<Map>()
+              .map((m) => Map<String, dynamic>.from(m))
+              .toList(),
+          hasMore: body['has_more'] == true && cursor is String,
+          nextCursor: cursor is String ? cursor : null,
+        );
+      }
+    } catch (_) {}
+    // A 200 that is not a sync page: something in front of an older
+    // server answering for a route it does not have.
+    return SyncPageAnswer(status: res.statusCode, error: 'not_a_sync_page');
+  }
+
+  /// The HTTP status; null when no answer came.
+  final int? status;
+
+  /// Why there is no page: the exception's type (a timeout, no network),
+  /// never its message - or 'not_a_sync_page'.
+  final String? error;
+  final List<Map<String, dynamic>> messages;
+  final bool hasMore;
+  final String? nextCursor;
+
+  bool get ok => status == 200 && error == null;
+
+  /// The server has no offline sync: one deployed before it.
+  bool get unsupported =>
+      status == 404 || status == 405 || error == 'not_a_sync_page';
+}
+
+/// What the server answered POST /negotiate/sync/ack.
+class SyncAckAnswer {
+  const SyncAckAnswer({
+    this.status,
+    this.error,
+    this.delivered = const [],
+    this.alreadyDelivered = const [],
+    this.unknown = const [],
+  });
+
+  factory SyncAckAnswer.fromResponse(http.Response res) {
+    List<String> ids(Object? v) =>
+        v is List ? v.whereType<String>().toList() : const <String>[];
+    if (res.statusCode == 200) {
+      try {
+        final body = jsonDecode(res.body);
+        if (body is Map) {
+          return SyncAckAnswer(
+            status: 200,
+            delivered: ids(body['delivered']),
+            alreadyDelivered: ids(body['already_delivered']),
+            unknown: ids(body['unknown']),
+          );
+        }
+      } catch (_) {}
+    }
+    return SyncAckAnswer(status: res.statusCode);
+  }
+
+  final int? status;
+  final String? error;
+  final List<String> delivered;
+  final List<String> alreadyDelivered;
+  final List<String> unknown;
+
+  bool get ok => status == 200;
+  bool get unsupported => status == 404 || status == 405;
 }
 
 /// What the server said to Accept (ApiService.answerCall).

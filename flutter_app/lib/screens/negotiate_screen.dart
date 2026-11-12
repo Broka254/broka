@@ -21,6 +21,7 @@ import '../services/photo_capture.dart';
 import '../models/models.dart';
 import '../services/last_screen_tracker.dart';
 import '../services/local_chat_store.dart';
+import '../services/message_sync_service.dart';
 import '../models/listing.dart';
 import '../widgets/zeno_avatar.dart';
 import '../widgets/zeno_streaming_text.dart';
@@ -197,6 +198,11 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     final lid = _listing?.id;
     if (lid != null) {
       GlobalPollerService.instance.markScreenActive(lid, buyerId: _buyerId);
+      // Zeno's messages the offline sync brings for this room come here
+      // while it is open: the room rewrites its cache from what it shows.
+      _syncScope = _threadScopeKey();
+      MessageSyncService.instance.attach(_syncScope!, _absorbSynced);
+      unawaited(MessageSyncService.instance.sync(trigger: 'open_conversation'));
     }
     _loadDealStatus();
     // Presence: the app-wide heartbeat (main.dart) covers this screen too.
@@ -515,9 +521,41 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     }
   }
 
+  // ── Offline sync ───────────────────────────────────────────────────────────
+  String? _syncScope;
+
+  /// Zeno's messages the sync brought for this room: shown in time order,
+  /// each once, and saved before the sync acknowledges them.
+  Future<void> _absorbSynced(List<Map<String, dynamic>> messages) async {
+    if (!mounted) throw StateError('room closed');
+    final known = {for (final m in _messages) if (m.id.isNotEmpty) m.id};
+    final incoming = [
+      for (final json in messages)
+        if (json['id'] is String && !known.contains(json['id'])) Message.fromJson(json),
+    ];
+    if (incoming.isEmpty) return;
+    final merged = List<Message>.of(_messages);
+    for (final m in incoming) {
+      final at = m.createdAt;
+      var i = merged.length;
+      while (at != null && i > 0) {
+        final before = merged[i - 1].createdAt;
+        if (before == null || !before.isAfter(at)) break;
+        i--;
+      }
+      merged.insert(i, m);
+    }
+    setState(() => _messages = merged);
+    _scrollDown();
+    await _cacheMessages();
+    if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) _sawZeno();
+  }
+
   // ── Lifecycle ──────────────────────────────────────────────────────────────
   @override
   void dispose() {
+    final scope = _syncScope;
+    if (scope != null) MessageSyncService.instance.detach(scope, _absorbSynced);
     _unreadTimer?.cancel();
     // Symmetric with the markScreenActive in _finishInit/initState.
     // Leaving it registered would silence this thread's

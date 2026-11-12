@@ -45,6 +45,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'active_call.dart';
 import 'api_service.dart';
 import 'call_foreground_service.dart';
+import 'message_sync_service.dart';
 import 'notification_avatar.dart';
 import 'ringtone_service.dart';
 
@@ -663,6 +664,11 @@ class NotificationService {
       // never appeared for a message that arrived by push. Side by side
       // with showing it: the receipt can spend seconds trying again, and
       // the notification must not wait on it.
+      // The push names one message and counts the rest; with the app in
+      // front, fetch them all now (MessageSyncService), so every message
+      // it announced is on the phone - and acknowledged as such - not only
+      // the one it named.
+      unawaited(MessageSyncService.instance.sync(trigger: 'push'));
       await Future.wait<void>([
         markDeliveredFromPush(data),
         showMessageFromPush(data),
