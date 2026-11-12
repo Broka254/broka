@@ -41,6 +41,7 @@ from typing import Optional
 from sqlalchemy import and_, event, func, or_, select
 from sqlalchemy.orm import Session
 
+from api.core import message_delivery
 from api.database import AsyncSessionLocal, Listing, NegotiationMessage, User
 
 logger = logging.getLogger(__name__)
@@ -170,6 +171,7 @@ def per_phone_data(data: dict, *, user_id: str, role: str, buyer_id: str,
 
 @event.listens_for(Session, "after_flush")
 def _collect(session, flush_context) -> None:
+    tracked = []
     for obj in session.new:
         if isinstance(obj, NegotiationMessage) and obj.buyer_id:
             roles = recipients_of(obj.role, obj.recipient_role, obj.via_ai, obj.msg_type)
@@ -178,19 +180,32 @@ def _collect(session, flush_context) -> None:
             if getattr(obj, "store_id", None) and not obj.listing_id:
                 session.info.setdefault(_SESSION_KEY + "_store", []).append(
                     (obj.store_id, obj.buyer_id, frozenset(roles)))
+                tracked.append((obj, roles))
             elif obj.listing_id:
                 session.info.setdefault(_SESSION_KEY, []).append(
                     (obj.listing_id, obj.buyer_id, frozenset(roles)))
+                tracked.append((obj, roles))
+    if tracked:
+        # Each recipient's delivery row, in this same flush: the message and
+        # the record that it still has to reach someone commit together, so
+        # a push that never happens (a restart during the debounce, FCM
+        # down) is still tried again, and the app's sync still hands the
+        # message out (api/core/message_delivery.py).
+        message_delivery.record_new_messages(session, tracked)
 
 
 @event.listens_for(Session, "after_rollback")
 def _discard(session) -> None:
     session.info.pop(_SESSION_KEY, None)
     session.info.pop(_SESSION_KEY + "_store", None)
+    message_delivery.rolled_back(session)
 
 
 @event.listens_for(Session, "after_commit")
 def _dispatch(session) -> None:
+    # MESSAGE_SAVED for what this commit made durable - whether or not this
+    # server can push at all.
+    message_delivery.committed(session)
     batch = session.info.pop(_SESSION_KEY, None)
     store_batch = session.info.pop(_SESSION_KEY + "_store", None)
     if (not batch and not store_batch) or not push_enabled():
@@ -243,10 +258,13 @@ async def _push_after_debounce(key: tuple) -> None:
     listing_id, buyer_id = key
     for role in sorted(roles):
         try:
-            await push_thread(listing_id, buyer_id, role, generation=generation)
+            await push_thread(listing_id, buyer_id, role, generation=generation,
+                              trigger="message")
         except Exception as exc:
+            # The type only, as everywhere on this path. The delivery rows
+            # stay due and the retry sweep takes them (message_delivery).
             logger.warning("[message_push] thread %s:%s role=%s failed: %s",
-                           listing_id, buyer_id, role, exc)
+                           listing_id, buyer_id, role, type(exc).__name__)
 
 
 async def drain() -> None:
@@ -351,6 +369,9 @@ async def build_notification(db, listing_id: str, buyer_id: str, role: str) -> O
     return {
         "user_id": recipient_id,
         "message_id": newest.id,
+        # How far the push reaches: every undelivered message up to this one
+        # is announced by it ("3 new messages"), and recorded as pushed.
+        "message_created_at": newest.created_at,
         "title": title,
         "body": body,
         "data": {
@@ -374,9 +395,39 @@ async def build_notification(db, listing_id: str, buyer_id: str, role: str) -> O
     }
 
 
+async def _claim(*, listing_id: Optional[str], store_id: Optional[str], buyer_id: str,
+                 role: str, note: dict, trigger: str, device_count: int) -> list:
+    """This push's delivery rows (message_delivery.claim_for_push). A
+    tracking failure never stops the push itself."""
+    up_to = note.get("message_created_at")
+    if up_to is None:
+        return []
+    try:
+        return await message_delivery.claim_for_push(
+            listing_id=listing_id, store_id=store_id, buyer_id=buyer_id, role=role,
+            up_to=up_to, trigger=trigger, device_count=device_count)
+    except Exception as exc:
+        logger.error("MESSAGE_TRACKING_FAILED stage=claim conversation_id=%s error=%s",
+                     message_delivery.conversation_id(listing_id, store_id, buyer_id),
+                     type(exc).__name__)
+        return []
+
+
+async def _nothing_to_push(*, listing_id: Optional[str], store_id: Optional[str],
+                           buyer_id: str, role: str, trigger: str) -> None:
+    # A register-time re-push asks about every thread the user was ever in;
+    # only a message's own push and the retry sweep have rows to settle.
+    if trigger not in ("message", "retry"):
+        return
+    await message_delivery.skip_push(
+        listing_id=listing_id, store_id=store_id, buyer_id=buyer_id, role=role,
+        reason="NOTHING_UNREAD")
+
+
 async def push_thread(
     listing_id: str, buyer_id: str, role: str,
     generation: Optional[int] = None, force: bool = False,
+    trigger: str = "message",
 ) -> int:
     """Send `role` this thread's notification if there is news for them.
     Returns how many phones accepted it.
@@ -402,12 +453,21 @@ async def push_thread(
     tasks racing on the same thread cannot both send. The notification
     itself is built before the lock (pure read, no shared state), so the
     lock is held only across the cheap guard and the FCM send.
+
+    `trigger` names why this push is being sent - "message" (the debounced
+    push of a new message), "retry" (message_delivery's sweep) or
+    "device_registered" (push_unread_for_user) - in the delivery log. The
+    messages the push announces are recorded as pushed or failed there
+    (message_delivery.claim_for_push / record_push_result); accepted is
+    never recorded as delivered.
     """
     from api.core import push_devices
 
     async with AsyncSessionLocal() as db:
         note = await build_notification(db, listing_id, buyer_id, role)
     if note is None:
+        await _nothing_to_push(listing_id=listing_id, store_id=None, buyer_id=buyer_id,
+                               role=role, trigger=trigger)
         return 0
     dedupe_key = (listing_id, buyer_id, role)
     lock = _send_locks.setdefault(dedupe_key, asyncio.Lock())
@@ -429,14 +489,19 @@ async def push_thread(
         # None when the account has no phone registered: push_user resolves
         # the phones itself then, as it always has.
         tokens = phones or None
+        claimed = await _claim(listing_id=listing_id, store_id=None, buyer_id=buyer_id,
+                               role=role, note=note, trigger=trigger,
+                               device_count=len(phones))
 
         tag = thread_tag(listing_id, buyer_id)
+        outcome = push_devices.PushOutcome()
         sent = await push_devices.push_user(
             note["user_id"], title=note["title"], body=note["body"], data=note["data"],
             tokens=tokens,
             data_for_token=per_phone_data(
                 note["data"], user_id=note["user_id"], role=role,
                 buyer_id=buyer_id, listing_id=listing_id),
+            outcome=outcome,
             android_tag=tag, android_channel_id=MESSAGES_CHANNEL_ID,
             apns_thread_id=tag,
         )
@@ -450,8 +515,10 @@ async def push_thread(
             _last_pushed.move_to_end(dedupe_key)
             while len(_last_pushed) > _LAST_PUSHED_MAX:
                 _last_pushed.popitem(last=False)
-        logger.info("[message_push] MESSAGE_PUSHED thread=%s:%s role=%s phones=%d",
-                    listing_id, buyer_id, role, sent)
+        await message_delivery.record_push_result(claimed, sent=sent, outcome=outcome,
+                                                  trigger=trigger)
+        logger.info("[message_push] MESSAGE_PUSHED thread=%s:%s role=%s phones=%d messages=%d",
+                    listing_id, buyer_id, role, sent, len(claimed))
         return sent
 
 
@@ -488,10 +555,11 @@ async def _push_store_after_debounce(key: tuple) -> None:
     _, store_id, buyer_id = key
     for role in sorted(roles):
         try:
-            await push_store_thread(store_id, buyer_id, role, generation=generation)
+            await push_store_thread(store_id, buyer_id, role, generation=generation,
+                                    trigger="message")
         except Exception as exc:
             logger.warning("[message_push] store thread %s:%s role=%s failed: %s",
-                           store_id, buyer_id, role, exc)
+                           store_id, buyer_id, role, type(exc).__name__)
 
 
 async def build_store_notification(db, store_id: str, buyer_id: str, role: str) -> Optional[dict]:
@@ -555,6 +623,7 @@ async def build_store_notification(db, store_id: str, buyer_id: str, role: str) 
     return {
         "user_id": recipient_id,
         "message_id": newest.id,
+        "message_created_at": newest.created_at,
         "title": f"{sender_name} · {store.name}" if role == "seller" else store.name,
         "body": body,
         "data": {
@@ -568,11 +637,14 @@ async def build_store_notification(db, store_id: str, buyer_id: str, role: str) 
 
 
 async def push_store_thread(store_id: str, buyer_id: str, role: str,
-                            generation: Optional[int] = None, force: bool = False) -> int:
+                            generation: Optional[int] = None, force: bool = False,
+                            trigger: str = "message") -> int:
     from api.core import push_devices
     async with AsyncSessionLocal() as db:
         note = await build_store_notification(db, store_id, buyer_id, role)
     if note is None:
+        await _nothing_to_push(listing_id=None, store_id=store_id, buyer_id=buyer_id,
+                               role=role, trigger=trigger)
         return 0
     dedupe_key = ("store", store_id, buyer_id, role)
     lock = _send_locks.setdefault(dedupe_key, asyncio.Lock())
@@ -591,13 +663,18 @@ async def push_store_thread(store_id: str, buyer_id: str, role: str,
             if not phones:
                 return 0
         tokens = phones or None
+        claimed = await _claim(listing_id=None, store_id=store_id, buyer_id=buyer_id,
+                               role=role, note=note, trigger=trigger,
+                               device_count=len(phones))
         tag = store_tag(store_id, buyer_id)
+        outcome = push_devices.PushOutcome()
         sent = await push_devices.push_user(
             note["user_id"], title=note["title"], body=note["body"], data=note["data"],
             tokens=tokens,
             data_for_token=per_phone_data(
                 note["data"], user_id=note["user_id"], role=role,
                 buyer_id=buyer_id, store_id=store_id),
+            outcome=outcome,
             android_tag=tag, android_channel_id=MESSAGES_CHANNEL_ID,
             apns_thread_id=tag,
         )
@@ -606,8 +683,10 @@ async def push_store_thread(store_id: str, buyer_id: str, role: str,
             _last_pushed.move_to_end(dedupe_key)
             while len(_last_pushed) > _LAST_PUSHED_MAX:
                 _last_pushed.popitem(last=False)
-        logger.info("[message_push] STORE_PUSHED thread=%s:%s role=%s phones=%d",
-                    store_id, buyer_id, role, sent)
+        await message_delivery.record_push_result(claimed, sent=sent, outcome=outcome,
+                                                  trigger=trigger)
+        logger.info("[message_push] STORE_PUSHED thread=%s:%s role=%s phones=%d messages=%d",
+                    store_id, buyer_id, role, sent, len(claimed))
         return sent
 
 
@@ -662,7 +741,8 @@ async def push_unread_for_user(user_id: str) -> int:
         if listing_id is None:
             continue
         try:
-            sent += await push_thread(listing_id, buyer_id, role, force=True)
+            sent += await push_thread(listing_id, buyer_id, role, force=True,
+                                      trigger="device_registered")
         except Exception as exc:
             logger.warning("[message_push] unread re-push thread %s:%s role=%s failed: %s",
                            listing_id, buyer_id, role, exc)
@@ -690,7 +770,8 @@ async def push_unread_for_user(user_id: str) -> int:
             store_pairs.update((sid, bid, "seller") for sid, bid in sseller if sid)
         for store_id, sbuyer_id, srole in sorted(store_pairs):
             try:
-                sent += await push_store_thread(store_id, sbuyer_id, srole, force=True)
+                sent += await push_store_thread(store_id, sbuyer_id, srole, force=True,
+                                                trigger="device_registered")
             except Exception as exc:
                 logger.warning("[message_push] unread re-push store %s:%s role=%s failed: %s",
                                store_id, sbuyer_id, srole, exc)

@@ -1493,7 +1493,7 @@ async def _apply_optional_statements(conn, statements) -> None:
         await conn.execute(text(prepared))
 
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 SCHEMA_REVISIONS = (
     (1, "legacy_schema_adoption"),
     (2, "durable_payment_intents_and_callbacks"),
@@ -1539,6 +1539,13 @@ SCHEMA_REVISIONS = (
     # replica serving the listing questions or a sold-out report against a
     # database without them would fail every one.
     (16, "zeno_sessions_and_unavailable_texts"),
+    # Per-recipient message delivery tracking (api/models/message_delivery.py,
+    # create_all). Every new chat message writes its rows in its own
+    # transaction; against a database without the table every message would
+    # be saved untracked - no push retry, nothing for the app's offline sync
+    # to hand out - so the revision makes a replica wait for the explicit
+    # release step instead.
+    (17, "message_delivery_tracking"),
 )
 
 # Tables/columns that must exist before an API process is safe to serve
@@ -1792,6 +1799,7 @@ async def _init_db_impl():
             "ServiceCostEntry", "ServiceCostAdjustment", "ServiceUsageDaily",
         )),
         ("api.models.push_device", ("PushDevice",)),
+        ("api.models.message_delivery", ("MessageDelivery",)),
         ("api.models.sold_out_report", ("SoldOutReport",)),
         ("api.models.zeno_session", ("ZenoSession",)),
         ("api.models.payment_callback", ("PaymentCallback",)),

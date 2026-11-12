@@ -59,7 +59,7 @@ async def test_fresh_database_records_every_revision_and_required_columns():
     assert status["current_version"] == SCHEMA_VERSION
     assert status["missing"] == {}
     assert status["missing_indexes"] == {}
-    assert [row["version"] for row in status["versions"]] == list(range(1, 17))
+    assert [row["version"] for row in status["versions"]] == list(range(1, SCHEMA_VERSION + 1))
     async with database.engine.connect() as conn:
         columns = await conn.run_sync(_columns, "mpesa_transactions")
         indexes = await conn.run_sync(_indexes, "mpesa_transactions")
@@ -111,12 +111,14 @@ async def test_an_older_database_gets_new_columns_and_revisions_back():
         # Revision 8 is a brand-new table, so an older database has none.
         # create_all() must create it on the next migrate run.
         await conn.execute(text("DROP TABLE legal_acceptances"))
+        # So is revision 17's message delivery tracking.
+        await conn.execute(text("DROP TABLE message_deliveries"))
         await conn.execute(text("DELETE FROM schema_migrations"))
 
     await database._init_db_impl()
     status = await database.schema_status()
     assert status["current"] is True
-    assert [row["version"] for row in status["versions"]] == list(range(1, 17))
+    assert [row["version"] for row in status["versions"]] == list(range(1, SCHEMA_VERSION + 1))
     async with database.engine.connect() as conn:
         columns = await conn.run_sync(_columns, "mpesa_transactions")
         indexes = await conn.run_sync(_indexes, "mpesa_transactions")
@@ -140,6 +142,7 @@ async def test_an_older_database_gets_new_columns_and_revisions_back():
     assert "uq_store_payments_receipt" in store_indexes
     assert "payment_callbacks" in tables
     assert "legal_acceptances" in tables
+    assert "message_deliveries" in tables
 
 
 @pytest.mark.asyncio

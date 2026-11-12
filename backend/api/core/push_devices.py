@@ -253,12 +253,56 @@ def _default_sender() -> Callable[..., Awaitable]:
     return calls._send_fcm
 
 
+class PushOutcome:
+    """What one push_user call did, for a caller that records it (the
+    message delivery tracking in api/core/message_delivery.py).
+
+    `errors` holds one code per phone that did not accept - FCM's own
+    (UNAVAILABLE, UNREGISTERED...) where it gave one - and `retryable` says
+    whether trying again later could change the answer: a phone FCM could
+    not reach right now, yes; no phone registered, a dead token or a
+    misconfigured server, no.
+    """
+    __slots__ = ("device_count", "accepted", "errors", "retryable")
+
+    def __init__(self) -> None:
+        self.device_count = 0
+        self.accepted = 0
+        self.errors: list[str] = []
+        self.retryable = False
+
+    @property
+    def error(self) -> Optional[str]:
+        return self.errors[0] if self.errors else None
+
+    def _failed(self, code: str, retryable: bool) -> None:
+        # A retryable failure is the more useful one to name first: it is
+        # the reason a retry is scheduled.
+        if retryable and not self.retryable:
+            self.errors.insert(0, code)
+        else:
+            self.errors.append(code)
+        self.retryable = self.retryable or retryable
+
+
+def _failure_code(result) -> tuple[str, bool]:
+    code = getattr(result, "error_code", None) or getattr(result, "failure_category", None)
+    if code:
+        return str(code).upper(), bool(getattr(result, "retryable", False))
+    if getattr(result, "unregistered", False):
+        return "UNREGISTERED", False
+    # A sender that answers a bare False: refused, and nothing says a retry
+    # would do better.
+    return "REJECTED", False
+
+
 async def push_user(
     user_id: str, *, title: str, body: str, data: dict,
     send: Optional[Callable[..., Awaitable]] = None,
     db: Optional[AsyncSession] = None,
     tokens: Optional[list[str]] = None,
     data_for_token: Optional[Callable[[str], dict]] = None,
+    outcome: Optional[PushOutcome] = None,
     **send_kwargs,
 ) -> int:
     """Send one FCM notification to every phone `user_id` is signed in on.
@@ -272,10 +316,16 @@ async def push_user(
     its Reply / Mark as read token to the phone it goes to. None sends
     `data` to every phone.
 
+    `outcome`, when given, is filled in with why phones did not accept
+    (PushOutcome). Accepted is never delivered: FCM taking a push says
+    nothing about the phone having it.
+
     The phones are pushed concurrently: a call rings on all of them at
     once, and one slow FCM round trip doesn't hold up the next phone.
     """
     if not user_id:
+        if outcome is not None:
+            outcome._failed("NO_RECIPIENT", False)
         return 0
     if tokens is None:
         try:
@@ -290,13 +340,22 @@ async def push_user(
             # an outage.
             logger.warning("[push] could not load devices for user=%s: %s",
                            user_id, type(exc).__name__)
+            if outcome is not None:
+                outcome._failed("DEVICE_LOOKUP_FAILED", True)
             return 0
     route = str(data.get("type") or "generic")
     room = str(data.get("roomId") or "-")
     if not tokens:
         logger.info("[push] PUSH_NO_DEVICES user=%s route=%s room=%s",
                     user_id, route, room)
+        if outcome is not None:
+            # Not retried: a phone that registers later is told about what
+            # is unread then (message_push.push_unread_for_user), and the
+            # app's own sync delivers it when it next opens.
+            outcome._failed("NO_DEVICES", False)
         return 0
+    if outcome is not None:
+        outcome.device_count = len(tokens)
 
     sender = send or _default_sender()
 
@@ -321,15 +380,22 @@ async def push_user(
         if isinstance(result, BaseException):
             logger.warning("[push] send raised for user=%s token=%s type=%s",
                            user_id, token_fingerprint(token), type(result).__name__)
+            if outcome is not None:
+                outcome._failed("SEND_EXCEPTION", True)
             continue
         if result:
             sent += 1
-        elif getattr(result, "unregistered", False):
+            continue
+        if outcome is not None:
+            outcome._failed(*_failure_code(result))
+        if getattr(result, "unregistered", False):
             # Only a dead registration reaches here: a sender/project
             # mismatch or a transient provider failure must leave the token
             # alone, or a misconfigured deployment would quietly delete
             # every phone it cannot push to.
             await forget(token, reason="fcm_unregistered")
+    if outcome is not None:
+        outcome.accepted = sent
     log = logger.info if route in ("incoming_call", "missed_call") else logger.debug
     log("[push] PUSH_RESULT user=%s route=%s room=%s tokens=%d accepted=%d",
         user_id, route, room, len(tokens), sent)

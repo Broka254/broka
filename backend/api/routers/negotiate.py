@@ -57,6 +57,7 @@ from api.core.message_visibility import (
     addressed_to_role_clause, broker_visible_to, thread_visible_to_role_clause,
     visible_to_role_clause,
 )
+from api.core import message_delivery
 from api.core.audit import record_audit
 from api.core.chat_files import message_media_fields
 from api.core.config import settings
@@ -4524,10 +4525,33 @@ class _WatermarkMove(NamedTuple):
             self.delivered_before is None or self.delivered_at > self.delivered_before)
 
 
+async def _record_read(
+    db: AsyncSession, listing_id: Optional[str], store_id: Optional[str],
+    buyer_id: str, role: str, read_at: _dt, source: str,
+) -> None:
+    """The read receipt, per message (message_delivery.mark_read_in_thread):
+    every message this side was sent up to `read_at` is READ. Its own commit,
+    after the watermark's: tracking failing must never cost the read receipt
+    itself, and a later read covers anything this one missed."""
+    try:
+        rows = await message_delivery.mark_read_in_thread(
+            db, listing_id=listing_id, store_id=store_id, buyer_id=buyer_id,
+            role=role, read_at=read_at)
+        if not rows:
+            return
+        await db.commit()
+        message_delivery.log_read(rows, source=source)
+    except Exception as exc:
+        await db.rollback()
+        logger.error("MESSAGE_TRACKING_FAILED stage=read conversation_id=%s error=%s",
+                     message_delivery.conversation_id(listing_id, store_id, buyer_id),
+                     type(exc).__name__)
+
+
 async def _move_watermark(
     db: AsyncSession, listing_id: Optional[str], buyer_id: str, role: str,
     *, delivered: bool, read: bool, store_id: Optional[str] = None,
-    delivered_up_to: Optional[_dt] = None,
+    delivered_up_to: Optional[_dt] = None, source: str = "read_receipt",
 ) -> _WatermarkMove:
     """Advance one side's delivery and/or read watermark.
 
@@ -4580,7 +4604,6 @@ async def _move_watermark(
         move = _WatermarkMove(now, before, row.last_delivered_at, row.last_read_at)
         try:
             await db.commit()
-            return move
         except IntegrityError:
             # This side's first watermark, written twice at once - a push's
             # delivered receipt and the inbox sweep's land together. The
@@ -4591,17 +4614,26 @@ async def _move_watermark(
             await db.rollback()
             if attempt:
                 raise
+            continue
+        # Each message this read covers is READ in the delivery record too.
+        # Only a read moves a message to READ - never a delivery, and never
+        # a push.
+        if read:
+            await _record_read(db, listing_id, store_id, buyer_id, role, now, source)
+        return move
     return _WatermarkMove(now, None, None, None)
 
 
 async def _touch_watermark(
     db: AsyncSession, listing_id: Optional[str], buyer_id: str, role: str,
     *, delivered: bool, read: bool, store_id: Optional[str] = None,
+    source: str = "read_receipt",
 ):
     """Advance one side's delivery and/or read watermark to now (see
     _move_watermark). Returns the moment recorded."""
     move = await _move_watermark(db, listing_id, buyer_id, role,
-                                 delivered=delivered, read=read, store_id=store_id)
+                                 delivered=delivered, read=read, store_id=store_id,
+                                 source=source)
     return move.now
 
 
@@ -4671,7 +4703,8 @@ async def mark_thread_read(
         raise HTTPException(status_code=400, detail="buyer_id required")
 
     now = await _touch_watermark(
-        db, listing_id, effective_buyer_id, role, delivered=True, read=True)
+        db, listing_id, effective_buyer_id, role, delivered=True, read=True,
+        source="chat_open")
     await _announce_receipt(listing_id, effective_buyer_id, role, current["id"],
                             delivered_at=now, read_at=now)
     return {"status": "ok", "last_read_at": now.isoformat() + "Z"}
@@ -4696,7 +4729,7 @@ async def mark_zeno_read(
         raise HTTPException(status_code=400, detail="buyer_id required")
     now = await _touch_watermark(
         db, listing_id, effective_buyer_id, _zeno_read_role(role),
-        delivered=True, read=True)
+        delivered=True, read=True, source="zeno_room")
     return {"status": "ok", "last_read_at": now.isoformat() + "Z"}
 
 
@@ -5007,7 +5040,8 @@ async def mark_store_read(
     _, role, effective_buyer_id = await _resolve_store_thread(db, store_id, payload.buyer_id, current)
     if not effective_buyer_id:
         raise HTTPException(status_code=400, detail="buyer_id required")
-    now = await _touch_watermark(db, None, effective_buyer_id, role, delivered=True, read=True, store_id=store_id)
+    now = await _touch_watermark(db, None, effective_buyer_id, role, delivered=True, read=True,
+                                 store_id=store_id, source="chat_open")
     try:
         from api.routers.media import broadcast_store_receipt
         await broadcast_store_receipt(store_id, effective_buyer_id, role, exclude_uid=current["id"], delivered_at=now, read_at=now)
@@ -5169,6 +5203,7 @@ async def _announced_at(db: AsyncSession, thread: dict, message_id: str) -> _dt:
 
 async def _notification_receipt(
     db: AsyncSession, thread: dict, *, read: bool, delivered_up_to: Optional[_dt] = None,
+    source: str = "notification",
 ) -> _WatermarkMove:
     """Move this side's watermark and tell the other side's open chat, as
     mark-delivered / mark-read do - with the watermarks the row now holds,
@@ -5178,7 +5213,7 @@ async def _notification_receipt(
     move = await _move_watermark(
         db, thread["listing_id"], thread["buyer_id"], thread["role"],
         delivered=True, read=read, store_id=thread["store_id"],
-        delivered_up_to=delivered_up_to)
+        delivered_up_to=delivered_up_to, source=source)
     if not read and not move.delivered_advanced:
         return move
     delivered_at = move.delivered_at
@@ -5226,6 +5261,19 @@ async def notification_delivered(
         "bounded=%s advanced=%s watermark=%s",
         where, thread["role"], thread["user_id"], thread["device"], message_id or "-",
         up_to is not None, advanced, _iso(move.delivered_at))
+    if message_id:
+        # The app's push handler ran for this message on that phone: the one
+        # message the push named is DELIVERED. Not the others its "3 new
+        # messages" counted - the phone was told they exist, not given them;
+        # the app's sync delivers those when it next runs.
+        try:
+            await message_delivery.mark_delivered(
+                db, recipient_id=thread["user_id"], message_ids=[message_id],
+                source="push_receipt")
+        except Exception as exc:
+            await db.rollback()
+            logger.error("MESSAGE_TRACKING_FAILED stage=push_receipt message_id=%s error=%s",
+                         message_id, type(exc).__name__)
     return {"status": "ok", "last_delivered_at": _iso(move.delivered_at),
             "advanced": advanced, "message_id": message_id}
 
@@ -5238,7 +5286,7 @@ async def notification_read(
     """Mark as read, pressed on a message notification: the thread is read
     up to now, and the sender sees "Seen", as when the chat is opened."""
     thread = await _notification_thread(db, payload.thread_token, action="read")
-    move = await _notification_receipt(db, thread, read=True)
+    move = await _notification_receipt(db, thread, read=True, source="notification_mark_read")
     return {"status": "ok", "last_read_at": _iso(move.now)}
 
 
@@ -5267,8 +5315,251 @@ async def notification_reply(
         ),
         db=db, current_user={"id": thread["user_id"]},
     )
-    move = await _notification_receipt(db, thread, read=True)
+    move = await _notification_receipt(db, thread, read=True, source="notification_reply")
     return {**result, "last_read_at": _iso(move.now)}
+
+
+# ── Offline sync: what this account's phone has not acknowledged yet ────────
+# The app asks on start, on returning to the foreground, when the network
+# comes back and when a conversation opens (MessageSyncService), stores what
+# it is given, and acknowledges it (POST /negotiate/sync/ack). Asking is
+# never delivery: a message stays in these pages until the app says it has
+# it, so a sync cut off half way, or repeated, loses and duplicates nothing.
+# The record of what is undelivered is the server's (api/models/
+# message_delivery.py), not a cursor on the phone - a message that committed
+# after a later one was already synced is still handed out.
+
+SYNC_PAGE_DEFAULT = 100
+SYNC_PAGE_MAX = 200
+SYNC_ACK_MAX_IDS = 500
+
+_LOG_LABEL = re.compile(r"[^A-Za-z0-9_.:\-]")
+
+
+def _log_label(value: Optional[str], limit: int = 48) -> Optional[str]:
+    """A word the app sent, fit for the log (a trigger, an error type, a
+    sync id): only its own characters, so it can never forge another field
+    of the line it is written into."""
+    if not value:
+        return None
+    cleaned = _LOG_LABEL.sub("", value)[:limit]
+    return cleaned or None
+
+
+def _sync_reply_preview(src: NegotiationMessage, refs: dict) -> Optional[dict]:
+    """The quoted message of a reply, as /history shows it: the live row
+    when it was unsent, the send-time snapshot otherwise, and the deleted
+    fallback for anything private or from another conversation."""
+    reply_id = getattr(src, "reply_to_message_id", None)
+    if not reply_id:
+        return None
+    ref = refs.get(reply_id)
+    if ref is not None and getattr(ref, "deleted_at", None) is not None:
+        return _reply_preview_for(ref)
+    preview = None
+    raw = getattr(src, "reply_snapshot", None)
+    if raw:
+        try:
+            preview = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            preview = None
+    if preview is None and ref is not None:
+        same_thread = (ref.listing_id == src.listing_id and ref.store_id == src.store_id
+                       and ref.buyer_id == src.buyer_id)
+        private = bool(getattr(ref, "via_ai", False)) or ref.role not in ("buyer", "seller")
+        if same_thread and not private:
+            preview = _reply_preview_for(ref)
+    return preview or {"deleted": True, "label": "Message deleted"}
+
+
+def _sync_message_out(d, m: NegotiationMessage, refs: dict) -> dict:
+    """One synced message: /history's fields for it (so the app stores it
+    exactly as the chat would), plus where it belongs on the phone."""
+    deleted = m.deleted_at is not None
+    from_zeno = m.role == "broker"
+    out = {
+        "id": m.id,
+        "role": m.role,
+        "content": "" if deleted else (m.content or ""),
+        # /history's convention: Zeno's rows are via_ai; the other person's
+        # direct messages are not (their words to Zeno are never synced).
+        "via_ai": from_zeno,
+        "msg_type": "deleted" if deleted else (m.msg_type or "text"),
+        "media_url": None if deleted else m.media_url,
+        "duration_secs": None if deleted else m.duration_secs,
+        "call_type": None if deleted else m.call_type,
+        "created_at": _iso(m.created_at),
+        "edited_at": _iso(m.edited_at),
+        "deleted_at": _iso(m.deleted_at),
+        "deleted": deleted,
+        "is_agent_initiated": bool(getattr(m, "is_agent_initiated", False)) if from_zeno else False,
+        **message_media_fields(m),
+        "reply_to_message_id": None if from_zeno else getattr(m, "reply_to_message_id", None),
+        "reply_preview": None if from_zeno else _sync_reply_preview(m, refs),
+        "listing_id": d.listing_id,
+        "store_id": d.store_id,
+        "buyer_id": d.buyer_id,
+        "thread_type": "store" if d.store_id and not d.listing_id else "listing",
+        "my_role": d.recipient_role,
+        # Zeno's messages live in Zeno's room on the phone, the rest in the
+        # direct chat.
+        "room": "zeno" if d.from_zeno else "direct",
+        "delivery_status": d.status,
+    }
+    return out
+
+
+@router.get("/sync")
+async def sync_messages(
+    after: Optional[str] = Query(default=None, max_length=200),
+    limit: int = Query(default=SYNC_PAGE_DEFAULT, ge=1, le=SYNC_PAGE_MAX),
+    trigger: Optional[str] = Query(default=None, max_length=48),
+    attempt: int = Query(default=1, ge=1, le=100000),
+    sync_id: Optional[str] = Query(default=None, max_length=64),
+    page: int = Query(default=1, ge=1, le=100000),
+    previous_error: Optional[str] = Query(default=None, max_length=64),
+    db: AsyncSession = Depends(get_db),
+    current: dict = Depends(get_current_user),
+):
+    """Every message sent to the caller that their app has not acknowledged,
+    in all their conversations, oldest first, one page at a time.
+
+    `after` is the previous page's `next_cursor`. The app says why it is
+    asking (`trigger`: app_start, resume, connectivity_restored,
+    open_conversation, push, inbox...), which try this is (`attempt`) and
+    why the last one failed (`previous_error`), so the API log shows a
+    phone's failed syncs once it gets through, not only the ones that
+    worked. Handing a message out is logged (MESSAGE_SYNCED_TO_CLIENT); it
+    is not delivery.
+    """
+    uid = current["id"]
+    sid = _log_label(sync_id)
+    why = _log_label(trigger) or "unspecified"
+    try:
+        cursor = message_delivery.parse_cursor(after)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid cursor")
+    if cursor is None:
+        failed_before = _log_label(previous_error)
+        if failed_before and attempt > 1:
+            message_delivery.log_event(
+                "OFFLINE_SYNC_FAILED", recipient_id=uid, sync_id=sid, trigger=why,
+                attempt=attempt - 1, error=failed_before, source="client_report")
+        message_delivery.log_event(
+            "OFFLINE_SYNC_STARTED", recipient_id=uid, sync_id=sid, trigger=why, attempt=attempt)
+    try:
+        rows, has_more = await message_delivery.pending_page(
+            db, recipient_id=uid, after=cursor, limit=limit)
+        reply_ids = {m.reply_to_message_id for _, m in rows
+                     if getattr(m, "reply_to_message_id", None)}
+        refs = {}
+        if reply_ids:
+            # visibility-ok: quoted originals only, and _sync_reply_preview replaces a private or other-conversation original with the deleted fallback
+            refs = {r.id: r for r in (await db.execute(
+                select(NegotiationMessage).where(NegotiationMessage.id.in_(reply_ids))
+            )).scalars().all()}
+        messages = [_sync_message_out(d, m, refs) for d, m in rows]
+        next_cursor = (message_delivery.make_cursor(rows[-1][0].message_created_at,
+                                                    rows[-1][0].message_id)
+                       if has_more and rows else None)
+        await message_delivery.mark_synced(db, rows, sync_id=sid, page=page)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        message_delivery.log_event(
+            "OFFLINE_SYNC_FAILED", recipient_id=uid, sync_id=sid, trigger=why,
+            attempt=attempt, page=page, error=type(exc).__name__, source="server")
+        raise HTTPException(status_code=503, detail="Could not sync messages. Try again.")
+    if not messages and not has_more:
+        # Nothing waiting: done now. With messages, it is done when the app
+        # acknowledges the last page (sync/ack with final=true).
+        message_delivery.log_event(
+            "OFFLINE_SYNC_COMPLETED", recipient_id=uid, sync_id=sid, trigger=why,
+            attempt=attempt, pages=page, messages=0)
+    return {
+        "messages": messages,
+        "has_more": has_more,
+        "next_cursor": next_cursor,
+        "server_time": _iso(_dt.utcnow()),
+    }
+
+
+class SyncAckIn(BaseModel):
+    message_ids: List[str] = Field(default_factory=list, max_length=SYNC_ACK_MAX_IDS)
+    # What put the messages on the phone: "sync" (this sync), "chat" (an
+    # open conversation's own load), "push" (a push the app handled).
+    source: str = Field(default="sync", max_length=24)
+    sync_id: Optional[str] = Field(default=None, max_length=64)
+    # The acknowledgement of a sync's last page: the sync is complete.
+    final: bool = False
+
+
+async def _announce_delivery(listing_id: Optional[str], store_id: Optional[str],
+                             buyer_id: str, role: str, uid: str, *, delivered_at) -> None:
+    """The sender's open chat: this side's delivery watermark moved."""
+    try:
+        if store_id and not listing_id:
+            from api.routers.media import broadcast_store_receipt
+            await broadcast_store_receipt(store_id, buyer_id, role, exclude_uid=uid,
+                                          delivered_at=delivered_at, read_at=None)
+        else:
+            await _announce_receipt(listing_id, buyer_id, role, uid,
+                                    delivered_at=delivered_at, read_at=None)
+    except Exception as exc:
+        logger.debug("[negotiate] delivery broadcast failed: %s", exc)
+
+
+@router.post("/sync/ack")
+async def sync_ack(
+    payload: SyncAckIn,
+    db: AsyncSession = Depends(get_db),
+    current: dict = Depends(get_current_user),
+):
+    """The caller's app has stored these messages: each is DELIVERED, once,
+    and the sender's tick becomes the double tick - up to the newest
+    message acknowledged in each conversation, never past it.
+
+    Only the caller's own messages count: an id that is someone else's, or
+    no message at all, is answered as unknown and changes nothing. Never a
+    read.
+    """
+    uid = current["id"]
+    source = payload.source if payload.source in ("sync", "chat", "push") else "sync"
+    sid = _log_label(payload.sync_id)
+    ids = [i.strip() for i in payload.message_ids
+           if isinstance(i, str) and i.strip() and len(i.strip()) <= 64]
+    result = await message_delivery.mark_delivered(
+        db, recipient_id=uid, message_ids=ids, source=source, sync_id=sid)
+    for (listing_id, store_id, buyer_id, role), up_to in result["threads"].items():
+        try:
+            move = await _move_watermark(
+                db, listing_id, buyer_id, role, delivered=True, read=False,
+                store_id=store_id, delivered_up_to=up_to)
+        except Exception as exc:
+            await db.rollback()
+            logger.error("MESSAGE_TRACKING_FAILED stage=ack_watermark conversation_id=%s error=%s",
+                         message_delivery.conversation_id(listing_id, store_id, buyer_id),
+                         type(exc).__name__)
+            continue
+        if move.delivered_advanced:
+            logger.info(
+                "[negotiate] DELIVERY_WATERMARK_UPDATED thread=%s:%s role=%s user=%s "
+                "from=%s to=%s source=%s_ack",
+                listing_id or store_id, buyer_id, role, uid,
+                _iso(move.delivered_before) or "-", _iso(move.delivered_at), source)
+            await _announce_delivery(listing_id, store_id, buyer_id, role, uid,
+                                     delivered_at=move.delivered_at)
+    if payload.final:
+        message_delivery.log_event(
+            "OFFLINE_SYNC_COMPLETED", recipient_id=uid, sync_id=sid,
+            acknowledged=len(ids), delivered=len(result["delivered"]),
+            already_delivered=len(result["already"]), unknown=len(result["unknown"]))
+    return {
+        "status": "ok",
+        "delivered": result["delivered"],
+        "already_delivered": result["already"],
+        "unknown": result["unknown"],
+    }
 
 
 # Fields of an inbox row that follow the clock rather than the data: "12s

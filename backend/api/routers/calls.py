@@ -323,7 +323,8 @@ class FcmResult:
     valid for a different Firebase project - and a transient failure says
     nothing about the token. Both keep it.
     """
-    __slots__ = ("sent", "unregistered", "message_id", "failure_category", "retryable", "configured")
+    __slots__ = ("sent", "unregistered", "message_id", "failure_category", "retryable",
+                 "configured", "error_code")
 
     def __init__(
         self, sent: bool, unregistered: bool = False, *,
@@ -331,6 +332,7 @@ class FcmResult:
         failure_category: Optional[str] = None,
         retryable: bool = False,
         configured: bool = True,
+        error_code: Optional[str] = None,
     ):
         self.sent = sent
         self.unregistered = unregistered
@@ -340,6 +342,10 @@ class FcmResult:
         self.failure_category = failure_category
         self.retryable = retryable
         self.configured = configured
+        # FCM's own name for the refusal (UNAVAILABLE, UNREGISTERED...), for
+        # the message delivery log - the category alone says "transient",
+        # not which.
+        self.error_code = error_code
 
     def __bool__(self) -> bool:
         return self.sent
@@ -410,7 +416,7 @@ async def _send_fcm(
                        route, room)
         return FcmResult(
             False, failure_category="push_not_configured", retryable=False,
-            configured=False,
+            configured=False, error_code="PUSH_NOT_CONFIGURED",
         )
     try:
         from datetime import timedelta
@@ -473,7 +479,7 @@ async def _send_fcm(
             )
             return FcmResult(
                 False, failure_category="provider_error", retryable=True,
-                configured=True,
+                configured=True, error_code="NO_MESSAGE_ID",
             )
         if route == "incoming_call":
             logger.info(
@@ -512,9 +518,11 @@ async def _send_fcm(
             "[calls] FCM send failed type=%s category=%s route=%s room=%s token=%s",
             error_name, category, route, room, push_devices.token_fingerprint(token),
         )
+        from api.core.message_delivery import FCM_ERROR_CODES
         return FcmResult(
             False, unregistered=unregistered, failure_category=category,
             retryable=retryable, configured=True,
+            error_code=FCM_ERROR_CODES.get(error_name, error_name[:64]),
         )
 
 
