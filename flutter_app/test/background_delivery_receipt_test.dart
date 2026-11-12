@@ -194,6 +194,9 @@ void main() {
         expect(line, isNot(contains(_token)), reason: 'the token acts for the account');
         expect(line, isNot(contains('Still available?')), reason: 'nor what was written');
       }
+      // The trace itself, into the test output: what the phone's logcat
+      // shows for one push reaching a closed app.
+      pushLines().forEach(printer);
     });
 
     test('a receipt with no answer the first time is sent again', () async {
