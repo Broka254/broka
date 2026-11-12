@@ -275,9 +275,7 @@ jobs:
         run: python scripts/graphify.py
 
       - name: Commit the updated map
-        if: >-
-          github.ref == 'refs/heads/main' &&
-          (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           if git diff --quiet -- graphify.md; then
             echo "graphify.md is up to date."
@@ -470,7 +468,9 @@ jobs:
       - name: Create GitHub Release
         # Only main-branch pushes and intentional manual main-branch builds may
         # replace latest-release. Pull-request builds must never publish.
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         # The release page says when the APK has no Firebase. A build
         # warning is easy to miss, and such an APK installs and runs
         # normally - it just never rings while closed. That is what was
