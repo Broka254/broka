@@ -291,8 +291,19 @@ async def negotiate_ws(
         except Exception:
             pass
 
-    # Send recent history on connect
+    # Send recent history on connect - none of what this person deleted
+    # (thread_clears): a replay from scratch would put it all back.
     replay_after = _replay_since(since)
+    try:
+        from api.core import thread_clears
+        replay_after = thread_clears.later(replay_after, await thread_clears.cleared_at(
+            db, uid, buyer_id=effective_buyer_id, listing_id=listing_id))
+    except Exception as exc:
+        logger.warning("[media-ws] deleted-chat lookup failed: %s", type(exc).__name__)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
     replay_conds = [
         NegotiationMessage.listing_id == listing_id,
         NegotiationMessage.buyer_id == effective_buyer_id,
@@ -883,6 +894,16 @@ async def store_ws(
         except Exception:
             pass
     replay_after = _replay_since(since)
+    try:
+        from api.core import thread_clears
+        replay_after = thread_clears.later(replay_after, await thread_clears.cleared_at(
+            db, uid, buyer_id=effective_buyer_id, store_id=store_id))
+    except Exception as exc:
+        logger.warning("[media-ws] deleted-chat lookup failed: %s", type(exc).__name__)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
     replay_conds = [NegotiationMessage.store_id == store_id,
                     NegotiationMessage.buyer_id == effective_buyer_id]
     if replay_after is not None:
