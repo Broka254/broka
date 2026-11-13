@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import '../../screens/listing_search_screen.dart';
 import '../../screens/zeno_screen.dart';
 import '../../services/api_service.dart';
+import '../../services/call_dock.dart';
 import '../safe_payment/payments_shown.dart';
 import 'domain/zeno_action.dart';
 
@@ -196,6 +197,9 @@ class ZenoActionRunner {
 
   /// [call], on [nav].
   static Future<bool> callOn(NavigatorState nav, ZenoContact c, {required bool video}) async {
+    // A call is minimised: that one comes back rather than a second
+    // starting over it (one call at a time - ActiveCall).
+    if (CallDock.instance.expand()) return false;
     // Open the call screen at once (see negotiation_screen): awaiting
     // POST /calls/initiate first made the tap look dead for seconds.
     // The running request travels with the route as `callSetup`.

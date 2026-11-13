@@ -13,6 +13,7 @@
 // is a placeholder ("Buyer", "Seller"...) the screen looks the person up.
 
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -28,6 +29,7 @@ import '../services/notification_service.dart';
 import '../services/call_foreground_service.dart';
 import '../services/callkit_service.dart';
 import '../services/active_call.dart';
+import '../services/call_dock.dart';
 
 class VoipCallScreen extends StatefulWidget {
   const VoipCallScreen({super.key, this.animateBackground = true});
@@ -103,7 +105,59 @@ class VoipCallScreen extends StatefulWidget {
   State<VoipCallScreen> createState() => _VoipCallScreenState();
 }
 
-class _VoipCallScreenState extends State<VoipCallScreen>
+/// The route's part of the call screen: it shows the call - a [_CallSession]
+/// - and nothing else. The call is not its own: minimising hands it to the
+/// pill (CallDock), and the screen opened from the pill shows that same
+/// call again. Before, the call lived and died with this route, so leaving
+/// the screen - Back included - hung up.
+class _VoipCallScreenState extends State<VoipCallScreen> {
+  late final Widget _call;
+
+  @override
+  void initState() {
+    super.initState();
+    // Opened from the pill: the call that was minimised, as it is. Any
+    // other way in is a call of its own.
+    _call = CallDock.instance.takeBack() ??
+        _CallSession(key: GlobalKey(), animateBackground: widget.animateBackground);
+    CallDock.instance.addListener(_changed);
+  }
+
+  @override
+  void dispose() {
+    CallDock.instance.removeListener(_changed);
+    super.dispose();
+  }
+
+  void _changed() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Minimised: the call is in the pill now, and must not be in two
+    // places at once. What slides away is the screen's own dark.
+    if (CallDock.instance.holds(_call)) {
+      return const ColoredBox(color: BrokaColors.bg, child: SizedBox.expand());
+    }
+    return _call;
+  }
+}
+
+/// The call itself: its WebRtcService, timers and ring, and both of the
+/// ways it is drawn - the full call screen, and the pill a minimised call
+/// shrinks to. Keyed with a GlobalKey by [_VoipCallScreenState], which is
+/// what lets it move between the two without being rebuilt.
+class _CallSession extends StatefulWidget {
+  const _CallSession({super.key, required this.animateBackground});
+
+  final bool animateBackground;
+
+  @override
+  State<_CallSession> createState() => _CallSessionState();
+}
+
+class _CallSessionState extends State<_CallSession>
     with TickerProviderStateMixin, WidgetsBindingObserver {
 
   late WebRtcService _svc;
@@ -195,6 +249,11 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   late AnimationController _ringCtrl;     // ripple rings
   late AnimationController _fadeCtrl;     // state fade
   late AnimationController _connectedCtrl;// bounce in when connected
+  late AnimationController _orbitCtrl;    // the slow orbit round the face
+
+  // Minimised to the pill (CallDock): the call goes on, the user is
+  // elsewhere in the app.
+  bool _minimized = false;
 
   bool get _isVideo => _callType == 'video';
 
@@ -218,13 +277,20 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       ..forward();
     _connectedCtrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 600));
+    _orbitCtrl = AnimationController(
+        vsync: this, duration: const Duration(seconds: 9))
+      ..repeat();
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    // Back on a call screen - the pill was tapped (CallDock.expand), and
+    // the screen it opened took this call over: drawn in full again.
+    if (_minimized && route != null) _minimized = false;
     if (_argsLoaded) return;
-    final args = ModalRoute.of(context)?.settings.arguments as Map?;
+    final args = route?.settings.arguments as Map?;
     if (args == null) return;
     _argsLoaded  = true;
     final roomId = args['roomId']      as String? ?? '';
@@ -790,6 +856,9 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     _ringCtrl.dispose();
     _fadeCtrl.dispose();
     _connectedCtrl.dispose();
+    _orbitCtrl.dispose();
+    // Gone from the pill as well (the app closing it, say).
+    CallDock.instance.forget(widget);
     if (_svcReady) unawaited(_svc.dispose());
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     super.dispose();
@@ -813,6 +882,11 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   /// screen behind (review, 2026-10-08).
   void _closeOwnScreen() {
     if (!mounted) return;
+    if (_minimized) {
+      // Over while minimised: the pill goes, and this call with it.
+      CallDock.instance.release(widget);
+      return;
+    }
     final route = ModalRoute.of(context);
     if (route == null || !route.isActive) return;
     final nav = Navigator.of(context);
@@ -1051,8 +1125,220 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   bool get _isOver =>
       _callState == CallState.ended || _callState == CallState.failed;
 
+  // ── Minimise ──────────────────────────────────────────────────────────────
+
+  /// Somewhere to put the call (a CallDockHost above the navigator), and a
+  /// call still going on to put there.
+  bool get _canMinimize => !_minimized && !_isOver && CallDock.instance.hostReady;
+
+  /// The call shrinks to the pill and the screen goes: the user is back
+  /// where they were, and the call carries on. Back does the same - it
+  /// used to hang up.
+  void _minimize() {
+    if (!_canMinimize) return;
+    final route = ModalRoute.of(context);
+    final nav = Navigator.maybeOf(context);
+    if (route == null || nav == null || !route.isActive) return;
+    HapticFeedback.selectionClick();
+    setState(() => _minimized = true);
+    CallDock.instance.dock(widget, nav);
+    if (route.isCurrent && nav.canPop()) {
+      nav.pop();
+    } else if (route.isCurrent) {
+      // The call was all the app had open (answered from a closed app):
+      // Home is what's behind it.
+      nav.pushReplacementNamed('/home');
+    } else {
+      nav.removeRoute(route);
+    }
+  }
+
+  /// The pill's tap: the full call screen again.
+  void _expand() {
+    if (!_minimized) return;
+    HapticFeedback.selectionClick();
+    CallDock.instance.expand();
+  }
+
+  /// A minimised call: who, where it has got to (the timer, once it's up),
+  /// and the controls that matter without the screen - mute and end, or
+  /// for a call still ringing here, decline and answer. Its edge turns in
+  /// the call's colour, so it reads as live from across the screen.
+  Widget _buildPill() {
+    final color = _stateColor;
+    final label = _stateLabel;
+    final width = MediaQuery.sizeOf(context).width;
+    final buttons = <Widget>[
+      if (_isIncoming) ...[
+        _PillBtn(
+          key: const Key('call-pill-decline'),
+          icon: Icons.call_end_rounded,
+          color: BrokaColors.danger,
+          label: 'Decline',
+          onTap: _decline,
+        ),
+        const SizedBox(width: 6),
+        _PillBtn(
+          key: const Key('call-pill-accept'),
+          icon: _isVideo ? Icons.videocam_rounded : Icons.call_rounded,
+          color: BrokaColors.neonGreen,
+          label: 'Accept',
+          onTap: () {
+            _acceptIncoming();
+            _expand();
+          },
+        ),
+      ] else if (!_isOver) ...[
+        if (_svcReady) ...[
+          _PillBtn(
+            key: const Key('call-pill-mute'),
+            icon: _muted ? Icons.mic_off_rounded : Icons.mic_rounded,
+            color: BrokaColors.warning,
+            label: _muted ? 'Unmute' : 'Mute',
+            filled: false,
+            active: _muted,
+            onTap: _toggleMute,
+          ),
+          const SizedBox(width: 6),
+        ],
+        _PillBtn(
+          key: const Key('call-pill-end'),
+          icon: Icons.call_end_rounded,
+          color: BrokaColors.danger,
+          label: 'End call',
+          onTap: _hangUp,
+        ),
+      ] else
+        // Over while minimised - a call that ended goes by itself, one that
+        // could not start waits to be read and put away.
+        _PillBtn(
+          key: const Key('call-pill-close'),
+          icon: Icons.close_rounded,
+          color: BrokaColors.textHigh,
+          label: 'Close',
+          filled: false,
+          onTap: _closeOwnScreen,
+        ),
+    ];
+    return Semantics(
+      container: true,
+      button: true,
+      label: 'Call with $_displayName, $label. Tap to go back to the call.',
+      child: GestureDetector(
+        key: const Key('call-pill'),
+        onTap: _expand,
+        behavior: HitTestBehavior.opaque,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: math.min(width - 16, 340)),
+          child: AnimatedBuilder(
+            animation: _orbitCtrl,
+            builder: (_, child) => Container(
+              padding: const EdgeInsets.all(1.4),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(32),
+                gradient: SweepGradient(
+                  transform: GradientRotation(_orbitCtrl.value * 2 * math.pi),
+                  colors: [color, BrokaColors.neonPurple, BrokaColors.neonBlue, color],
+                ),
+                boxShadow: [
+                  BoxShadow(color: color.withOpacity(0.32), blurRadius: 22),
+                  BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 18,
+                      offset: const Offset(0, 6)),
+                ],
+              ),
+              child: child,
+            ),
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(6, 6, 8, 6),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(31),
+                gradient: LinearGradient(colors: [
+                  Color.lerp(BrokaColors.bgCard, BrokaColors.bg, 0.2)!,
+                  BrokaColors.bgMid,
+                ]),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                _buildPillFace(color),
+                const SizedBox(width: 10),
+                Flexible(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(_displayName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: BrokaColors.textHigh,
+                              fontSize: 13.5, fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 2),
+                      Row(mainAxisSize: MainAxisSize.min, children: [
+                        Container(
+                          width: 6, height: 6,
+                          decoration: BoxDecoration(shape: BoxShape.circle, color: color,
+                              boxShadow: [BoxShadow(color: color.withOpacity(0.6), blurRadius: 6)]),
+                        ),
+                        const SizedBox(width: 5),
+                        Flexible(
+                          child: Text(label,
+                              key: const Key('call-pill-state'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(color: color, fontSize: 11.5,
+                                  fontWeight: FontWeight.w700,
+                                  fontFeatures: const [FontFeature.tabularFigures()])),
+                        ),
+                      ]),
+                    ],
+                  ),
+                ),
+                if (buttons.isNotEmpty) ...[const SizedBox(width: 10), ...buttons],
+              ]),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Their face in the pill - or their picture, on a video call that has it.
+  Widget _buildPillFace(Color color) {
+    final video = _showRemoteVideo;
+    return Container(
+      width: video ? 40 : 42,
+      height: video ? 54 : 42,
+      padding: const EdgeInsets.all(1.6),
+      decoration: BoxDecoration(
+        shape: video ? BoxShape.rectangle : BoxShape.circle,
+        borderRadius: video ? BorderRadius.circular(12) : null,
+        gradient: LinearGradient(colors: [color, ...kChatGradient]),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(video ? 10.5 : 21),
+        child: video
+            ? RTCVideoView(_svc.remoteRenderer,
+                objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)
+            : SizedBox.expand(child: FittedBox(
+                fit: BoxFit.cover,
+                child: SizedBox(width: 100, height: 100, child: _buildAvatarContent()),
+              )),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (_minimized) return _buildPill();
+    return PopScope(
+      // Back minimises a call that is still on, as WhatsApp's does.
+      canPop: !_canMinimize,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _minimize();
+      },
+      child: _buildScreen(context),
+    );
+  }
+
+  Widget _buildScreen(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     // A small phone, or a big text size on any phone: a smaller face and
     // tighter gaps, so the controls stay on screen.
@@ -1102,19 +1388,54 @@ class _VoipCallScreenState extends State<VoipCallScreen>
             ConstellationBackground(
               animate: widget.animateBackground,
               child: IgnorePointer(
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 600),
-                  decoration: BoxDecoration(
-                    gradient: RadialGradient(
-                      center: const Alignment(0, -0.32),
-                      radius: 0.9,
-                      colors: [
-                        _stateColor.withOpacity(0.22),
-                        _stateColor.withOpacity(0.0),
-                      ],
+                child: Stack(fit: StackFit.expand, children: [
+                  // Depth: the brand's violet washing in from the top and
+                  // its blue from the bottom, as the chat's bubbles carry
+                  // them - the screen read as a flat black field.
+                  const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        center: Alignment(-0.9, -1.05),
+                        radius: 1.1,
+                        colors: [Color(0x388B5CF6), Color(0x008B5CF6)],
+                      ),
                     ),
                   ),
-                ),
+                  const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        center: Alignment(1.0, 0.95),
+                        radius: 1.0,
+                        colors: [Color(0x2E3B82F6), Color(0x003B82F6)],
+                      ),
+                    ),
+                  ),
+                  // The call's state colour, behind the person.
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 600),
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        center: const Alignment(0, -0.32),
+                        radius: 0.9,
+                        colors: [
+                          _stateColor.withOpacity(0.24),
+                          _stateColor.withOpacity(0.0),
+                        ],
+                      ),
+                    ),
+                  ),
+                  // A vignette, so the edges fall away into the dark and
+                  // the eye lands on the face and the controls.
+                  const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        radius: 1.25,
+                        colors: [Color(0x00000000), Color(0x8C000000)],
+                        stops: [0.55, 1.0],
+                      ),
+                    ),
+                  ),
+                ]),
               ),
             ),
 
@@ -1128,7 +1449,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
                   constraints: BoxConstraints(minHeight: box.maxHeight),
                   child: IntrinsicHeight(
                     child: Column(children: [
-                      _buildTopBar(),
+                      _buildTopBar(narrow),
                       const Spacer(flex: 2),
                       if (!_showRemoteVideo) _buildRippleAvatar(narrow),
                       SizedBox(height: narrow ? 14 : 26),
@@ -1191,29 +1512,45 @@ class _VoipCallScreenState extends State<VoipCallScreen>
 
   // ── Top bar ───────────────────────────────────────────────────────────────
 
-  Widget _buildTopBar() => Padding(
-    padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-    child: Row(children: [
-      const Flexible(
-        child: _TopChip(
-          icon: Icons.lock_rounded,
-          label: 'End-to-end encrypted',
-          color: BrokaColors.neonGreen,
+  /// Minimise at the top left, where WhatsApp has it; then the call's
+  /// security and kind (its live quality, once connected).
+  Widget _buildTopBar(bool narrow) {
+    final minimize = _canMinimize;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
+      child: Row(children: [
+        if (minimize) ...[
+          _GlassIconButton(
+            key: const Key('call-minimize'),
+            icon: Icons.close_fullscreen_rounded,
+            label: 'Minimise call',
+            onTap: _minimize,
+          ),
+          const SizedBox(width: 10),
+        ],
+        Flexible(
+          child: _TopChip(
+            icon: Icons.lock_rounded,
+            // Shortened where the full words and the minimise button can't
+            // share the row.
+            label: minimize && narrow ? 'Encrypted' : 'End-to-end encrypted',
+            color: BrokaColors.neonGreen,
+          ),
         ),
-      ),
-      const SizedBox(width: 8),
-      // Live quality once there is a call to measure; until then, what
-      // kind of call this is.
-      if (_callState == CallState.connected && _quality != CallQuality.unknown)
-        _QualityBadge(quality: _quality)
-      else
-        _TopChip(
-          icon: _isVideo ? Icons.videocam_rounded : Icons.call_rounded,
-          label: _isVideo ? 'Video call' : 'Voice call',
-          color: BrokaColors.neonBlue,
-        ),
-    ]),
-  );
+        const SizedBox(width: 8),
+        // Live quality once there is a call to measure; until then, what
+        // kind of call this is.
+        if (_callState == CallState.connected && _quality != CallQuality.unknown)
+          _QualityBadge(quality: _quality)
+        else
+          _TopChip(
+            icon: _isVideo ? Icons.videocam_rounded : Icons.call_rounded,
+            label: _isVideo ? 'Video call' : 'Voice call',
+            color: BrokaColors.neonBlue,
+          ),
+      ]),
+    );
+  }
 
   // ── Avatar ────────────────────────────────────────────────────────────────
 
@@ -1221,11 +1558,21 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     final face = narrow ? 100.0 : 128.0;
     final box  = face + (narrow ? 72 : 96);
     return AnimatedBuilder(
-      animation: Listenable.merge([_ringCtrl, _connectedCtrl]),
+      animation: Listenable.merge([_ringCtrl, _connectedCtrl, _orbitCtrl]),
       builder: (_, __) {
         return SizedBox(
           width: box, height: box,
           child: Stack(alignment: Alignment.center, children: [
+            // An orbit round the face with two lights travelling it - the
+            // Buying Agent's radar language, slow enough to stay calm.
+            if (!_isOver)
+              CustomPaint(
+                size: Size.square(face + (narrow ? 44 : 56)),
+                painter: _OrbitPainter(
+                  progress: _orbitCtrl.value,
+                  color: _stateColor,
+                ),
+              ),
             // Ripples in the state colour while a phone rings (_showRipples)
             // - they stop the moment it is answered.
             if (_showRipples)
@@ -1306,28 +1653,42 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   Widget _buildPeerInfo(bool narrow) => Padding(
     padding: const EdgeInsets.symmetric(horizontal: 24),
     child: Column(children: [
-      Text(
-        _displayName,
-        key: const Key('call-peer-name'),
-        textAlign: TextAlign.center,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(
-          color: BrokaColors.textHigh,
-          fontSize: narrow ? 24 : 28,
-          fontWeight: FontWeight.w800,
-          shadows: const [Shadow(color: Colors.black54, blurRadius: 12)],
+      // The name lit from white into the brand's lavender, as Home's and
+      // the Zones' headings are.
+      ShaderMask(
+        blendMode: BlendMode.srcIn,
+        shaderCallback: (r) => const LinearGradient(
+          begin: Alignment.topCenter, end: Alignment.bottomCenter,
+          colors: [Colors.white, Color(0xFFCDBDF9)],
+        ).createShader(r),
+        child: Text(
+          _displayName,
+          key: const Key('call-peer-name'),
+          textAlign: TextAlign.center,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: BrokaColors.textHigh,
+            fontSize: narrow ? 25 : 30,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.4,
+            shadows: [Shadow(color: BrokaColors.neonPurple.withOpacity(0.55), blurRadius: 18)],
+          ),
         ),
       ),
       const SizedBox(height: 10),
-      // Which side of the deal they're on, and the listing - a card like
-      // Home's chips rather than bare grey text.
+      // Which side of the deal they're on, and the listing - glass with
+      // the chat's gradient at its edge.
       Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         decoration: BoxDecoration(
-          color: BrokaColors.bgCard.withOpacity(0.86),
+          gradient: LinearGradient(colors: [
+            BrokaColors.bgCard.withOpacity(0.92),
+            BrokaColors.bgMid.withOpacity(0.86),
+          ]),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: BrokaColors.border),
+          border: Border.all(color: BrokaColors.neonPurple.withOpacity(0.32)),
+          boxShadow: [BoxShadow(color: BrokaColors.neonPurple.withOpacity(0.12), blurRadius: 14)],
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Container(
@@ -1372,9 +1733,13 @@ class _VoipCallScreenState extends State<VoipCallScreen>
           duration: const Duration(milliseconds: 300),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
           decoration: BoxDecoration(
-            color: color.withOpacity(0.12),
+            gradient: LinearGradient(colors: [
+              color.withOpacity(0.18),
+              color.withOpacity(0.07),
+            ]),
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: color.withOpacity(0.45)),
+            border: Border.all(color: color.withOpacity(0.5)),
+            boxShadow: [BoxShadow(color: color.withOpacity(0.22), blurRadius: 18)],
           ),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             // A ringing phone once theirs rings; until then a dot that
@@ -1469,6 +1834,16 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     _svc.hangup();
   }
 
+  /// The callee says no.
+  void _decline() {
+    if (_endingCall) return;
+    _endingCall = true;
+    RingtoneService.instance.stopFor(_svc.roomId);
+    ActiveCall.instance.settle(_svc.roomId);
+    _declinedByMe = true;
+    _svc.hangup();
+  }
+
   bool _setupCancelSent = false;
 
   void _cancelSetupOnServer(String reason) {
@@ -1556,18 +1931,42 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     large:    true,
   );
 
-  /// The controls, in a card like Home's over the constellation.
+  /// The controls, on a glass deck: the chat's gradient as its edge (lit in
+  /// the call's state colour at the top), a highlight along its top, and a
+  /// glow under it. It was a flat card with a grey border - the one surface
+  /// on the screen that looked like none of the rest of the app.
   Widget _dock(Widget child) => Container(
     margin: const EdgeInsets.symmetric(horizontal: 16),
-    padding: const EdgeInsets.fromLTRB(12, 16, 12, 14),
+    padding: const EdgeInsets.all(1.2),
     decoration: BoxDecoration(
-      color: BrokaColors.bgCard.withOpacity(0.82),
-      borderRadius: BorderRadius.circular(28),
-      border: Border.all(color: BrokaColors.border),
-      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.35),
-          blurRadius: 24, offset: const Offset(0, 8))],
+      borderRadius: BorderRadius.circular(30),
+      gradient: LinearGradient(
+        begin: Alignment.topLeft, end: Alignment.bottomRight,
+        colors: [
+          _stateColor.withOpacity(0.55),
+          BrokaColors.neonPurple.withOpacity(0.35),
+          BrokaColors.neonBlue.withOpacity(0.18),
+        ],
+      ),
+      boxShadow: [
+        BoxShadow(color: Colors.black.withOpacity(0.45), blurRadius: 30, offset: const Offset(0, 10)),
+        BoxShadow(color: BrokaColors.neonPurple.withOpacity(0.14), blurRadius: 28, spreadRadius: 1),
+      ],
     ),
-    child: child,
+    child: Container(
+      padding: const EdgeInsets.fromLTRB(12, 18, 12, 16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(29),
+        gradient: LinearGradient(
+          begin: Alignment.topCenter, end: Alignment.bottomCenter,
+          colors: [
+            Color.lerp(BrokaColors.bgCard, Colors.white, 0.04)!.withOpacity(0.94),
+            BrokaColors.bgMid.withOpacity(0.96),
+          ],
+        ),
+      ),
+      child: child,
+    ),
   );
 
   Widget _buildControls(bool narrow) {
@@ -1597,14 +1996,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
             label:  'Decline',
             filled: true,
             large:  true,
-            onTap: () {
-              if (_endingCall) return;
-              _endingCall = true;
-              RingtoneService.instance.stopFor(_svc.roomId);
-              ActiveCall.instance.settle(_svc.roomId);
-              _declinedByMe = true;
-              _svc.hangup();
-            },
+            onTap: _decline,
           )),
           // Accept - green, with a ring that keeps calling for attention.
           Expanded(child: AnimatedBuilder(
@@ -1737,6 +2129,145 @@ class _TopChip extends StatelessWidget {
   );
 }
 
+// ── Glass icon button (minimise) ────────────────────────────────────────────
+
+class _GlassIconButton extends StatelessWidget {
+  const _GlassIconButton({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        label: label,
+        excludeSemantics: true,
+        child: Tooltip(
+          message: label,
+          child: GestureDetector(
+            onTap: onTap,
+            behavior: HitTestBehavior.opaque,
+            child: Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: RadialGradient(
+                  center: const Alignment(-0.4, -0.5),
+                  colors: [Colors.white.withOpacity(0.12), BrokaColors.bgCard.withOpacity(0.88)],
+                ),
+                border: Border.all(color: Colors.white.withOpacity(0.14)),
+                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 12)],
+              ),
+              child: Icon(icon, size: 20, color: BrokaColors.textHigh),
+            ),
+          ),
+        ),
+      );
+}
+
+// ── The pill's buttons ────────────────────────────────────────────────────────
+
+class _PillBtn extends StatelessWidget {
+  const _PillBtn({
+    super.key,
+    required this.icon,
+    required this.color,
+    required this.label,
+    required this.onTap,
+    this.filled = true,
+    this.active = false,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String label;
+  final VoidCallback onTap;
+  final bool filled;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        label: label,
+        excludeSemantics: true,
+        child: GestureDetector(
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: filled
+                  ? LinearGradient(
+                      begin: Alignment.topLeft, end: Alignment.bottomRight,
+                      colors: [Color.lerp(color, Colors.white, 0.15)!, Color.lerp(color, Colors.black, 0.25)!],
+                    )
+                  : null,
+              color: filled ? null : (active ? color.withOpacity(0.22) : Colors.white.withOpacity(0.06)),
+              border: filled ? null : Border.all(color: active ? color : Colors.white.withOpacity(0.14)),
+              boxShadow: filled ? [BoxShadow(color: color.withOpacity(0.45), blurRadius: 12)] : null,
+            ),
+            child: Icon(icon, size: 19,
+                color: filled ? Colors.white : (active ? color : BrokaColors.textHigh)),
+          ),
+        ),
+      );
+}
+
+// ── Orbit round the face ──────────────────────────────────────────────────────
+
+class _OrbitPainter extends CustomPainter {
+  _OrbitPainter({required this.progress, required this.color});
+
+  final double progress;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = size.center(Offset.zero);
+    final r = size.shortestSide / 2 - 3;
+    final track = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = Colors.white.withOpacity(0.08);
+    canvas.drawCircle(c, r, track);
+    // A short comet tail behind each light.
+    final rect = Rect.fromCircle(center: c, radius: r);
+    for (final (offset, light) in [(0.0, color), (0.5, BrokaColors.neonCyan)]) {
+      final a = (progress + offset) * 2 * math.pi - math.pi / 2;
+      final tail = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2
+        ..strokeCap = StrokeCap.round
+        // Laid out from 0 and turned into place: a sweep's angles must
+        // stay inside one turn, and the tail's start often isn't.
+        ..shader = SweepGradient(
+          endAngle: 0.9,
+          colors: [light.withOpacity(0), light.withOpacity(0.7)],
+          transform: GradientRotation(a - 0.9),
+        ).createShader(rect);
+      canvas.drawArc(rect, a - 0.9, 0.9, false, tail);
+      final dot = c + Offset(math.cos(a), math.sin(a)) * r;
+      canvas.drawCircle(dot, 6, Paint()
+        ..color = light.withOpacity(0.35)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5));
+      canvas.drawCircle(dot, 2.6, Paint()..color = light);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_OrbitPainter old) => old.progress != progress || old.color != color;
+}
+
 // ── Ripple ring ────────────────────────────────────────────────────────────────
 
 class _RippleRing extends StatelessWidget {
@@ -1854,6 +2385,8 @@ class _CallBtn extends StatelessWidget {
         onTap: onTap,
         behavior: HitTestBehavior.opaque,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
+            // A glass orb: lit from the top left, edged in light, and
+            // glowing in its colour when it's an action or switched on.
             AnimatedContainer(
               duration: const Duration(milliseconds: 200),
               width: size, height: size,
@@ -1862,21 +2395,30 @@ class _CallBtn extends StatelessWidget {
                 gradient: filled
                     ? LinearGradient(
                         begin: Alignment.topLeft, end: Alignment.bottomRight,
-                        colors: [color, Color.lerp(color, Colors.black, 0.25)!],
+                        colors: [
+                          Color.lerp(color, Colors.white, 0.18)!,
+                          color,
+                          Color.lerp(color, Colors.black, 0.3)!,
+                        ],
                       )
-                    : null,
-                color: filled
-                    ? null
-                    : (active ? color.withOpacity(0.18) : BrokaColors.bgMid.withOpacity(0.75)),
-                border: filled
-                    ? null
-                    : Border.all(
-                        color: active ? color : BrokaColors.border,
-                        width: active ? 1.6 : 1.2),
+                    : RadialGradient(
+                        center: const Alignment(-0.45, -0.55),
+                        radius: 1.1,
+                        colors: active
+                            ? [color.withOpacity(0.34), color.withOpacity(0.10)]
+                            : [Colors.white.withOpacity(0.10), BrokaColors.bgMid.withOpacity(0.85)],
+                      ),
+                border: Border.all(
+                    color: filled
+                        ? Colors.white.withOpacity(0.18)
+                        : (active ? color.withOpacity(0.9) : Colors.white.withOpacity(0.12)),
+                    width: active ? 1.6 : 1.1),
                 boxShadow: filled
-                    ? [BoxShadow(color: color.withOpacity(0.40),
-                        blurRadius: 20, spreadRadius: 2)]
-                    : null,
+                    ? [BoxShadow(color: color.withOpacity(0.45), blurRadius: 24, spreadRadius: 2)]
+                    : active
+                        ? [BoxShadow(color: color.withOpacity(0.30), blurRadius: 16)]
+                        : [BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 10,
+                            offset: const Offset(0, 4))],
               ),
               child: Icon(icon, color: iconColor, size: large ? 30 : 24),
             ),
