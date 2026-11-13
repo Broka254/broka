@@ -833,6 +833,11 @@ class ListingService:
         outside_categories: Optional[List[str]] = None,
         # Leaner cards for app builds that ask (GET /listings/?lean=true).
         lean: bool = False,
+        # The signed-in seller reading their own catalogue (seller_id is
+        # theirs): listings a buyer marked unavailable stay in it, flagged
+        # reported_sold_out, so the seller can revoke the report from the
+        # card. Buyers never get this view.
+        owner_view: bool = False,
     ):
         """Phase 3 (broka_mockup_actualization_spec.md §7): "Filters must
         affect actual backend results. Do not implement fake UI-only
@@ -850,7 +855,9 @@ class ListingService:
         callers (CategoryZoneScreen, TraderProfileScreen) are unaffected
         unless they ask for the new shape.
         """
-        q = select(Listing).where(Listing.status == ListingStatus.active, live_clause())
+        own = owner_view and bool(seller_id)
+        q = select(Listing).where(Listing.status == ListingStatus.active,
+                                  live_clause(reported_ok=own))
         if category:
             # FIX (buying-agent bug-hunt, 2026-09-17): case-insensitive
             # equality, not `Listing.category == category`.
@@ -1064,6 +1071,14 @@ class ListingService:
             if listing.is_featured and listing.featured_until and listing.featured_until < now:
                 listing.is_featured = False
                 d["is_featured"] = False
+            if own and listing.sold_out_reported_at is not None:
+                # Its owner's card says so and offers the revoke; the
+                # public card has no such field.
+                d.update({
+                    "sold_out": True,
+                    "reported_sold_out": True,
+                    "reported_at": listing.sold_out_reported_at.isoformat(),
+                })
             results.append(d)
 
         await self.db.commit()

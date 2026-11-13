@@ -246,9 +246,21 @@ class TestTellingTheSeller:
         listing = await _named_listing(client, seller)
         await client.post(f"/listings/{listing['id']}/sold-out", headers=buyer)
 
-        # The seller's own catalogue reads the same live lists: it is not there.
-        mine = (await client.get("/listings/", params={"seller_id": seller_id})).json()
-        assert listing["id"] not in [i["id"] for i in mine]
+        # Buyers browsing the seller's listings no longer see it...
+        public = (await client.get("/listings/", params={"seller_id": seller_id})).json()
+        assert listing["id"] not in [i["id"] for i in public]
+        as_stranger = (await client.get(
+            "/listings/", params={"seller_id": seller_id}, headers=stranger)).json()
+        assert listing["id"] not in [i["id"] for i in as_stranger]
+        # ...but its seller's own catalogue keeps it, flagged, so the
+        # dashboard card can offer "Still available". It used to read the
+        # buyers' list and the listing vanished from the dashboard the text
+        # sends the seller to.
+        mine = (await client.get(
+            "/listings/", params={"seller_id": seller_id}, headers=seller)).json()
+        card = next(i for i in mine if i["id"] == listing["id"])
+        assert card["reported_sold_out"] is True and card["sold_out"] is True
+        assert card["reported_at"]
         reported = (await client.get("/listings/reported-unavailable", headers=seller)).json()
         assert [r["id"] for r in reported] == [listing["id"]]
         assert reported[0]["reported_sold_out"] is True and reported[0]["open_reports"] == 1
@@ -258,11 +270,24 @@ class TestTellingTheSeller:
         assert (await client.delete(f"/listings/{listing['id']}/sold-out", headers=seller)).status_code == 200
         assert (await client.get("/listings/reported-unavailable", headers=seller)).json() == []
         assert await _in_feed(client, listing["id"])
+        mine = (await client.get(
+            "/listings/", params={"seller_id": seller_id}, headers=seller)).json()
+        card = next(i for i in mine if i["id"] == listing["id"])
+        assert card.get("reported_sold_out") is not True
 
         # Reported again by someone else: a new report, so a new text.
         _, other = await _user()
         await client.post(f"/listings/{listing['id']}/sold-out", headers=other)
         assert len([m for m in sms.sent if '"Oraimo Spacebuds"' in m[1]]) >= 2
+
+    @pytest.mark.asyncio
+    async def test_a_stale_session_still_reads_the_public_list(self, client):
+        # The owner's view reads the caller's token if there is one. The
+        # list is public: a token that no longer works must not 401 it.
+        seller_id, _seller_headers, _ = await _seller()
+        r = await client.get("/listings/", params={"seller_id": seller_id},
+                             headers={"Authorization": "Bearer not-a-real-token"})
+        assert r.status_code == 200, r.text
 
     def test_a_long_listing_name_gives_way_before_the_text_runs_to_two_parts(self):
         from api.domains.listings.sold_out import unavailable_sms

@@ -159,6 +159,29 @@ async def _broadcast(key: str, payload: dict, exclude_uid: Optional[str] = None)
 
 # ── WebSocket — real-time chat ─────────────────────────────────────────────────
 
+async def _after_clear(db, uid: str, after: Optional[_dt], *, buyer_id: str,
+                       listing_id: Optional[str] = None,
+                       store_id: Optional[str] = None) -> Optional[_dt]:
+    """The replay starts after the moment this user deleted the chat, if
+    that is later than what the app already has (core/thread_clear.py) -
+    or the socket would hand back everything they deleted. A failed read
+    replays as before, after a rollback so the replay query can run."""
+    try:
+        from api.core.thread_clear import cleared_at
+        at = await cleared_at(db, uid, buyer_id=buyer_id,
+                              listing_id=listing_id, store_id=store_id)
+    except Exception as exc:
+        logger.warning("[media-ws] chat-clear lookup failed: %s", exc)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        return after
+    if at is None:
+        return after
+    return at if after is None or at > after else after
+
+
 def _replay_since(since) -> Optional[_dt]:
     """The `since` a chat socket was opened with - the newest message the
     app already has - as naive UTC, or None to replay as before. Anything
@@ -292,7 +315,8 @@ async def negotiate_ws(
             pass
 
     # Send recent history on connect
-    replay_after = _replay_since(since)
+    replay_after = await _after_clear(
+        db, uid, _replay_since(since), buyer_id=effective_buyer_id, listing_id=listing_id)
     replay_conds = [
         NegotiationMessage.listing_id == listing_id,
         NegotiationMessage.buyer_id == effective_buyer_id,
@@ -882,7 +906,8 @@ async def store_ws(
             await db.rollback()
         except Exception:
             pass
-    replay_after = _replay_since(since)
+    replay_after = await _after_clear(
+        db, uid, _replay_since(since), buyer_id=effective_buyer_id, store_id=store_id)
     replay_conds = [NegotiationMessage.store_id == store_id,
                     NegotiationMessage.buyer_id == effective_buyer_id]
     if replay_after is not None:

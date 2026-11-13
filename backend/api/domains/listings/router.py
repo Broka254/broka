@@ -209,6 +209,18 @@ async def reported_unavailable(
     return await svc.reported_unavailable(current_user["id"])
 
 
+def _viewer_if_signed_in(token: Optional[str] = Depends(_oauth2_scheme_optional)) -> Optional[dict]:
+    """The signed-in caller, or None - and None, not 401, for a token that
+    has expired. The listing is public: an old session must still open it,
+    it just counts as a view."""
+    if not token:
+        return None
+    try:
+        return get_current_user(token)
+    except HTTPException:
+        return None
+
+
 @router.get("/")
 async def list_listings(
     category: Optional[str] = None,
@@ -240,8 +252,13 @@ async def list_listings(
     limit: int = Query(20, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
+    # Optional: the feed is public. A seller asking for their own
+    # seller_id gets the owner's catalogue, which keeps listings a buyer
+    # marked unavailable so they can revoke the report from it.
+    viewer: Optional[dict] = Depends(_viewer_if_signed_in),
 ):
     svc = ListingService(db)
+    owner_view = bool(seller_id and viewer and viewer.get("id") == seller_id)
     parsed_attributes = None
     if attributes:
         try:
@@ -269,6 +286,7 @@ async def list_listings(
         limit=limit,
         offset=offset,
         lean=lean,
+        owner_view=owner_view,
     )
 
 
@@ -1068,18 +1086,6 @@ async def get_own_listing(
     """
     svc = ListingService(db)
     return await svc.get_own_listing(listing_id, current_user["id"])
-
-
-def _viewer_if_signed_in(token: Optional[str] = Depends(_oauth2_scheme_optional)) -> Optional[dict]:
-    """The signed-in caller, or None - and None, not 401, for a token that
-    has expired. The listing is public: an old session must still open it,
-    it just counts as a view."""
-    if not token:
-        return None
-    try:
-        return get_current_user(token)
-    except HTTPException:
-        return None
 
 
 @router.get("/{listing_id}")

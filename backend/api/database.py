@@ -1493,7 +1493,7 @@ async def _apply_optional_statements(conn, statements) -> None:
         await conn.execute(text(prepared))
 
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 SCHEMA_REVISIONS = (
     (1, "legacy_schema_adoption"),
     (2, "durable_payment_intents_and_callbacks"),
@@ -1546,6 +1546,11 @@ SCHEMA_REVISIONS = (
     # to hand out - so the revision makes a replica wait for the explicit
     # release step instead.
     (17, "message_delivery_tracking"),
+    # Deleting a chat from one's own inbox (api/models/thread_clear.py,
+    # create_all). The inbox, every history and the chat socket read it: a
+    # replica serving them against a database without the table would fail
+    # every chat, so it waits for the explicit release step.
+    (18, "chat_deletion"),
 )
 
 # Tables/columns that must exist before an API process is safe to serve
@@ -1801,6 +1806,7 @@ async def _init_db_impl():
         ("api.models.push_device", ("PushDevice",)),
         ("api.models.message_delivery", ("MessageDelivery",)),
         ("api.models.sold_out_report", ("SoldOutReport",)),
+        ("api.models.thread_clear", ("ThreadClear",)),
         ("api.models.zeno_session", ("ZenoSession",)),
         ("api.models.payment_callback", ("PaymentCallback",)),
         ("api.models.legal", ("LegalAcceptance",)),

@@ -4087,6 +4087,69 @@ async def unsend_message(
     return {"ok": True, "message": _direct_message_out(msg)}
 
 
+class DeleteThreadIn(BaseModel):
+    # Exactly one names the thread, as everywhere else in this router.
+    listing_id: Optional[str] = None
+    store_id:   Optional[str] = None
+    # Whose thread, for a seller: they have one per buyer. A buyer's own id
+    # is used whatever this says.
+    buyer_id:   Optional[str] = None
+
+
+@router.post("/thread/delete")
+async def delete_thread(
+    data: DeleteThreadIn,
+    db: AsyncSession = Depends(get_db),
+    current: dict = Depends(get_current_user),
+):
+    """Delete a chat from the caller's inbox ("Delete chat").
+
+    For the caller only, and nothing is removed from the database: the
+    other person keeps their copy, and a dispute still has the record
+    (core/thread_clear.py). The chat leaves the caller's inbox, its history
+    starts empty, and the next message brings it back from that message.
+
+    Refused (409) while a deal on the thread holds the buyer's money in
+    escrow - that chat is where the deal is settled."""
+    from api.core import thread_clear
+
+    uid = current["id"]
+    if bool(data.listing_id) == bool(data.store_id):
+        raise HTTPException(status_code=400, detail="Name the chat: a listing_id or a store_id.")
+    if data.store_id:
+        from api.models.store import Store
+        store = await db.get(Store, data.store_id)
+        if store is None:
+            raise HTTPException(status_code=404, detail="Chat not found.")
+        role = "seller" if store.owner_id == uid else "buyer"
+    else:
+        listing = await db.get(Listing, data.listing_id)
+        if listing is None:
+            raise HTTPException(status_code=404, detail="Chat not found.")
+        role = "seller" if listing.seller_id == uid else "buyer"
+    buyer_id = uid if role == "buyer" else (data.buyer_id or "").strip()
+    if not buyer_id or (role == "seller" and buyer_id == uid):
+        raise HTTPException(status_code=400, detail="buyer_id is required to delete a buyer's chat.")
+
+    if await thread_clear.deal_in_progress(db, data.listing_id, buyer_id):
+        raise HTTPException(
+            status_code=409,
+            detail="This chat has a deal in progress. You can delete it once the deal is complete.",
+        )
+
+    at = await thread_clear.clear_thread(
+        db, uid, role, buyer_id=buyer_id,
+        listing_id=data.listing_id, store_id=data.store_id,
+    )
+    # The read watermark is left alone on purpose: deleting a chat is not
+    # reading it, and moving it would show the other side "Seen". The inbox
+    # counts unread from cleared_at instead (the `floor` of
+    # _thread_unread_and_seen).
+    logger.info("[negotiate] CHAT_DELETED user=%s role=%s listing=%s store=%s buyer=%s",
+                uid, role, data.listing_id, data.store_id, buyer_id)
+    return {"deleted": True, "cleared_at": at.isoformat() + "Z"}
+
+
 @router.get("/{listing_id}/history", response_model=List[MessageOut])
 async def get_history(
     listing_id: str,
@@ -4132,8 +4195,15 @@ async def get_history(
     )
     all_msgs = result.scalars().all()
 
+    # This side deleted the chat (core/thread_clear.py): it starts after that.
+    from api.core.thread_clear import cleared_at as _cleared_at, hidden_by_clear
+    cleared = await _cleared_at(db, authenticated_uid, buyer_id=effective_buyer_id,
+                                listing_id=listing_id)
+
     filtered: List[MessageOut] = []
     for m in all_msgs:
+        if hidden_by_clear(cleared, getattr(m, "created_at", None)):
+            continue
         msg_via_ai: bool = bool(getattr(m, "via_ai", False))
         msg_type   = getattr(m, "msg_type", None) or "text"
         media_url  = getattr(m, "media_url", None)
@@ -4324,6 +4394,7 @@ async def _resolve_role_and_buyer(
 async def _thread_unread_and_seen(
     db: AsyncSession, listing_id: Optional[str], buyer_id: str, my_role: str, last_msg,
     *, messages_only: bool = False, store_id: Optional[str] = None,
+    floor: Optional[_dt] = None,
 ):
     """
     Returns (unread_count, was_my_last_message_seen, was_my_last_message_delivered).
@@ -4353,6 +4424,11 @@ async def _thread_unread_and_seen(
     marks = {r.role: (r.last_read_at, r.last_delivered_at)
              for r in rows.scalars().all()}
     my_last_read, _ = marks.get(my_role, (None, None))
+    # floor: the moment this side deleted the chat (core/thread_clear.py).
+    # What came before it is gone from their view, so it is not unread -
+    # without telling the other side it was read.
+    if floor is not None and (my_last_read is None or floor > my_last_read):
+        my_last_read = floor
     counterpart_last_read, counterpart_last_delivered = marks.get(
         counterpart_role, (None, None))
 
@@ -4403,7 +4479,7 @@ async def _thread_unread_and_seen(
 
 async def _unread_by_kind(
     db: AsyncSession, listing_id: Optional[str], buyer_id: str, my_role: str,
-    *, store_id: Optional[str] = None,
+    *, store_id: Optional[str] = None, floor: Optional[_dt] = None,
 ) -> tuple[Optional[dict], Optional[dict]]:
     """The other side's newest unread message, and their newest unread
     missed call, in one thread - each None when there is none.
@@ -4431,6 +4507,9 @@ async def _unread_by_kind(
         ThreadReadState.buyer_id   == buyer_id,
         ThreadReadState.role       == my_role,
     ))).scalar_one_or_none()
+    # Deleted chats: as in _thread_unread_and_seen.
+    if floor is not None and (my_last_read is None or floor > my_last_read):
+        my_last_read = floor
     conds = [
         _msg_cond,
         NegotiationMessage.buyer_id   == buyer_id,
@@ -4483,7 +4562,8 @@ def _zeno_read_role(role: str) -> str:
     return f"zeno_{role}"
 
 
-async def _zeno_unread(db: AsyncSession, listing_id: str, buyer_id: str, my_role: str) -> int:
+async def _zeno_unread(db: AsyncSession, listing_id: str, buyer_id: str, my_role: str,
+                       *, floor: Optional[_dt] = None) -> int:
     """Zeno's messages to this side of the thread that it hasn't seen yet.
 
     What the inbox needs to open the right screen: a thread the user keeps
@@ -4501,6 +4581,9 @@ async def _zeno_unread(db: AsyncSession, listing_id: str, buyer_id: str, my_role
     ))
     marks = {r.role: r.last_read_at for r in rows.scalars().all()}
     since = marks.get(_zeno_read_role(my_role)) or marks.get(my_role)
+    # A deleted chat (core/thread_clear.py) took Zeno's room with it.
+    if floor is not None and (since is None or floor > since):
+        since = floor
     # visibility-ok: addressed_to_role_clause keeps only Zeno rows for this viewer
     q = select(func.count(NegotiationMessage.id)).where(
         NegotiationMessage.listing_id == listing_id,
@@ -4932,9 +5015,15 @@ async def get_store_history(
         )
         .order_by(NegotiationMessage.created_at)
     )
+    # This side deleted the chat (core/thread_clear.py): it starts after that.
+    from api.core.thread_clear import cleared_at as _cleared_at, hidden_by_clear
+    cleared = await _cleared_at(db, current_user["id"], buyer_id=effective_buyer_id,
+                                store_id=store_id)
     out: List[MessageOut] = []
     for m in result.scalars().all():
         if m.role not in ("buyer", "seller") or bool(getattr(m, "via_ai", False)):
+            continue
+        if hidden_by_clear(cleared, m.created_at):
             continue
         deleted = getattr(m, "deleted_at", None) is not None
         out.append(MessageOut(
@@ -5636,6 +5725,11 @@ async def get_inbox(
 
     threads = []
 
+    # Chats this user deleted (core/thread_clear.py): each is left out until
+    # a message newer than the deletion, and counts unread only from it.
+    from api.core.thread_clear import cleared_threads, hidden_by_clear
+    cleared = await cleared_threads(db, user_id)
+
     # ── Buyer view: one thread per listing the buyer messaged on ─────────────
     # visibility-ok: selects listing_id only, no message content
     buyer_lid_result = await db.execute(
@@ -5725,13 +5819,16 @@ async def get_inbox(
         last_msg = last_result.scalar_one_or_none()
         if not last_msg:
             continue
+        floor = cleared.get(("listing", lid, user_id))
+        if hidden_by_clear(floor, last_msg.created_at):
+            continue
 
         is_on, last_seen_str = _online_str(seller.last_seen)
         unread, last_seen_flag, last_delivered_flag = await _thread_unread_and_seen(
-            db, lid, user_id, "buyer", last_msg)
-        zeno_unread = await _zeno_unread(db, lid, user_id, "buyer")
+            db, lid, user_id, "buyer", last_msg, floor=floor)
+        zeno_unread = await _zeno_unread(db, lid, user_id, "buyer", floor=floor)
         unread_message, unread_missed_call = (
-            await _unread_by_kind(db, lid, user_id, "buyer")
+            await _unread_by_kind(db, lid, user_id, "buyer", floor=floor)
             if unread else (None, None))
         threads.append({
             "_sort_ts":          last_msg.created_at.timestamp() if last_msg.created_at else 0.0,
@@ -5872,6 +5969,9 @@ async def get_inbox(
             last_msg = last_result.scalar_one_or_none()
             if not last_msg:
                 continue
+            floor = cleared.get(("listing", lid, bid))
+            if hidden_by_clear(floor, last_msg.created_at):
+                continue
 
             is_on, last_seen_str = _online_str(
                 buyer_info.last_seen if buyer_info else None
@@ -5879,10 +5979,10 @@ async def get_inbox(
             counterpart_name  = buyer_info.name  if buyer_info else "Buyer"
             counterpart_photo = buyer_info.profile_photo if buyer_info else None
             unread, last_seen_flag, last_delivered_flag = await _thread_unread_and_seen(
-                db, lid, bid, "seller", last_msg)
-            zeno_unread = await _zeno_unread(db, lid, bid, "seller")
+                db, lid, bid, "seller", last_msg, floor=floor)
+            zeno_unread = await _zeno_unread(db, lid, bid, "seller", floor=floor)
             unread_message, unread_missed_call = (
-                await _unread_by_kind(db, lid, bid, "seller")
+                await _unread_by_kind(db, lid, bid, "seller", floor=floor)
                 if unread else (None, None))
 
             threads.append({
@@ -6067,6 +6167,9 @@ async def get_inbox(
             )).scalar_one_or_none()
             if not last_msg:
                 continue
+            floor = cleared.get(("store", sid, bid))
+            if hidden_by_clear(floor, last_msg.created_at):
+                continue
             owner = users_by_id.get(store.owner_id)
             buyer_user = users_by_id.get(bid)
             if my_role == "buyer":
@@ -6077,9 +6180,9 @@ async def get_inbox(
                 counterpart_name = buyer_user.name if buyer_user else "Buyer"
             is_on, last_seen_str = _online_str(counterpart.last_seen if counterpart else None)
             unread, seen_flag, delivered_flag = await _thread_unread_and_seen(
-                db, None, bid, my_role, last_msg, store_id=sid)
+                db, None, bid, my_role, last_msg, store_id=sid, floor=floor)
             unread_message, unread_missed_call = (
-                await _unread_by_kind(db, None, bid, my_role, store_id=sid)
+                await _unread_by_kind(db, None, bid, my_role, store_id=sid, floor=floor)
                 if unread else (None, None))
             threads.append({
                 "_sort_ts":          last_msg.created_at.timestamp() if last_msg.created_at else 0.0,
