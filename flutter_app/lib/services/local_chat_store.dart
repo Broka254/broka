@@ -76,6 +76,19 @@ class LocalChatStore {
     } catch (_) {}
   }
 
+  /// Everything kept for [scope]: its messages, their receipts and any
+  /// message still waiting to send - a chat its owner deleted
+  /// (ChatDeletion). Left behind, the chat would open with the deleted
+  /// messages from this phone's copy, and a queued one would still go.
+  static Future<void> forget(String scope) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_key(scope));
+      await prefs.remove(_receiptsKey(scope));
+      await prefs.remove(_outboxKey(scope));
+    } catch (_) {}
+  }
+
   /// Add [incoming] to [scope]'s cached thread - each message once, by its
   /// server id, in time order - and save it.
   ///
