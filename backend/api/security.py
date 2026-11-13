@@ -268,6 +268,27 @@ def decode_call_token(token: str) -> dict | None:
     return payload
 
 
+def decode_call_token_for_report(token: str, *, grace_seconds: int) -> dict | None:
+    """A call token for reporting what happened on its call
+    (POST /calls/{room}/events): genuine, and expired no more than
+    `grace_seconds` ago. A phone flushes its diagnostics as the call ends,
+    and a call outlives its five-minute token. Never accepted for anything
+    that joins a call or changes one - only for writing log lines."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM],
+                             options={"verify_exp": False})
+    except JWTError:
+        return None
+    if payload.get("type") != "call":
+        return None
+    exp = payload.get("exp")
+    if not isinstance(exp, (int, float)):
+        return None
+    if exp + grace_seconds < datetime.now(timezone.utc).timestamp():
+        return None
+    return payload
+
+
 # ── Thread token (Reply / Mark as read on a message notification) ───────────
 # A message push carries one, so the notification it draws can be answered
 # or marked read from the shade, and the phone can report the message

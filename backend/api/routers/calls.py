@@ -39,7 +39,9 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 
 from api.database import get_db, AsyncSessionLocal, User, Listing, NegotiationMessage
-from api.security import get_current_user, create_call_token, decode_call_token
+from api.security import (
+    get_current_user, create_call_token, decode_call_token, decode_call_token_for_report,
+)
 import httpx
 
 from api.core.client_ip import client_ip as resolve_client_ip
@@ -47,13 +49,14 @@ from api.core.conditional import conditional_json
 from api.domains.media.service import avatar_url
 from api.core.timeutil import parse_iso_to_naive_utc
 from api.core.config import settings
-from api.core import cloudflare_turn_client, call_state, push_devices
+from api.core import cloudflare_turn_client, call_state, push_devices, call_events
+from api.core.call_events import role_of
 from api.core.call_signaling import hub as signaling_hub, INSTANCE_ID
 from api.core.cloudflare_turn_client import CloudflareTurnError
 from api.core.call_state import CallState
 from api.core.rate_limit import (
     call_initiate_limiter, turn_credential_limiter,
-    call_ws_connect_limiter, call_ws_preauth_limiter,
+    call_ws_connect_limiter, call_ws_preauth_limiter, call_events_limiter,
 )
 
 logger = logging.getLogger(__name__)
@@ -109,6 +112,34 @@ WS_MAX_FRAME_BYTES = 128 * 1024
 # callee switching a voice call to video adds its camera and asks. Relayed
 # verbatim for the same reason - it can only lead to a normal offer.
 WS_RELAYABLE_TYPES = frozenset({"offer", "answer", "ice", "hangup", "video_state", "renegotiate"})
+
+# A phone's diagnostics for its call (`diag` frames, POST /calls/{room}/events
+# - api/core/call_events.py): never relayed, and capped so one socket can't
+# fill the logs. A call writes a few dozen.
+CALL_EVENTS_MAX_PER_SOCKET = 400
+CALL_EVENTS_MAX_PER_REQUEST = 120
+# A call outlives its five-minute call token; its diagnostics, posted as it
+# ends, may come in on an expired one for this long.
+CALL_EVENTS_TOKEN_GRACE_SECONDS = 6 * 3600
+
+# How long POST /calls/initiate waits for the callee's push before it answers
+# the caller anyway (2026-11-13). It used to wait for all of it - the call
+# being replaced settled, the token lookups, Firebase's round trip - and only
+# then answer. The push rings the callee as soon as Firebase takes it, so
+# when the rest ran past the app's 10-second timeout, the callee's phone was
+# ringing for a call whose caller had just been told "Could not start the
+# call" and had no room to join: the callee answered into "Connecting…" with
+# nobody there. A push that takes longer carries on in the background; a
+# failure is told to the caller's socket (`push_status`).
+CALL_PUSH_WAIT_SECONDS = 3.0
+
+# The caller app's id for one attempt to place a call (InitiateCallRequest).
+_CLIENT_CALL_ID_RE = re.compile(r"[A-Za-z0-9_-]{8,64}")
+
+
+def _clean_client_call_id(value: Optional[str]) -> Optional[str]:
+    value = (value or "").strip()
+    return value if _CLIENT_CALL_ID_RE.fullmatch(value) else None
 
 # ── In-memory WebSocket registry (per-process - see module docstring) ──────────
 # Keyed by user_id (not an anonymous Set) so a reconnecting participant can
@@ -635,6 +666,33 @@ class InitiateCallRequest(BaseModel):
     # unambiguous), the backend can't infer which buyer to ring on its own.
     # Ignored when the buyer is calling.
     callee_id: Optional[str] = None
+    # The caller app's own id for this attempt (2026-11-13). The same id
+    # again - a retry after a timeout, or the answer lost on the way - gets
+    # the call already placed instead of a second one, and
+    # POST /calls/cancel-setup ends it when the app gave up without ever
+    # learning its room. Optional: older apps send none.
+    client_call_id: Optional[str] = Field(default=None, max_length=64)
+
+
+class CancelSetupRequest(BaseModel):
+    # InitiateCallRequest.client_call_id of the attempt the app gave up on.
+    client_call_id: str = Field(..., min_length=8, max_length=64)
+    # Why, for the log: "setup_timeout", "setup_failed", "user_hung_up".
+    reason: Optional[str] = Field(default=None, max_length=40)
+
+
+class CallEventsRequest(BaseModel):
+    # The reporting phone's call token for this room; accepted for a while
+    # after it expires (CALL_EVENTS_TOKEN_GRACE_SECONDS) - only here.
+    call_token: str = Field(..., min_length=1, max_length=2048)
+    events: list = Field(default_factory=list, max_length=CALL_EVENTS_MAX_PER_REQUEST)
+
+
+# What a finished call is recorded as (POST /calls/log-result, the call card,
+# the history). failed_to_connect (2026-11-13): answered, and the WebRTC
+# connection never came up - it was recorded as "completed", a call that
+# happened, and counted as one.
+CALL_OUTCOMES = ("completed", "missed", "declined", "cancelled", "failed_to_connect")
 
 
 class LogCallRequest(BaseModel):
@@ -643,10 +701,15 @@ class LogCallRequest(BaseModel):
     # after the call ends specifically so this lookup works. Every
     # legitimate call has one (server-generated at /initiate).
     room_id: str
-    # outcome: "completed" (was answered, regardless of how it ended) |
-    #          "missed" (callee never answered) | "declined" (callee rejected)
+    # outcome: "completed" (connected, however it ended) |
+    #          "failed_to_connect" (answered, never connected) |
+    #          "missed" (callee never answered) | "declined" (callee rejected) |
+    #          "cancelled" (the caller gave up before an answer)
     outcome:        str
     duration_secs:  Optional[int] = None
+    # Why a call that failed did, as the reporting phone saw it - for the
+    # log only ("no_offer", "ice_failed", "ice_timeout"...).
+    reason: Optional[str] = Field(default=None, max_length=40)
     call_type:      str = "audio"   # "audio" | "video" - legacy field, see docstring below
     # Legacy/fallback fields - IGNORED whenever the session lookup above
     # succeeds (the normal case), which derives these authoritatively
@@ -676,8 +739,28 @@ async def get_turn_credentials(
     No DB access needed - these credentials are Cloudflare-issued and
     ephemeral, never persisted on the BROKA side.
     """
-    await turn_credential_limiter.check_and_record(current["id"])
-    logger.info("[calls] TURN_CREDENTIAL_REQUESTED user=%s", current["id"])
+    return await _issue_turn_credentials(current["id"])
+
+
+def _turn_summary(result: dict) -> dict:
+    """What a set of ICE servers offers, without a credential: how many
+    TURN urls, and over which transports. A call that could never reach the
+    relay over UDP needs TCP or TLS on 443, and this says whether it had it."""
+    turn_urls = [u for s in result.get("ice_servers") or [] for u in (s.get("urls") or [])
+                 if isinstance(u, str) and u.startswith(("turn:", "turns:"))]
+    return {
+        "turn_urls": len(turn_urls),
+        "udp": any("transport=udp" in u for u in turn_urls),
+        "tcp": any(u.startswith("turn:") and "transport=tcp" in u for u in turn_urls),
+        "tls": any(u.startswith("turns:") for u in turn_urls),
+    }
+
+
+async def _issue_turn_credentials(user_id: str, *, room_id: Optional[str] = None,
+                                  role: Optional[str] = None) -> dict:
+    await turn_credential_limiter.check_and_record(user_id)
+    logger.info("[calls] TURN_CREDENTIAL_REQUESTED user=%s", user_id)
+    call_events.emit("TURN_CREDENTIAL_REQUEST", room=room_id, role=role, user=user_id)
     try:
         result = await cloudflare_turn_client.generate_ice_servers()
     except CloudflareTurnError as e:
@@ -686,7 +769,9 @@ async def get_turn_credentials(
         # with the user id but no secrets. Neither the Cloudflare API
         # token nor any generated TURN credential ever reaches this log
         # line (see cloudflare_turn_client.py).
-        logger.warning("[calls] TURN_CREDENTIAL_FAILED user=%s err=%s", current["id"], e)
+        logger.warning("[calls] TURN_CREDENTIAL_FAILED user=%s err=%s", user_id, e)
+        call_events.emit("TURN_CREDENTIAL_FAILURE", room=room_id, role=role, user=user_id,
+                         level=logging.WARNING, reason="relay_unavailable", error=str(e))
         raise HTTPException(
             status_code=503,
             detail="Call relay is temporarily unavailable. Your call may still connect directly.",
@@ -694,8 +779,10 @@ async def get_turn_credentials(
 
     logger.info(
         "[calls] TURN_CREDENTIAL_ISSUED user=%s expires_in=%s",
-        current["id"], result["expires_in"],
+        user_id, result["expires_in"],
     )
+    call_events.emit("TURN_CREDENTIAL_ISSUED", room=room_id, role=role, user=user_id,
+                     ttl_s=result.get("expires_in"), **_turn_summary(result))
     return result
 
 
@@ -718,7 +805,8 @@ async def get_call_turn_credentials(room_id: str, payload: CallAlertedRequest):
         raise HTTPException(status_code=410, detail="This call has already ended")
     if not session.is_participant(claims.get("sub")):
         raise HTTPException(status_code=403, detail="You're not a participant on this call")
-    return await get_turn_credentials(current={"id": claims["sub"]})
+    return await _issue_turn_credentials(claims["sub"], room_id=room_id,
+                                         role=role_of(session, claims["sub"]))
 
 
 @router.post("/register-token")
@@ -938,26 +1026,34 @@ async def initiate_call(
     if callee.id == current["id"]:
         raise HTTPException(status_code=400, detail="You can't call yourself")
 
-    room_id = secrets.token_urlsafe(16)  # unguessable - see call_state.py; matches create_refresh_token()'s sizing
+    client_call_id = _clean_client_call_id(payload.client_call_id)
+    started = _time_now()
     # One call at a time, decided and claimed under one lock so a double tap,
     # or two people calling each other at the same moment, cannot both get
     # through the check before either has created its call.
     async with _initiate_guard():
+        if client_call_id:
+            # The same attempt again: the app's earlier request placed the
+            # call, and its answer never reached the phone (timed out, or
+            # lost with the connection). Under the lock, so a retry racing
+            # the original finds what the original created.
+            replay = await _replay_setup(current["id"], client_call_id)
+            if replay is not None:
+                return replay
         replaced = await _admit_call(db, me=current["id"], callee=callee)
+        room_id = secrets.token_urlsafe(16)  # unguessable - see call_state.py; matches create_refresh_token()'s sizing
         await call_state.create_session(
             room_id=room_id, caller_id=current["id"], callee_id=callee.id,
             listing_id=payload.listing_id or "", call_type=payload.call_type,
             caller_name=payload.caller_name, store_id=payload.store_id,
         )
         await call_state.update_state(room_id, CallState.ringing)
+        if client_call_id:
+            await call_state.remember_client_call(current["id"], client_call_id, room_id)
     # The no-answer watchdog looks at it again once nobody could still be
     # waiting for it (see ring_watchdog_tick).
     await call_state.add_ringing(room_id, _time_now() + CALL_RING_TIMEOUT_SECONDS)
     call_token = create_call_token(current["id"], room_id)
-    # The calls this one replaces stop ringing BEFORE it starts: the
-    # callee's phone takes the old ring down, then rings once for this one.
-    for old in replaced:
-        await _finish_replaced(db, old, me=current["id"], new_callee_id=callee.id)
 
     logger.info(
         "[calls] CALL_INITIATED instance=%s room=%s caller=%s callee=%s type=%s",
@@ -971,87 +1067,198 @@ async def initiate_call(
         "[calls] CALL_PUSH_ROUTE room=%s callee=%s fcm_tokens=%d voip_tokens=%d",
         room_id, callee.id, len(fcm_tokens), len(voip_tokens),
     )
-    if not fcm_tokens and not voip_tokens:
-        # Callee has no push route on any transport. The call still goes
-        # ahead - the foreground poller can still find it if their app is
-        # open - and if nobody answers, the missed call waits in the chat.
-        logger.info("[calls] CALL_NO_PUSH_ROUTE room=%s callee=%s reason=no_registered_token",
-                    room_id, callee.id)
-        return {"status": "no_token", "message": "Callee has no push token yet",
-                "room_id": room_id, "call_token": call_token}
-
-    call_data = {
-        "type":        "incoming_call",
-        "roomId":      room_id,
-        "callerName":  payload.caller_name,
-        "callerId":    current["id"],
-        # The caller's face on the ringing notification. A URL, never the
-        # image: FCM carries 4KB. "" when they have no photo as an asset
-        # (data values are strings - None would arrive as "None").
-        "callerPhoto": await _photo_of(db, current["id"]) or "",
-        "listingName": payload.listing_name or thread_name,
-        "listingId":   payload.listing_id or "",
-        "storeId":     payload.store_id or "",
-        "buyerId":     buyer_id_for_thread,  # explicit, not assumed - see fix note above
-        "callType":    payload.call_type,
-        # A redial: the call it replaces, whose ring the phone takes down
-        # if the call_over for it hasn't arrived yet.
-        "replacesRoomId": next((o.room_id for o in replaced if o.callee_id == callee.id), ""),
-        # The callee's own token for this one room: the phone acknowledges
-        # the ring with it (POST /calls/{room_id}/alerted) even from a closed
-        # app whose access token has long expired.
-        "callToken":   create_call_token(callee.id, room_id),
-    }
-
-    async def _ring_iphones() -> None:
-        # iOS: a PushKit VoIP push is the ONLY thing that reliably wakes a
-        # terminated app for a call, and AppDelegate.swift must report it to
-        # CallKit the moment it arrives. Sent in addition to (not instead
-        # of) FCM, since a user can be signed in on both platforms - and
-        # alongside it, not before it: one at a time, each with its own
-        # 10-second limit, they held the Android ring back until they were
-        # all done.
-        await asyncio.gather(*(_send_voip_push(token=t, data=call_data) for t in voip_tokens))
-
-    if not fcm_tokens:
-        await _ring_iphones()
-        logger.info(
-            "[calls] CALL_PUSH_SKIPPED room=%s reason=no_fcm_token voip_tokens=%d",
-            room_id, len(voip_tokens),
-        )
-        return {"status": "sent_voip", "room_id": room_id, "call_token": call_token}
-
-    is_video = payload.call_type == "video"
-    # Every phone the callee is signed in on rings at once, like WhatsApp;
-    # whichever answers or declines takes it, and the others get call_over
-    # (_push_ring_over) - or, unanswered, the missed-call push - and stop.
-    # Dead tokens are forgotten by push_user. Neither send raises.
-    pushed, _ = await asyncio.gather(
-        push_devices.push_user(
-            callee.id, db=db,
-            title=f"{'📹' if is_video else '📞'} Incoming {'video ' if is_video else ''}call from {payload.caller_name}",
-            body=f"About: {payload.listing_name or thread_name}",
-            data=call_data,
-            data_only=True,
-            # An incoming call is the definitive "only useful right now"
-            # notification - see CALL_PUSH_TTL_SECONDS.
-            ttl_seconds=CALL_PUSH_TTL_SECONDS,
-        ),
-        _ring_iphones(),
-    )
-
     configured = _get_fcm() is not None
-    logger.info(
-        "[calls] CALL_PUSH_RESULT room=%s caller=%s callee=%s "
-        "fcm_tokens=%d voip_tokens=%d accepted=%d configured=%s",
-        room_id, current["id"], callee.id, len(fcm_tokens),
-        len(voip_tokens), pushed, configured,
+    # What the caller is told when the push hasn't finished in time: known
+    # already when there is nothing to send, or nothing to send it with.
+    if not fcm_tokens and not voip_tokens:
+        known = "no_token"
+    elif fcm_tokens and not voip_tokens and not configured:
+        known = "fcm_disabled"
+    else:
+        known = None
+
+    call_data = None
+    if fcm_tokens or voip_tokens:
+        call_data = {
+            "type":        "incoming_call",
+            "roomId":      room_id,
+            "callerName":  payload.caller_name,
+            "callerId":    current["id"],
+            # The caller's face on the ringing notification. A URL, never the
+            # image: FCM carries 4KB. "" when they have no photo as an asset
+            # (data values are strings - None would arrive as "None").
+            "callerPhoto": await _photo_of(db, current["id"]) or "",
+            "listingName": payload.listing_name or thread_name,
+            "listingId":   payload.listing_id or "",
+            "storeId":     payload.store_id or "",
+            "buyerId":     buyer_id_for_thread,  # explicit, not assumed - see fix note above
+            "callType":    payload.call_type,
+            # A redial: the call it replaces, whose ring the phone takes down
+            # if the call_over for it hasn't arrived yet.
+            "replacesRoomId": next((o.room_id for o in replaced if o.callee_id == callee.id), ""),
+            # The callee's own token for this one room: the phone acknowledges
+            # the ring with it (POST /calls/{room_id}/alerted) even from a closed
+            # app whose access token has long expired.
+            "callToken":   create_call_token(callee.id, room_id),
+        }
+    is_video = payload.call_type == "video"
+    ring = _RingJob(
+        room_id=room_id, caller_id=current["id"], callee_id=callee.id,
+        replaced=replaced, fcm_tokens=fcm_tokens, voip_tokens=voip_tokens,
+        configured=configured, data=call_data,
+        title=f"{'📹' if is_video else '📞'} Incoming {'video ' if is_video else ''}call from {payload.caller_name}",
+        body=f"About: {payload.listing_name or thread_name}",
     )
-    # "fcm_disabled" used to cover both "this server has no Firebase
-    # credentials" and "Firebase refused every send" - indistinguishable in
-    # a support report, and false in the second case.
-    status = "sent" if pushed else ("fcm_disabled" if not configured else "push_failed")
-    return {"status": status, "room_id": room_id, "call_token": call_token}
+    status = await ring.run_within(CALL_PUSH_WAIT_SECONDS, known=known)
+    call_events.emit(
+        "CALL_INITIATED", room=room_id, role="caller", user=current["id"],
+        call_state="ringing", ws="none", push=status, call_type=payload.call_type,
+        setup_ms=int((_time_now() - started) * 1000),
+        client_call_id=client_call_id, replaced=len(replaced),
+    )
+    body = {"status": status, "room_id": room_id, "call_token": call_token}
+    if status == "no_token":
+        body["message"] = "Callee has no push token yet"
+    return body
+
+
+async def _replay_setup(caller_id: str, client_call_id: str) -> Optional[dict]:
+    """What a retried POST /calls/initiate answers: the call the first
+    attempt placed, with a fresh call token - or None when there is none.
+    Its push went with the first attempt: the callee rings once."""
+    room_id = await call_state.room_for_client_call(caller_id, client_call_id)
+    if not room_id:
+        return None
+    session = await call_state.get_session(room_id)
+    if session is None or session.caller_id != caller_id:
+        return None
+    call_events.emit("CALL_SETUP_REPLAYED", room=room_id, role="caller", user=caller_id,
+                     call_state=session.state.value, client_call_id=client_call_id)
+    # "sending": whether the push reached their phone is not known here; a
+    # failure is told on the socket (push_status). Any other word means the
+    # same to the app as "sent" - only the no-push statuses change its screen.
+    return {"status": "sending", "room_id": room_id,
+            "call_token": create_call_token(caller_id, room_id), "replayed": True}
+
+
+class _RingJob:
+    """Ringing the callee for a new call, off the caller's answer.
+
+    In order: the calls this one replaces stop ringing (the callee's phone
+    takes the old ring down, then rings once for this one), then every
+    phone of the callee's is pushed. POST /calls/initiate waits for it for
+    CALL_PUSH_WAIT_SECONDS, which a healthy push takes well inside; past
+    that the caller gets its room anyway and the job finishes in the
+    background, telling the caller's socket if no phone could be pushed.
+    """
+
+    def __init__(self, *, room_id, caller_id, callee_id, replaced, fcm_tokens,
+                 voip_tokens, configured, data, title, body):
+        self.room_id, self.caller_id, self.callee_id = room_id, caller_id, callee_id
+        self.replaced = replaced
+        self.fcm_tokens, self.voip_tokens = fcm_tokens, voip_tokens
+        self.configured, self.data = configured, data
+        self.title, self.body = title, body
+        # Set once the caller has been answered without the result.
+        self.answered_without_result = False
+
+    async def run_within(self, seconds: float, *, known: Optional[str]) -> str:
+        task = asyncio.create_task(self._run(), context=contextvars.Context())
+        _background.add(task)
+        task.add_done_callback(_background.discard)
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout=seconds)
+        except asyncio.TimeoutError:
+            if task.done() and not task.cancelled() and task.exception() is None:
+                return task.result()
+            self.answered_without_result = True
+            logger.warning("[calls] CALL_PUSH_SLOW room=%s waited=%.1fs - answering the caller first",
+                           self.room_id, seconds)
+            return known or "sending"
+        except Exception as exc:
+            logger.warning("[calls] ring job failed room=%s: %s", self.room_id, type(exc).__name__)
+            return known or "push_failed"
+
+    async def _run(self) -> str:
+        started = _time_now()
+        if self.replaced:
+            # Its own database session: this may outlive the request.
+            async with AsyncSessionLocal() as own:
+                for old in self.replaced:
+                    try:
+                        await _finish_replaced(own, old, me=self.caller_id,
+                                               new_callee_id=self.callee_id)
+                    except Exception as exc:
+                        logger.warning("[calls] could not finish replaced call room=%s: %s",
+                                       old.room_id, type(exc).__name__)
+        status = await self._push()
+        call_events.emit(
+            "CALL_PUSH_RESULT", room=self.room_id, role="callee", user=self.callee_id,
+            call_state="ringing", push=status, fcm_tokens=len(self.fcm_tokens),
+            voip_tokens=len(self.voip_tokens), push_ms=int((_time_now() - started) * 1000),
+            late=self.answered_without_result,
+        )
+        if self.answered_without_result and status in ("push_failed", "fcm_disabled"):
+            # The caller was answered "sending"; their screen says now that
+            # this phone can only ring with BROKA open on it.
+            await _tell_caller(self.room_id, self.caller_id,
+                               {"type": "push_status", "room_id": self.room_id, "status": status})
+        return status
+
+    async def _push(self) -> str:
+        if not self.fcm_tokens and not self.voip_tokens:
+            # Callee has no push route on any transport. The call still goes
+            # ahead - the foreground poller can still find it if their app is
+            # open - and if nobody answers, the missed call waits in the chat.
+            logger.info("[calls] CALL_NO_PUSH_ROUTE room=%s callee=%s reason=no_registered_token",
+                        self.room_id, self.callee_id)
+            return "no_token"
+
+        async def _ring_iphones() -> None:
+            # iOS: a PushKit VoIP push is the ONLY thing that reliably wakes a
+            # terminated app for a call, and AppDelegate.swift must report it to
+            # CallKit the moment it arrives. Sent in addition to (not instead
+            # of) FCM, since a user can be signed in on both platforms - and
+            # alongside it, not before it: one at a time, each with its own
+            # 10-second limit, they held the Android ring back until they were
+            # all done.
+            await asyncio.gather(*(_send_voip_push(token=t, data=self.data)
+                                   for t in self.voip_tokens))
+
+        if not self.fcm_tokens:
+            await _ring_iphones()
+            logger.info(
+                "[calls] CALL_PUSH_SKIPPED room=%s reason=no_fcm_token voip_tokens=%d",
+                self.room_id, len(self.voip_tokens),
+            )
+            return "sent_voip"
+
+        # Every phone the callee is signed in on rings at once, like WhatsApp;
+        # whichever answers or declines takes it, and the others get call_over
+        # (_push_ring_over) - or, unanswered, the missed-call push - and stop.
+        # Dead tokens are forgotten by push_user. Neither send raises. The
+        # tokens are the ones already looked up, not looked up a third time.
+        pushed, _ = await asyncio.gather(
+            push_devices.push_user(
+                self.callee_id, tokens=self.fcm_tokens,
+                title=self.title, body=self.body, data=self.data,
+                data_only=True,
+                # An incoming call is the definitive "only useful right now"
+                # notification - see CALL_PUSH_TTL_SECONDS.
+                ttl_seconds=CALL_PUSH_TTL_SECONDS,
+            ),
+            _ring_iphones(),
+        )
+        logger.info(
+            "[calls] CALL_PUSH_RESULT room=%s caller=%s callee=%s "
+            "fcm_tokens=%d voip_tokens=%d accepted=%d configured=%s",
+            self.room_id, self.caller_id, self.callee_id, len(self.fcm_tokens),
+            len(self.voip_tokens), pushed, self.configured,
+        )
+        # "fcm_disabled" used to cover both "this server has no Firebase
+        # credentials" and "Firebase refused every send" - indistinguishable in
+        # a support report, and false in the second case.
+        return "sent" if pushed else ("fcm_disabled" if not self.configured else "push_failed")
 
 
 @router.get("/{room_id}/token")
@@ -1109,6 +1316,8 @@ async def call_alerted(room_id: str, payload: CallAlertedRequest):
     await call_state.mark_callee_alerted(room_id)
     if first:
         logger.info("[calls] CALLEE_ALERTED room=%s", room_id)
+        call_events.emit("CALL_RINGING", room=room_id, role="callee", user=session.callee_id,
+                         call_state=session.state.value)
         await _tell_caller_ringing(room_id, session.caller_id)
     return {"status": "ringing"}
 
@@ -1151,6 +1360,14 @@ async def call_answered(room_id: str, payload: CallAlertedRequest):
         # from now (call_state._answer).
         await call_state.mark_answered(room_id)
         logger.info("[calls] CALL_ANSWERED instance=%s room=%s", INSTANCE_ID, room_id)
+        # Whether the caller is in the room yet says, at a glance, whether
+        # the call that follows can connect (2026-11-13: it was not).
+        try:
+            caller_present = session.caller_id in await signaling_hub.distributed_peers(room_id)
+        except Exception:
+            caller_present = None
+        call_events.emit("CALL_ACCEPTED", room=room_id, role="callee", user=session.callee_id,
+                         call_state="accepted", via="answer", caller_in_room=caller_present)
         # The caller stops waiting for an answer now. Their screen hung up
         # after 45 seconds unless the callee's socket had joined - and a
         # callee answering from a closed app needs that long and more to
@@ -1162,6 +1379,104 @@ async def call_answered(room_id: str, payload: CallAlertedRequest):
     if call_state.is_terminal(session.state):
         raise HTTPException(status_code=410, detail="This call has already ended")
     return {"status": "answered"}
+
+
+@router.post("/cancel-setup")
+async def cancel_call_setup(
+    payload: CancelSetupRequest,
+    db:      AsyncSession = Depends(get_db),
+    current: dict         = Depends(get_current_user),
+):
+    """The caller's app gave up placing a call it may already have placed.
+
+    POST /calls/initiate can place the call - and ring the callee - while
+    its answer never reaches the caller (2026-11-13: the app timed out after
+    10 seconds; it also happens when the connection drops mid-request). The
+    app then has no room to join or hang up, and the callee rang for nobody,
+    or answered into "Connecting…" with nobody there. It does have the id it
+    sent for the attempt (client_call_id): this ends that call. Unanswered,
+    it is cancelled - the ring stops and a missed call is left, as when a
+    caller hangs up. Answered, it is a call that failed to connect, and the
+    callee is told at once rather than waiting out a timeout.
+
+    Idempotent; "unknown" when no call was placed under that id.
+    """
+    client_call_id = _clean_client_call_id(payload.client_call_id)
+    if not client_call_id:
+        raise HTTPException(status_code=400, detail="Invalid client_call_id")
+    reason = call_events.clean(payload.reason or "setup_abandoned")
+    room_id = await call_state.room_for_client_call(current["id"], client_call_id)
+    session = await call_state.get_session(room_id) if room_id else None
+    if session is None or session.caller_id != current["id"]:
+        call_events.emit("CALL_SETUP_CANCELLED", room=None, role="caller", user=current["id"],
+                         reason=reason, client_call_id=client_call_id, found=False)
+        return {"status": "unknown"}
+    if call_state.is_terminal(session.state):
+        return {"status": "over", "room_id": room_id}
+
+    if session.state in _UNANSWERED_STATES:
+        await _settle_unanswered(session, by=current["id"])
+        await _hang_up_room(room_id, reason="cancelled")
+        outcome = "cancelled"
+    else:
+        outcome = "failed_to_connect"
+        recorded = False
+        if await call_state.mark_result_logged(room_id):
+            listing, store = await _thread_of(db, session)
+            if listing is not None or store is not None:
+                # Tells the callee, too (hangup "failed").
+                await _record_outcome(db, session, listing, outcome, logged_by=current["id"],
+                                      store=store, reason=reason)
+                recorded = True
+        if not recorded:
+            await call_state.update_state(room_id, CallState.failed)
+            # The callee, waiting in the room for a caller who isn't coming.
+            await _hang_up_room(room_id, reason="failed")
+    call_events.emit("CALL_SETUP_CANCELLED", room=room_id, role="caller", user=current["id"],
+                     call_state=session.state.value, reason=reason, outcome=outcome,
+                     client_call_id=client_call_id, found=True)
+    return {"status": "cancelled", "room_id": room_id, "outcome": outcome}
+
+
+async def _thread_of(db: AsyncSession, session):
+    """The (listing, store) a call belongs to - one of them, or neither."""
+    if getattr(session, "store_id", None):
+        from api.models.store import Store
+        store = (await db.execute(
+            select(Store).where(Store.id == session.store_id)
+        )).scalar_one_or_none()
+        return None, store
+    listing = (await db.execute(
+        select(Listing).where(Listing.id == session.listing_id)
+    )).scalar_one_or_none()
+    return listing, None
+
+
+@router.post("/{room_id}/events")
+async def report_call_events(room_id: str, payload: CallEventsRequest):
+    """A phone's diagnostics for one call, written to the logs as call
+    events (api/core/call_events.py) - what it saw that the server can't:
+    ICE and peer-connection states, candidate types, TURN, why it gave up.
+
+    The live ones go over the call's socket (`diag`); this takes what could
+    not - the socket was down, or the call ended as the event happened.
+    Authorized by the reporter's call token, which may have expired (a call
+    outlives it) up to CALL_EVENTS_TOKEN_GRACE_SECONDS ago. Never changes the
+    call: it only writes log lines, at most CALL_EVENTS_MAX_PER_REQUEST.
+    """
+    claims = decode_call_token_for_report(payload.call_token,
+                                          grace_seconds=CALL_EVENTS_TOKEN_GRACE_SECONDS)
+    if not claims or claims.get("room_id") != room_id:
+        raise HTTPException(status_code=401, detail="Invalid call token")
+    uid = claims["sub"]
+    await call_events_limiter.check_and_record(uid)
+    session = await call_state.get_session(room_id)
+    role = role_of(session, uid)
+    logged = 0
+    for raw in payload.events[:CALL_EVENTS_MAX_PER_REQUEST]:
+        if call_events.client_event(raw, room=room_id, role=role, user=uid, transport="http"):
+            logged += 1
+    return {"logged": logged}
 
 
 # ── One call at a time ────────────────────────────────────────────────────────
@@ -1459,7 +1774,7 @@ async def log_call_result(
     decline/missed call never joins the WebSocket, so nothing else in the
     system was transitioning the session for those two outcomes).
     """
-    if payload.outcome not in ("completed", "missed", "declined", "cancelled"):
+    if payload.outcome not in CALL_OUTCOMES:
         raise HTTPException(status_code=400, detail="Invalid outcome")
 
     session = await call_state.get_session(payload.room_id)
@@ -1490,12 +1805,12 @@ async def log_call_result(
         if not listing:
             raise HTTPException(status_code=404, detail="Listing not found")
 
-    await _record_outcome(
+    recorded = await _record_outcome(
         db, session, listing, payload.outcome,
         logged_by=current["id"], duration_secs=payload.duration_secs,
-        store=store,
+        store=store, reason=payload.reason,
     )
-    return {"status": "logged", "outcome": payload.outcome}
+    return {"status": "logged", "outcome": recorded}
 
 
 _OUTCOME_TO_STATE = {
@@ -1508,23 +1823,48 @@ _OUTCOME_TO_STATE = {
     # which the outcome label alone already captures.
     "cancelled": CallState.missed,
     "completed": CallState.ended,
+    "failed_to_connect": CallState.failed,
 }
+
+
+def _normalized_outcome(session, outcome: str, duration_secs: Optional[int]) -> str:
+    """The outcome a call is recorded as, from what a phone reported and
+    what the server knows: whether it was answered, and whether a phone
+    ever reported its WebRTC connection up.
+
+      * Answered is never "missed" or "cancelled" (2026-10-09): a callee who
+        pressed Accept was shown a missed call.
+      * Answered and never connected is not "completed" either
+        (2026-11-13). Every build before this one counted "I pressed Accept"
+        as a call that happened - the callee's screen logged "completed"
+        with no duration - so a call that sat on "Connecting…" and dropped
+        went into the history and the numbers as a successful call. A
+        duration (even 0) means the reporting phone's call timer ran, which
+        it only does once connected: that report stands.
+    """
+    if outcome in ("missed", "cancelled") and session.answered:
+        return "completed" if session.ever_connected else "failed_to_connect"
+    if (outcome == "completed" and duration_secs is None
+            and session.answered and not session.ever_connected):
+        return "failed_to_connect"
+    return outcome
 
 
 async def _record_outcome(
     db: AsyncSession, session, listing, outcome: str,
     *, logged_by: Optional[str], duration_secs: Optional[int] = None,
-    store=None,
-) -> None:
+    store=None, reason: Optional[str] = None,
+) -> str:
     """Everything that follows a call's outcome, once mark_result_logged()
     has made this the one record of it: the session's terminal state, the
     caller told if they're still waiting, the call card in the thread, and
     the callee's notifications - a missed call announced, a ring stopped on
-    their other phones.
+    their other phones. Returns the outcome recorded (_normalized_outcome).
 
     `logged_by` is the participant who reported it, or None when the
     no-answer watchdog decided it (ring_watchdog_tick).
     """
+    reported = outcome
     # Derived, not trusted - whichever of caller/callee ISN'T the thread's
     # seller is the buyer for chat-thread-scoping purposes, regardless of
     # which direction this particular call went (Section 13 symmetry).
@@ -1538,10 +1878,11 @@ async def _record_outcome(
     # app's notification, and whose phone then couldn't join in time, had
     # the call recorded as missed - by their own call screen, or by the
     # caller's giving up - and got a "Missed call" push for the call they
-    # had answered. It is a call that was answered and didn't connect: the
-    # card says "Answered", and nobody is told they missed it.
-    if outcome in ("missed", "cancelled") and session.answered:
-        outcome = "completed"
+    # had answered. Nor is answered-and-never-connected "completed" - see
+    # _normalized_outcome.
+    outcome = _normalized_outcome(session, outcome, duration_secs)
+    if outcome != reported:
+        # A duration came with a report that was not true of the call.
         duration_secs = None
 
     if not call_state.is_terminal(session.state):
@@ -1564,17 +1905,35 @@ async def _record_outcome(
         # directly if we can reach them, reusing the existing 'hangup'
         # message type the client already handles - no new protocol needed.
         await _send_to_user(session.room_id, session.caller_id, {"type": "hangup", "reason": hangup_reason})
+    if outcome == "failed_to_connect" and logged_by is not None:
+        # The other side may still be on "Connecting…", waiting on a
+        # connection the reporter has given up on: it ends now, saying so,
+        # instead of when its own timer runs out (or never - 2026-11-13).
+        other = session.callee_id if logged_by == session.caller_id else session.caller_id
+        await _send_to_user(session.room_id, other, {"type": "hangup", "reason": "failed"})
 
     # Taxonomy alignment (Section 33) - "missed" is what a client-side ring
     # timeout (VoipCallScreen's 45s timer / WebRtcService's own 30s
     # connect timeout) actually reports back as, so it's logged under the
     # same CALL_TIMEOUT event rather than a separate one.
     _event = {"declined": "CALL_DECLINED", "missed": "CALL_TIMEOUT",
-              "cancelled": "CALL_CANCELLED", "completed": "CALL_ENDED"}
+              "cancelled": "CALL_CANCELLED", "completed": "CALL_ENDED",
+              "failed_to_connect": "CALL_FAILED_TO_CONNECT"}
     logger.info("[calls] %s room=%s thread=%s buyer=%s outcome=%s by=%s",
                 _event.get(outcome, "CALL_RESULT"), session.room_id,
                 session.store_id or session.listing_id, buyer_id, outcome,
                 logged_by or "server")
+    # The one record of how the call ended, with the definitions the call
+    # history uses - so the logs and the history count the same calls.
+    call_events.emit(
+        "CALL_ENDED", room=session.room_id,
+        role=role_of(session, logged_by) if logged_by else "server", user=logged_by,
+        level=logging.WARNING if outcome == "failed_to_connect" else logging.INFO,
+        call_state=_OUTCOME_TO_STATE[outcome].value, reason=reason,
+        outcome=outcome, reported=reported if reported != outcome else None,
+        answered=session.answered, connected=session.ever_connected,
+        duration_s=duration_secs, call_type=session.call_type,
+    )
 
     call_msg = NegotiationMessage(
         listing_id=session.listing_id if store is None else None,
@@ -1621,6 +1980,7 @@ async def _record_outcome(
     elif outcome == "declined":
         # Declined on one phone: the callee's other phones are still ringing.
         await _push_ring_over(session)
+    return outcome
 
 
 async def _push_ring_over(session, *, every_phone: bool = False) -> None:
@@ -1929,13 +2289,19 @@ async def _signaling(
 
     session = await call_state.get_session(room_id)
     if session is None:
+        call_events.emit("WEBSOCKET_DISCONNECTED", room=room_id, user=uid, ws="refused",
+                         code=4004, reason="call_gone", ringing=ringing)
         await websocket.close(code=4004, reason="Call no longer exists")
         return
     if not session.is_participant(uid):
         logger.warning("[calls] WS_AUTHZ_FAILED instance=%s room=%s user=%s conn=%s", INSTANCE_ID, room_id, uid, connection_id)
         await websocket.close(code=4003, reason="Not a party to this call")
         return
+    role = role_of(session, uid)
     if call_state.is_terminal(session.state):
+        call_events.emit("WEBSOCKET_DISCONNECTED", room=room_id, role=role, user=uid,
+                         call_state=session.state.value, ws="refused", code=4004,
+                         reason="call_over", ringing=ringing)
         await websocket.close(code=4004, reason="Call already ended")
         return
 
@@ -2005,6 +2371,14 @@ async def _signaling(
     # after the signaling subscription is live (ensure_subscribed inside).
     await signaling_hub.register(room_id, uid, connection_id, standby=standby, peer=peer_id)
     await call_state.set_participant_connected(room_id, uid, True)
+    # Server-authored: the phone knows at once that its socket is up end to
+    # end. A callee alone in the room otherwise heard nothing until the
+    # first heartbeat ping, 15 seconds on - its reconnect budget and its
+    # queued diagnostics waited for it. Older apps ignore the frame.
+    try:
+        await websocket.send_json({"type": "joined", "room_id": room_id})
+    except Exception:
+        pass
     # Replay signals buffered while this participant was absent.
     for _env in await signaling_hub.drain_buffer(room_id, uid):
         try:
@@ -2021,6 +2395,9 @@ async def _signaling(
             await call_state.mark_answered(room_id)
             await call_state.update_state(room_id, CallState.accepted)
             logger.info("[calls] CALL_ACCEPTED instance=%s room=%s user=%s conn=%s", INSTANCE_ID, room_id, uid, connection_id)
+            if _cur is None or not _cur.answered:
+                call_events.emit("CALL_ACCEPTED", room=room_id, role=role, user=uid,
+                                 call_state="accepted", ws="open", via="join")
     try:
         _dist_peers = await signaling_hub.distributed_peers(room_id)
     except Exception:
@@ -2029,6 +2406,16 @@ async def _signaling(
     if len(_distinct) == 2 and len(room) < 2 and session.state in _LIVE_STATES:
         rejoining_live_call = True
     logger.info("[calls] WS_CONNECTED instance=%s room=%s user=%s conn=%s local_peers=%d distributed_peers=%d standby=%s", INSTANCE_ID, room_id, uid, connection_id, len(room), len(_distinct), standby)
+    # Who is in the room as this socket joins is most of what a failed
+    # call's log has to say: a callee waiting alone in it is a caller who
+    # never arrived.
+    _other = session.callee_id if uid == session.caller_id else session.caller_id
+    call_events.emit(
+        "WEBSOCKET_RECONNECTED" if (stale is not None or rejoining_live_call) else "WEBSOCKET_CONNECTED",
+        room=room_id, role=role, user=uid, call_state=session.state.value, ws="open",
+        conn=connection_id, standby=standby, peer_in_room=_other in _dist_peers,
+        replaced_socket=stale is not None,
+    )
     if standby:
         # The phone rings in the room: if the caller is here, it can send
         # its offer now. A caller that joins later is told at its own join.
@@ -2091,6 +2478,16 @@ async def _signaling(
             callee_peer = peer_id if uid == session.callee_id else (
                 (_ready_source.get(session.callee_id) or {}).get("peer"))
             await _broadcast_room(room_id, _ready_message(room_id, callee_peer))
+            # Both are in the room: from here the offer and answer cross,
+            # and only a phone can say whether the connection comes up.
+            call_events.emit("PEER_JOINED", room=room_id, role=role, user=uid,
+                             call_state="connecting", ws="open",
+                             rejoin=rejoining_live_call, negotiated_while_ringing=bool(callee_peer))
+
+    # How this socket ended, for its WEBSOCKET_DISCONNECTED event.
+    ending: dict = {"code": None, "reason": None}
+    counts: dict = {"diag": 0, "ice": 0, "offer": 0, "answer": 0}
+    joined_at = asyncio.get_running_loop().time()
 
     # ── Heartbeat ─────────────────────────────────────────────────────────────
     # ROBUSTNESS FIX (calling audit, 2026-09-14): this used to wrap every
@@ -2117,6 +2514,7 @@ async def _signaling(
                 # the receive below raise, which unwinds normally through
                 # the same finally-block as any other disconnect.
                 logger.info("[calls] HEARTBEAT_TIMEOUT room=%s user=%s", room_id, uid)
+                ending.update(code=4000, reason="heartbeat_timeout")
                 try:
                     await websocket.close(code=4000, reason="Heartbeat timeout")
                 except Exception:
@@ -2131,9 +2529,24 @@ async def _signaling(
             # long call can't have its server-side session vanish under it.
             # See call_state.renew_session()'s doc comment.
             try:
-                await call_state.renew_session(room_id)
+                renewed = await call_state.renew_session(room_id)
             except Exception:
-                pass
+                continue  # Redis unreachable: say nothing either way
+            if renewed is None or call_state.is_terminal(renewed.state):
+                # The call is over - ended elsewhere, or out of time to be
+                # set up (an answered call whose caller never came: the
+                # session is not renewed for it, and lapses). Its phones are
+                # told the way a joining socket is told (4004), so a screen
+                # still on "Connecting…" ends rather than waiting for an
+                # offer that will never come (2026-11-13).
+                logger.info("[calls] CALL_OVER_SOCKET_CLOSED room=%s user=%s state=%s", room_id, uid,
+                            renewed.state.value if renewed else "gone")
+                ending.update(code=4004, reason="call_over")
+                try:
+                    await websocket.close(code=4004, reason="Call already ended")
+                except Exception:
+                    pass
+                return
             try:
                 await signaling_hub.renew(room_id, uid, connection_id)
             except Exception:
@@ -2166,6 +2579,17 @@ async def _signaling(
             if msg_type == "pong":
                 # Answers our own heartbeat ping above - nothing to relay,
                 # already counted as activity by the timestamp refresh above.
+                continue
+
+            if msg_type == "diag":
+                # The phone's own view of its call (api/core/call_events.py),
+                # into the logs: never relayed, capped per socket. A ringing
+                # phone reports too - what it negotiated while it rang is
+                # often what the call fails on.
+                counts["diag"] += 1
+                if counts["diag"] <= CALL_EVENTS_MAX_PER_SOCKET:
+                    call_events.client_event(msg, room=room_id, role=role, user=uid,
+                                             transport="ws")
                 continue
 
             if msg_type == "accept":
@@ -2204,9 +2628,16 @@ async def _signaling(
             if msg_type == "state":
                 reported = msg.get("state")
                 if reported in ("connected", "disconnected", "failed"):
-                    await call_state.update_state(room_id, CallState(reported))
+                    updated = await call_state.update_state(room_id, CallState(reported))
                     logger.info("[calls] WEBRTC_%s room=%s user=%s",
                                 reported.upper(), room_id, uid)
+                    call_events.emit(
+                        f"WEBRTC_{reported.upper()}", room=room_id, role=role, user=uid,
+                        level=logging.WARNING if reported == "failed" else logging.INFO,
+                        call_state=updated.state.value if updated else None,
+                        ws="open", pc=reported,
+                        since_join_ms=int((asyncio.get_running_loop().time() - joined_at) * 1000),
+                    )
                 continue
 
             if msg_type not in WS_RELAYABLE_TYPES:
@@ -2228,11 +2659,26 @@ async def _signaling(
                 except Exception:
                     pass
             logger.info("[calls] SIGNAL_LOCAL instance=%s room=%s user=%s conn=%s event=%s local_recipients=%d", INSTANCE_ID, room_id, uid, connection_id, msg_type, _local_delivered)
+            published = None
             if _local_delivered == 0:
                 try:
-                    await signaling_hub.publish_signal(room_id, uid, connection_id, raw, str(msg_type), _recipient)
+                    envelope = await signaling_hub.publish_signal(room_id, uid, connection_id, raw, str(msg_type), _recipient)
+                    published = "buffered" if (envelope or {}).get("buffered") else "published"
                 except Exception as exc:
+                    published = "failed"
                     logger.warning("[calls] SIGNAL_PUBLISH_FAILED instance=%s room=%s event=%s err=%s", INSTANCE_ID, room_id, msg_type, type(exc).__name__)
+            if msg_type in counts:
+                counts[msg_type] += 1
+            if msg_type in ("offer", "answer"):
+                # Relayed is not connected (the 2026-11-13 lesson): this says
+                # only that the description reached the other phone's socket.
+                call_events.emit(
+                    "SDP_OFFER_RELAYED" if msg_type == "offer" else "SDP_ANSWER_RELAYED",
+                    room=room_id, role=role, user=uid, ws="open",
+                    delivered=_local_delivered, relay=published or "local",
+                    restart=bool(msg.get("restart")), offer_id=msg.get("offer_id"),
+                    standby=standby,
+                )
 
             if msg_type == "hangup":
                 # An explicit hangup is final. Mark the session terminal
@@ -2243,25 +2689,55 @@ async def _signaling(
                 # caller hanging up and the last socket closing would get a
                 # freshly-ringing call for a call that's already over.
                 current = await call_state.get_session(room_id)
+                # "failed": the phone gave up on a connection that never came
+                # (or could not recover) - not someone choosing to end it.
+                hangup_reason = call_events.clean(msg.get("reason")) or "hangup"
                 if (current and current.state in _UNANSWERED_STATES
                         and uid == current.caller_id):
                     # Hung up before anyone answered: the callee's phones
                     # are still ringing and must hear about it.
                     await _settle_unanswered(current, by=uid)
                 elif current and not call_state.is_terminal(current.state):
-                    await call_state.update_state(room_id, CallState.ended)
+                    await call_state.update_state(
+                        room_id, CallState.failed if hangup_reason == "failed" else CallState.ended)
+                call_events.emit(
+                    "CALL_HANGUP", room=room_id, role=role, user=uid,
+                    level=logging.WARNING if hangup_reason == "failed" else logging.INFO,
+                    call_state=current.state.value if current else None, ws="open",
+                    reason=hangup_reason, detail=msg.get("detail"),
+                    delivered=_local_delivered,
+                )
+                ending.update(code=1000, reason=f"hangup:{hangup_reason}")
                 break
 
-    except WebSocketDisconnect:
+    except WebSocketDisconnect as e:
         logger.info("[calls] user=%s disconnected from room=%s", uid, room_id)
+        if ending["code"] is None:
+            ending.update(code=getattr(e, "code", None), reason="client_closed")
     except RuntimeError as e:
         # Starlette raises RuntimeError (not WebSocketDisconnect) when a
         # receive is attempted on a socket the heartbeat task closed under
         # us. That's an expected shutdown path, not an error worth a stack
         # trace - the finally-block below still runs and cleans up properly.
         logger.info("[calls] socket closed room=%s user=%s (%s)", room_id, uid, e)
+        if ending["code"] is None:
+            ending.update(reason="server_closed")
     finally:
         heartbeat_task.cancel()
+        try:
+            _final = await call_state.get_session(room_id)
+        except Exception:
+            _final = None
+        call_events.emit(
+            "WEBSOCKET_DISCONNECTED", room=room_id, role=role, user=uid,
+            call_state=_final.state.value if _final else "gone", ws="closed",
+            code=ending["code"], reason=ending["reason"] or "closed",
+            conn=connection_id, standby=standby,
+            replaced=room.get(uid) is not websocket,
+            on_socket_ms=int((asyncio.get_running_loop().time() - joined_at) * 1000),
+            offers=counts["offer"], answers=counts["answer"], ice_relayed=counts["ice"],
+            diag=counts["diag"], connected=bool(_final and _final.ever_connected),
+        )
         _standby_sockets.discard(id(websocket))
         # Only remove OUR OWN entry, and only if it still points to THIS
         # specific connection - a ghost socket being closed above (see the
@@ -2421,6 +2897,9 @@ async def _standby_accepted(room_id: str, uid: str, connection_id: str,
     if current.state != CallState.connected:
         await call_state.mark_answered(room_id)
         logger.info("[calls] CALL_ACCEPTED instance=%s room=%s user=%s conn=%s (on the socket it rang on)", INSTANCE_ID, room_id, uid, connection_id)
+        if not current.answered:
+            call_events.emit("CALL_ACCEPTED", room=room_id, role="callee", user=uid,
+                             call_state="accepted", ws="open", via="ringing_socket")
         if current.state in _UNANSWERED_STATES:
             _spawn(_push_ring_over(current))
     try:

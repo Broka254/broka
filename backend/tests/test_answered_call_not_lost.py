@@ -209,7 +209,9 @@ async def test_an_answered_call_is_never_recorded_as_missed(client, fcm):
                           json={"room_id": room, "outcome": "missed"})
     assert r.status_code == 200, r.text
     await asyncio.gather(*list(calls._background), return_exceptions=True)
-    assert await _cards(listing_id) == ["completed"], "the card says Answered, not Missed"
+    # Answered and never connected (2026-11-13): not missed, and not a call
+    # that happened either - it was recorded "completed" until then.
+    assert await _cards(listing_id) == ["failed_to_connect"], "answered, never connected"
     assert _pushes(fcm, "missed_call", room) == [], "nobody is told they missed a call they answered"
 
 

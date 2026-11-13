@@ -144,17 +144,20 @@ _UNANSWERED: set = {CallState.initiating, CallState.ringing}
 def _renewed_expiry(session: "CallSession") -> Optional[float]:
     """Where the heartbeat moves a session's expiry, or None to leave it.
 
-    An answered call whose callee hasn't joined yet (`accepted`) gets the
-    establishment window again, from now - not the 4-hour connected TTL it
-    used to get. A call answered from a closed app that then never connected
-    stayed `accepted` for four hours, and `accepted` counts as being on a
-    call (calls.py _call_in_progress): calling the person back answered
-    "You're already on a call."
+    An answered call that is not under way yet (`accepted`: one of the two
+    has not joined) keeps the window answering gave it (_answer) - it is
+    never renewed. It used to get the 4-hour connected TTL, and then the
+    establishment window again from every heartbeat: a callee who answered
+    a call whose caller had already given up (the caller's app timed out on
+    POST /calls/initiate after the push had rung them - 2026-11-13) renewed
+    it every 15 seconds from its own socket, so the call never ended and the
+    callee sat on "Connecting…". `accepted` also counts as being on a call
+    (calls.py _call_in_progress): calling the person back was refused.
     """
     if is_terminal(session.state) or session.state in _UNANSWERED:
         return None
     if session.state == CallState.accepted:
-        return time.time() + ESTABLISHMENT_SESSION_TTL_SECONDS
+        return None
     return time.time() + CONNECTED_SESSION_TTL_SECONDS
 
 
@@ -217,6 +220,11 @@ class CallSession:
     # _record_outcome) - the callee who answered from a closed app, and
     # whose phone then couldn't join in time, was told "Missed call".
     answered: bool = False
+    # A phone reported its WebRTC connection up (the socket's `state`
+    # frame). What tells a call that happened from one that was answered
+    # and never connected - which used to be recorded as "completed" too
+    # (calls.py _record_outcome, "failed_to_connect").
+    ever_connected: bool = False
     # A store-general call has no listing. Its thread is keyed by the store
     # and buyer instead, exactly like the messages it produces; an empty
     # listing_id is deliberately distinct from a NULL legacy id so older
@@ -346,6 +354,7 @@ class _RedisCallStore:
             return session
         session.state = new_state
         if new_state == CallState.connected:
+            session.ever_connected = True
             # BUG FIX (V2 hardening): a call that's actually connected can
             # run far longer than the establishment TTL it was created
             # with - renew generously here rather than let an active
@@ -510,6 +519,7 @@ class _InMemoryCallStore:
                 return session
             session.state = new_state
             if new_state == CallState.connected:
+                session.ever_connected = True
                 # Same fix as _RedisCallStore.update_state() above - see
                 # its comment. The in-memory backend has no Redis-native
                 # TTL, but session.expires_at is what sweep_expired() and
@@ -536,6 +546,12 @@ class _InMemoryCallStore:
             session = self._store.get(room_id)
             if session is None:
                 return None
+            # As the Redis store's renew does, through its get(): a session
+            # past its expiry reads as expired, never renewed back to life.
+            if session.is_expired and session.state not in _TERMINAL:
+                logger.info("[call_state] CALL_TIMEOUT room=%s (was %s)", room_id, session.state.value)
+                session.state = CallState.expired
+                return session
             expiry = _renewed_expiry(session)
             if expiry is not None:
                 session.expires_at = expiry
@@ -677,6 +693,25 @@ async def create_session(
 # The listing slots of the per-user indexes above. Not real listing ids.
 _ANY_LISTING = "*"
 _OUTGOING = ">"
+
+
+def _client_call_slot(client_call_id: str) -> str:
+    return f"client:{client_call_id}"
+
+
+async def remember_client_call(caller_id: str, client_call_id: str, room_id: str) -> None:
+    """The call a caller's app placed under its own id for the attempt
+    (POST /calls/initiate's client_call_id), for as long as it could still
+    be joined. A retry of a request whose answer never reached the phone -
+    a timeout, a dropped connection - finds the call it already placed
+    instead of placing a second one; a cancel of a setup the app gave up on
+    finds the call to end."""
+    await _store.set_pending(_client_call_slot(client_call_id), caller_id, room_id,
+                             ttl_seconds=ESTABLISHMENT_SESSION_TTL_SECONDS)
+
+
+async def room_for_client_call(caller_id: str, client_call_id: str) -> Optional[str]:
+    return await _store.get_pending(_client_call_slot(client_call_id), caller_id)
 
 
 def _session_thread_key(session: CallSession) -> str:
