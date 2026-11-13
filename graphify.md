@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-343 endpoints served by `backend/main.py`. **Auth** is read from each
+345 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 80, optional 6, public 64, token 6, user 187.
+Counts: admin 80, optional 6, public 65, token 6, user 188.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -176,21 +176,23 @@ Counts: admin 80, optional 6, public 64, token 6, user 187.
 | GET | `/buy-agent-requests/me` | user | `get_my_buy_agent_request` (backend/api/domains/buy_agent/router.py:316) |
 | POST | `/buy-agent-requests/parse` | user | `parse_buy_request` (backend/api/domains/buy_agent/router.py:66) |
 | POST | `/buy-agent-requests/parse-intent` | user | `parse_search_intent` (backend/api/domains/buy_agent/router.py:97) |
-| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:1711) |
-| GET | `/calls/incoming` | user | `get_incoming_call` (backend/api/routers/calls.py:2439) |
-| POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:834) |
-| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:1432) |
-| GET | `/calls/pending/store/{store_id}` | user | `get_store_pending_call` (backend/api/routers/calls.py:2548) |
-| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:2568) |
-| POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:725) |
-| GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:665) |
-| POST | `/calls/unregister-token` | user | `unregister_token` (backend/api/routers/calls.py:814) |
-| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:1862) |
-| WS | `/calls/ws/{room_id}/ringing` | token | `call_signaling_ringing` (backend/api/routers/calls.py:1874) |
-| POST | `/calls/{room_id}/alerted` | public | `call_alerted` (backend/api/routers/calls.py:1081) |
-| POST | `/calls/{room_id}/answer` | public | `call_answered` (backend/api/routers/calls.py:1131) |
-| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:1058) |
-| POST | `/calls/{room_id}/turn-credentials` | public | `get_call_turn_credentials` (backend/api/routers/calls.py:703) |
+| POST | `/calls/cancel-setup` | user | `cancel_call_setup` (backend/api/routers/calls.py:1385) |
+| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:2071) |
+| GET | `/calls/incoming` | user | `get_incoming_call` (backend/api/routers/calls.py:2945) |
+| POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:922) |
+| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:1747) |
+| GET | `/calls/pending/store/{store_id}` | user | `get_store_pending_call` (backend/api/routers/calls.py:3054) |
+| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:3074) |
+| POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:813) |
+| GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:728) |
+| POST | `/calls/unregister-token` | user | `unregister_token` (backend/api/routers/calls.py:902) |
+| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:2222) |
+| WS | `/calls/ws/{room_id}/ringing` | token | `call_signaling_ringing` (backend/api/routers/calls.py:2234) |
+| POST | `/calls/{room_id}/alerted` | public | `call_alerted` (backend/api/routers/calls.py:1288) |
+| POST | `/calls/{room_id}/answer` | public | `call_answered` (backend/api/routers/calls.py:1340) |
+| POST | `/calls/{room_id}/events` | public | `report_call_events` (backend/api/routers/calls.py:1456) |
+| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:1265) |
+| POST | `/calls/{room_id}/turn-credentials` | public | `get_call_turn_credentials` (backend/api/routers/calls.py:790) |
 | GET | `/categories` | public | `list_categories` (backend/api/domains/categories/router.py:14) |
 | GET | `/categories/tree` | public | `category_tree` (backend/api/domains/categories/router.py:21) |
 | GET | `/categories/{category_id}/filters` | public | `list_filters` (backend/api/domains/categories/router.py:31) |
@@ -615,6 +617,7 @@ Counts: admin 80, optional 6, public 64, token 6, user 187.
 - `audit.py` — BROKA - Audit Log Records who did what, when, on which resource.
 - `body_limit.py` — A ceiling on how big a request body may be.
 - `buy_agent_subscribers.py` — Matches new listings against open Buy-Agent requests the instant they are created (Ch.8 — refines Volume 5 Ch.10's originally-proposed peri…
+- `call_events.py` — Structured call events in Render's logs (CALLING.md, 2026-11-13).
 - `call_signaling.py` — Distributed call signaling: Redis Pub/Sub relay + presence + buffering.
 - `call_state.py` — BROKA - Call Session State
 - `chat_files.py` — Which documents a direct chat carries, and how they are named.
@@ -891,7 +894,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-153 files in `backend/tests/`.
+154 files in `backend/tests/`.
 
 - `test_admin_additions.py` — Admin additions: SMS cost hook, timeseries, detail reads, users search.
 - `test_admin_alerts.py` — Admin alerts: event-driven creation, dedup, transitions, SSE smoke.
@@ -924,6 +927,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_call_history.py` — Call history (2026-10-02): GET /calls/history, the app's list of calls.
 - `test_call_push_and_teardown.py` — BROKA - call push shaping + WS room teardown regressions (calling audit, 2026-09-18)
 - `test_call_reconnect.py` — Regression tests for the calling audit (2026-09-14).
+- `test_call_setup_reliability.py` — A call placed is a call the caller can join, end, and read about (2026-11-13).
 - `test_call_state.py` — BROKA - Call State & Call-Token Endpoint Tests Run: pytest backend/tests/test_call_state.py -v
 - `test_calls_initiate.py` — BROKA - /calls/initiate authorization tests Run: pytest backend/tests/test_calls_initiate.py -v
 - `test_categories.py` — BROKA - Categories Endpoint Tests Run: pytest backend/tests/test_categories.py -v
@@ -1342,6 +1346,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `api_service.dart` — BROKA - API Service
 - `assemblyai_stt_service.dart` — lib/services/assemblyai_stt_service.dart
 - `broka_tts.dart` — BROKA TTS Service
+- `call_diagnostics.dart` — BROKA - one call's diagnostics, for Render's logs (CALLING.md, 2026-11-13).
 - `call_foreground_service.dart` — BROKA - Call Foreground Service (Dart bridge)
 - `callkit_service.dart` — BROKA - CallKit bridge (iOS)
 - `chat_documents.dart` — Documents in a direct chat (2026-11-09): picking files to send, keeping the ones sent and received on the phone, and opening them.
@@ -1469,7 +1474,9 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `cache_first_screens_test.dart` — The screens the first data-saving passes left out (2026-11-08), kept on the phone the way Home, the Menu and the Seller Dashboard already w…
 - `call_answer_ring_and_video_test.dart` — Answering a call, its ring, and turning a voice call into video (2026-10-09).
 - `call_answer_while_ringing_test.dart` — Answering without "Connecting…" (2026-11-09, CALLING.md).
+- `call_connect_reliability_test.dart` — A call that is answered either connects or ends, both sides alike, and says why (2026-11-13, CALLING.md).
 - `call_history_screen_test.dart` — Calls (2026-10-02): every call with a buyer or seller, newest first, on Home's visual system.
+- `call_setup_reliability_test.dart` — Placing a call the other phone is already ringing for (2026-11-13).
 - `category_visual_test.dart` — Covers the one thing this whole category pass is about: the UI's category visuals are resolved by NAME from a single registry, and that reg…
 - `category_zone_test.dart` — Covers the Category Zone screen after the alignment pass: that it uses the same visual system and scroll architecture as Home, that its vis…
 - `chat_albums_and_saving_test.dart` — Photos sent together, and keeping a photo (2026-11-11).
