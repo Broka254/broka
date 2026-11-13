@@ -35,6 +35,7 @@ import '../features/safe_payment/escrow_callout.dart';
 import '../features/safe_payment/payments_shown.dart';
 import '../features/safe_payment/safe_payment.dart' show openZenoEscrowGuide, zenoEscrowPrompt;
 import '../core/errors/user_facing_error.dart';
+import '../widgets/keep_latest_in_view.dart';
 
 /// Merge the server's Zeno AI thread over the local cache without
 /// duplicates. An empty server answer never wipes a non-empty local
@@ -1434,7 +1435,9 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
                 onSwitch: _openDirectChat,
               ),
             if (_listing != null) _buildInfoStrip(),
-            Expanded(child: _buildChat()),
+            // Zeno's last reply stays above the composer as the keyboard
+            // opens or the composer grows (keep_latest_in_view.dart).
+            Expanded(child: KeepLatestInView(controller: _scrollCtrl, child: _buildChat())),
             // Escrow, where the deal is struck: BROKA holds no payments, so
             // this is how either side is protected - and how they learn
             // Zeno walks them through it (escrow_callout.dart). Gone once

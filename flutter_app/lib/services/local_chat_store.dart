@@ -76,6 +76,18 @@ class LocalChatStore {
     } catch (_) {}
   }
 
+  /// A chat deleted from the inbox: everything this phone kept for it - the
+  /// messages, the saved ticks and anything still waiting to send - so
+  /// reopening it does not paint the deleted messages back from here.
+  static Future<void> forgetThread(String scope) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_key(scope));
+      await prefs.remove(_receiptsKey(scope));
+      await prefs.remove(_outboxKey(scope));
+    } catch (_) {}
+  }
+
   /// Add [incoming] to [scope]'s cached thread - each message once, by its
   /// server id, in time order - and save it.
   ///

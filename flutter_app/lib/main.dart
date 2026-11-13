@@ -11,6 +11,7 @@ import 'core/network/data_saver.dart';
 import 'core/network/instrumented_client.dart';
 import 'core/state/marketplace_state.dart';
 import 'core/network/api_client.dart';
+import 'features/calls/presentation/ongoing_call.dart';
 import 'features/communications/presentation/announcement_detail_screen.dart';
 import 'features/communications/presentation/announcements_screen.dart';
 import 'features/feedback/presentation/feedback_screen.dart';
@@ -744,8 +745,13 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
       navigatorKey: navigatorKey,
       // Zeno's session lives above the Navigator, so it stays with the user
       // from screen to screen (features/zeno_assistant/zeno_session.dart).
-      navigatorObservers: [_zeno.routes, appRouteObserver],
-      builder: (context, child) => ZenoSessionHost(session: _zeno, child: child ?? const SizedBox.shrink()),
+      navigatorObservers: [_zeno.routes, appRouteObserver, OngoingCall.instance.observer],
+      // A minimised call's bar sits above everything, Zeno's layer included,
+      // and pushes the app down under it (features/calls/presentation/
+      // ongoing_call.dart).
+      builder: (context, child) => OngoingCallHost(
+        child: ZenoSessionHost(session: _zeno, child: child ?? const SizedBox.shrink()),
+      ),
       debugShowCheckedModeBanner: false,
       title: 'BROKA',
       theme: _buildTheme(),

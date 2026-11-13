@@ -52,6 +52,7 @@ import '../services/zeno_voice_controller.dart';
 import '../core/errors/user_facing_error.dart';
 import '../core/navigation/app_route_observer.dart';
 import '../utils/backend_time.dart';
+import '../widgets/keep_latest_in_view.dart';
 
 // ── Message model extensions ──────────────────────────────────────────────────
 // Extends the existing Message model with media fields.
@@ -3700,7 +3701,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
             ),
           Expanded(child: _loading
               ? const Center(child: CircularProgressIndicator(color: BrokaColors.gold))
-              : _buildMessages()),
+              // The keyboard opening must not hide the messages being
+              // answered (keep_latest_in_view.dart).
+              : KeepLatestInView(controller: _scrollCtrl, child: _buildMessages())),
           _buildTypingIndicator(),
           _buildReplyPreview(),
           // REMOVED: the language chip row.

@@ -13,6 +13,8 @@
 // is a placeholder ("Buyer", "Seller"...) the screen looks the person up.
 
 import 'dart:async';
+import 'dart:math' as math;
+import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -28,6 +30,7 @@ import '../services/notification_service.dart';
 import '../services/call_foreground_service.dart';
 import '../services/callkit_service.dart';
 import '../services/active_call.dart';
+import '../features/calls/presentation/ongoing_call.dart';
 
 class VoipCallScreen extends StatefulWidget {
   const VoipCallScreen({super.key, this.animateBackground = true});
@@ -191,6 +194,9 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   // The camera is being opened to turn this voice call into a video call.
   bool _switchingToVideo  = false;
 
+  // This screen's route, for the minimised call's bar (OngoingCall).
+  Route<dynamic>? _myRoute;
+
   // ── Animations ────────────────────────────────────────────────────────────
   late AnimationController _ringCtrl;     // ripple rings
   late AnimationController _fadeCtrl;     // state fade
@@ -227,6 +233,14 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     final args = ModalRoute.of(context)?.settings.arguments as Map?;
     if (args == null) return;
     _argsLoaded  = true;
+    // The call can be minimised and carry on under the rest of the app
+    // (features/calls/presentation/ongoing_call.dart).
+    final route = ModalRoute.of(context);
+    if (route != null) {
+      _myRoute = route;
+      OngoingCall.instance.attach(route, Navigator.of(context),
+          hangUp: _hangUp, toggleMute: _toggleMuteFromBar);
+    }
     final roomId = args['roomId']      as String? ?? '';
     final userId = args['userId']      as String? ?? '';
     final callToken = args['callToken'] as String? ?? '';
@@ -758,6 +772,8 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    final route = _myRoute;
+    if (route != null) OngoingCall.instance.detach(route);
     _stopRingback();
     _noAnswerTimer?.cancel();
     _slowToRingTimer?.cancel();
@@ -816,7 +832,13 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     final route = ModalRoute.of(context);
     if (route == null || !route.isActive) return;
     final nav = Navigator.of(context);
-    if (route.isCurrent && !nav.canPop()) {
+    // Minimised, then brought back from the bar: the screen the minimise
+    // moved above the call was closed on the way back, and is what this
+    // call should leave the user on - not what was under it.
+    final restore = route.isCurrent ? OngoingCall.instance.restoreAfter(route) : null;
+    if (restore != null && restore.name != null) {
+      nav.pushReplacementNamed(restore.name!, arguments: restore.arguments);
+    } else if (route.isCurrent && !nav.canPop()) {
       // The app was started to answer this call, and the call was all it
       // opened (SplashScreen): Home comes after it, not under it - building
       // Home first spent seconds, and the network, the call needed.
@@ -1051,8 +1073,50 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   bool get _isOver =>
       _callState == CallState.ended || _callState == CallState.failed;
 
+  /// The call can go on under the rest of the app: while it is being
+  /// placed or is up - not while it rings here unanswered, nor once over.
+  bool get _canMinimize => !_isOver && !_isIncoming;
+
+  void _minimize() {
+    if (!_canMinimize) return;
+    HapticFeedback.selectionClick();
+    OngoingCall.instance.minimize();
+  }
+
+  void _toggleMuteFromBar() {
+    if (!_svcReady || _isOver || !mounted) return;
+    _toggleMute();
+  }
+
+  void _publishToBar() {
+    final route = _myRoute;
+    if (route == null) return;
+    OngoingCall.instance.publish(route, OngoingCallInfo(
+      peerName: _displayName,
+      peerPhoto: _peerPhoto,
+      status: _stateLabel,
+      isVideo: _isVideo,
+      connected: _callState == CallState.connected,
+      muted: _muted,
+      canMute: _svcReady && !_isOver,
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
+    _publishToBar();
+    // Back minimises a call that is going on, as on WhatsApp: it used to
+    // close this screen, and closing it hung up.
+    return PopScope(
+      canPop: !_canMinimize,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _minimize();
+      },
+      child: _buildScreen(context),
+    );
+  }
+
+  Widget _buildScreen(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     // A small phone, or a big text size on any phone: a smaller face and
     // tighter gaps, so the controls stay on screen.
@@ -1102,19 +1166,55 @@ class _VoipCallScreenState extends State<VoipCallScreen>
             ConstellationBackground(
               animate: widget.animateBackground,
               child: IgnorePointer(
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 600),
-                  decoration: BoxDecoration(
-                    gradient: RadialGradient(
-                      center: const Alignment(0, -0.32),
-                      radius: 0.9,
-                      colors: [
-                        _stateColor.withOpacity(0.22),
-                        _stateColor.withOpacity(0.0),
-                      ],
+                child: Stack(fit: StackFit.expand, children: [
+                  // The call's state colour, glowing behind the person.
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 600),
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        center: const Alignment(0, -0.32),
+                        radius: 0.9,
+                        colors: [
+                          _stateColor.withOpacity(0.26),
+                          _stateColor.withOpacity(0.0),
+                        ],
+                      ),
                     ),
                   ),
-                ),
+                  // An aurora of the chat gradient rising behind the
+                  // controls, and the edges falling to black: depth, where
+                  // the screen was one flat wash.
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        center: const Alignment(-0.6, 1.15),
+                        radius: 1.1,
+                        colors: [kChatGradient.first.withOpacity(0.30), Colors.transparent],
+                      ),
+                    ),
+                  ),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        center: const Alignment(0.8, 1.05),
+                        radius: 0.9,
+                        colors: [kChatGradient.last.withOpacity(0.24), Colors.transparent],
+                      ),
+                    ),
+                  ),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                        stops: const [0, 0.18, 0.75, 1],
+                        colors: [
+                          Colors.black.withOpacity(0.45), Colors.transparent,
+                          Colors.transparent, Colors.black.withOpacity(0.35),
+                        ],
+                      ),
+                    ),
+                  ),
+                ]),
               ),
             ),
 
@@ -1194,6 +1294,17 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   Widget _buildTopBar() => Padding(
     padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
     child: Row(children: [
+      // WhatsApp's top-left control: back to the app, the call carrying on
+      // (features/calls/presentation/ongoing_call.dart). Back does the same.
+      if (_canMinimize) ...[
+        _GlassIconButton(
+          key: const Key('call-minimize'),
+          icon: Icons.close_fullscreen_rounded,
+          tooltip: 'Minimise call',
+          onTap: _minimize,
+        ),
+        const SizedBox(width: 10),
+      ],
       const Flexible(
         child: _TopChip(
           icon: Icons.lock_rounded,
@@ -1208,6 +1319,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
         _QualityBadge(quality: _quality)
       else
         _TopChip(
+          key: const Key('call-type-chip'),
           icon: _isVideo ? Icons.videocam_rounded : Icons.call_rounded,
           label: _isVideo ? 'Video call' : 'Voice call',
           color: BrokaColors.neonBlue,
@@ -1236,6 +1348,18 @@ class _VoipCallScreenState extends State<VoipCallScreen>
                   minRadius: face / 2 + 6,
                   maxRadius: box / 2,
                 ),
+            // An orbit round the person: two arcs of the chat gradient
+            // turning against the ring while the call is put through, at
+            // rest once it is up - the screen's one piece of motion that
+            // says "working on it" without words.
+            if (!_isOver)
+              Transform.rotate(
+                angle: _isRinging ? -_ringCtrl.value * 2 * 3.141592653589793 : 0,
+                child: CustomPaint(
+                  size: Size.square(face + 40),
+                  painter: _OrbitPainter(color: _stateColor),
+                ),
+              ),
             // A steady halo once connected.
             if (_callState == CallState.connected)
               Container(
@@ -1316,19 +1440,19 @@ class _VoipCallScreenState extends State<VoipCallScreen>
           color: BrokaColors.textHigh,
           fontSize: narrow ? 24 : 28,
           fontWeight: FontWeight.w800,
-          shadows: const [Shadow(color: Colors.black54, blurRadius: 12)],
+          letterSpacing: 0.3,
+          shadows: [
+            const Shadow(color: Colors.black54, blurRadius: 12),
+            Shadow(color: kChatGradient.first.withOpacity(0.55), blurRadius: 22),
+          ],
         ),
       ),
       const SizedBox(height: 10),
       // Which side of the deal they're on, and the listing - a card like
       // Home's chips rather than bare grey text.
-      Container(
+      _Glass(
+        radius: 20,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        decoration: BoxDecoration(
-          color: BrokaColors.bgCard.withOpacity(0.86),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: BrokaColors.border),
-        ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
@@ -1372,9 +1496,12 @@ class _VoipCallScreenState extends State<VoipCallScreen>
           duration: const Duration(milliseconds: 300),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
           decoration: BoxDecoration(
-            color: color.withOpacity(0.12),
+            gradient: LinearGradient(colors: [
+              color.withOpacity(0.20), color.withOpacity(0.06),
+            ]),
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: color.withOpacity(0.45)),
+            border: Border.all(color: color.withOpacity(0.50)),
+            boxShadow: [BoxShadow(color: color.withOpacity(0.22), blurRadius: 18)],
           ),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             // A ringing phone once theirs rings; until then a dot that
@@ -1556,18 +1683,19 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     large:    true,
   );
 
-  /// The controls, in a card like Home's over the constellation.
-  Widget _dock(Widget child) => Container(
-    margin: const EdgeInsets.symmetric(horizontal: 16),
-    padding: const EdgeInsets.fromLTRB(12, 16, 12, 14),
-    decoration: BoxDecoration(
-      color: BrokaColors.bgCard.withOpacity(0.82),
-      borderRadius: BorderRadius.circular(28),
-      border: Border.all(color: BrokaColors.border),
-      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.35),
-          blurRadius: 24, offset: const Offset(0, 8))],
+  /// The controls, on frosted glass over the constellation: the stars
+  /// blur through it, a line of the chat gradient lights its top edge.
+  Widget _dock(Widget child) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 16),
+    child: _Glass(
+      radius: 30,
+      blur: 22,
+      tint: kChatGradient.first,
+      glow: kChatGradient.first.withOpacity(0.20),
+      highlight: true,
+      padding: const EdgeInsets.fromLTRB(12, 18, 12, 16),
+      child: child,
     ),
-    child: child,
   );
 
   Widget _buildControls(bool narrow) {
@@ -1709,20 +1837,18 @@ class _VoipCallScreenState extends State<VoipCallScreen>
 // ── Top-bar chip ───────────────────────────────────────────────────────────────
 
 class _TopChip extends StatelessWidget {
-  const _TopChip({required this.icon, required this.label, required this.color});
+  const _TopChip({super.key, required this.icon, required this.label, required this.color});
 
   final IconData icon;
   final String label;
   final Color color;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-    decoration: BoxDecoration(
-      color: BrokaColors.bgCard.withOpacity(0.86),
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: color.withOpacity(0.35)),
-    ),
+  Widget build(BuildContext context) => _Glass(
+    radius: 12,
+    tint: color,
+    borderColor: color.withOpacity(0.38),
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
     child: Row(mainAxisSize: MainAxisSize.min, children: [
       Icon(icon, size: 12, color: color),
       const SizedBox(width: 6),
@@ -1735,6 +1861,155 @@ class _TopChip extends StatelessWidget {
       ),
     ]),
   );
+}
+
+// ── Glass ──────────────────────────────────────────────────────────────────────
+
+/// Frosted glass: what is behind it blurred, a faint sheen across it, a
+/// hairline edge - the call screen's surfaces, matching the chat's glass
+/// header controls rather than the flat cards it had.
+class _Glass extends StatelessWidget {
+  const _Glass({
+    required this.child,
+    this.radius = 16,
+    this.blur = 14,
+    this.padding,
+    this.tint,
+    this.borderColor,
+    this.glow,
+    this.highlight = false,
+  });
+
+  final Widget child;
+  final double radius;
+  final double blur;
+  final EdgeInsetsGeometry? padding;
+  final Color? tint;
+  final Color? borderColor;
+  final Color? glow;
+  final bool highlight;
+
+  @override
+  Widget build(BuildContext context) {
+    final shape = BorderRadius.circular(radius);
+    Widget body = Container(
+      padding: padding,
+      decoration: BoxDecoration(
+        borderRadius: shape,
+        gradient: LinearGradient(
+          begin: Alignment.topLeft, end: Alignment.bottomRight,
+          colors: [
+            Color.lerp(BrokaColors.bgCard, tint ?? BrokaColors.bgCard, 0.10)!.withOpacity(0.62),
+            BrokaColors.bg.withOpacity(0.72),
+          ],
+        ),
+        border: Border.all(color: borderColor ?? Colors.white.withOpacity(0.11)),
+      ),
+      child: child,
+    );
+    if (highlight) {
+      body = Stack(children: [
+        body,
+        Positioned(
+          top: 0, left: radius, right: radius, height: 1,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(colors: [
+                Colors.transparent, kChatGradient.first.withOpacity(0.9),
+                kChatGradient.last.withOpacity(0.9), Colors.transparent,
+              ]),
+            ),
+          ),
+        ),
+      ]);
+    }
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: shape,
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 24, offset: const Offset(0, 8)),
+          if (glow != null) BoxShadow(color: glow!, blurRadius: 32, spreadRadius: -4),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: shape,
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+          child: body,
+        ),
+      ),
+    );
+  }
+}
+
+/// A square glass control, as the chat header's (BrokaHeaderButton).
+class _GlassIconButton extends StatelessWidget {
+  const _GlassIconButton({super.key, required this.icon, required this.tooltip, required this.onTap});
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: tooltip,
+    child: Semantics(
+      button: true,
+      label: tooltip,
+      excludeSemantics: true,
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: _Glass(
+          radius: 13,
+          child: SizedBox(
+            width: 40, height: 40,
+            child: Icon(icon, size: 19, color: BrokaColors.textHigh),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+/// Two arcs of an orbit round the person's ring, fading along their length.
+class _OrbitPainter extends CustomPainter {
+  _OrbitPainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final r = rect.deflate(1.5);
+    for (final (start, c) in [(0.0, kChatGradient.first), (3.141592653589793, BrokaColors.neonCyan)]) {
+      final paint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.6
+        ..strokeCap = StrokeCap.round
+        ..shader = SweepGradient(
+          startAngle: start,
+          endAngle: start + 2.2,
+          colors: [c.withOpacity(0.0), Color.lerp(c, color, 0.35)!.withOpacity(0.85)],
+          transform: GradientRotation(start),
+        ).createShader(rect);
+      canvas.drawArc(r, start, 2.2, false, paint);
+      // A bead of light at the head of each arc.
+      final head = start + 2.2;
+      final centre = rect.center;
+      final radius = r.width / 2;
+      canvas.drawCircle(
+        centre + Offset(radius * math.cos(head), radius * math.sin(head)),
+        2.6,
+        Paint()
+          ..color = Color.lerp(c, Colors.white, 0.4)!
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_OrbitPainter old) => old.color != color;
 }
 
 // ── Ripple ring ────────────────────────────────────────────────────────────────
@@ -1788,13 +2063,11 @@ class _QualityBadge extends StatelessWidget {
       CallQuality.unknown => ('', BrokaColors.textLow, 0),
     };
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: BrokaColors.bgCard.withOpacity(0.86),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.45)),
-      ),
+    return _Glass(
+      radius: 12,
+      tint: color,
+      borderColor: color.withOpacity(0.45),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
       child: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [
         for (int i = 0; i < 3; i++) ...[
           if (i > 0) const SizedBox(width: 2),
@@ -1859,24 +2132,31 @@ class _CallBtn extends StatelessWidget {
               width: size, height: size,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
+                // Lit from the top left: a call action in its colour, a
+                // toggle as a glass bead that takes its colour when on.
                 gradient: filled
                     ? LinearGradient(
                         begin: Alignment.topLeft, end: Alignment.bottomRight,
-                        colors: [color, Color.lerp(color, Colors.black, 0.25)!],
+                        colors: [Color.lerp(color, Colors.white, 0.12)!,
+                                 Color.lerp(color, Colors.black, 0.30)!],
                       )
-                    : null,
-                color: filled
-                    ? null
-                    : (active ? color.withOpacity(0.18) : BrokaColors.bgMid.withOpacity(0.75)),
-                border: filled
-                    ? null
-                    : Border.all(
-                        color: active ? color : BrokaColors.border,
-                        width: active ? 1.6 : 1.2),
-                boxShadow: filled
-                    ? [BoxShadow(color: color.withOpacity(0.40),
-                        blurRadius: 20, spreadRadius: 2)]
-                    : null,
+                    : LinearGradient(
+                        begin: Alignment.topLeft, end: Alignment.bottomRight,
+                        colors: active
+                            ? [color.withOpacity(0.34), color.withOpacity(0.12)]
+                            : [Colors.white.withOpacity(0.11), Colors.white.withOpacity(0.03)],
+                      ),
+                border: Border.all(
+                    color: filled
+                        ? Colors.white.withOpacity(0.22)
+                        : (active ? color.withOpacity(0.85) : Colors.white.withOpacity(0.14)),
+                    width: active ? 1.6 : 1.1),
+                boxShadow: [
+                  if (filled)
+                    BoxShadow(color: color.withOpacity(0.45), blurRadius: 24, spreadRadius: 2)
+                  else if (active)
+                    BoxShadow(color: color.withOpacity(0.30), blurRadius: 16),
+                ],
               ),
               child: Icon(icon, color: iconColor, size: large ? 30 : 24),
             ),

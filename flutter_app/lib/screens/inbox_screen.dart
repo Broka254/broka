@@ -26,12 +26,17 @@ import '../services/global_poller_service.dart';
 import '../services/local_chat_store.dart';
 import '../core/cache/screen_cache.dart';
 import '../core/errors/user_facing_error.dart';
+import '../core/utils/result.dart';
+import '../features/inbox/data/chat_deletion_repository.dart';
 
 class InboxScreen extends StatefulWidget {
-  const InboxScreen({super.key, this.animateBackground = true});
+  const InboxScreen({super.key, this.animateBackground = true, this.deletion});
 
   /// False renders the constellation as one still frame - for tests.
   final bool animateBackground;
+
+  /// For tests; the app's own otherwise.
+  final ChatDeletionRepository? deletion;
 
   @override
   State<InboxScreen> createState() => _InboxScreenState();
@@ -166,7 +171,20 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
     });
   }
 
+  // Chats deleted on this screen, by ChatThreadRef.key, with the message
+  // each one ended on. A poller sweep or a cached copy from before the
+  // delete still lists them; they stay hidden until a newer message - the
+  // one that brings the chat back on the server too.
+  final Map<String, Object?> _deleted = {};
+
+  bool _isDeleted(Map<String, dynamic> t) {
+    final ref = ChatThreadRef.fromInbox(t);
+    if (ref == null || !_deleted.containsKey(ref.key)) return false;
+    return _deleted[ref.key] == t['last_message_id'];
+  }
+
   void _applyThreads(List<Map<String, dynamic>> data) {
+    data = [for (final t in data) if (!_isDeleted(t)) t];
     final Map<String, List<Map<String, dynamic>>> grouped = {};
     for (final t in data) {
       // Store-general threads have no listing: group by store instead of
@@ -305,6 +323,136 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
       'role':     t['my_role'] as String,
       'buyer_id': buyerId,
     }).then((_) => _loadInbox());
+  }
+
+  // ── Deleting chats ─────────────────────────────────────────────────────
+
+  ChatDeletionRepository get _deletion => widget.deletion ?? chatDeletionRepository;
+
+  String _otherName(Map<String, dynamic> t) {
+    final name = t['counterpart_name'] as String?;
+    if (name != null && name.isNotEmpty) return name;
+    return t['my_role'] == 'seller' ? 'The buyer' : 'The seller';
+  }
+
+  /// Asks first: a deleted chat is not coming back from this phone.
+  Future<bool> _confirmDelete(List<Map<String, dynamic>> threads) async {
+    final one = threads.length == 1;
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: BrokaColors.bgCard,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: const BorderSide(color: BrokaColors.border)),
+        title: Text(one ? 'Delete this chat?' : 'Delete ${threads.length} chats?',
+            style: const TextStyle(color: BrokaColors.textHigh,
+                fontWeight: FontWeight.w800, fontSize: 17)),
+        content: Text(
+          one
+              ? 'It goes from your inbox only - ${_otherName(threads.first)} keeps '
+                  'their copy. A new message brings the chat back.'
+              : 'They go from your inbox only - the other people keep their '
+                  'copies. A new message brings a chat back.',
+          style: const TextStyle(color: BrokaColors.textMid, fontSize: 13, height: 1.45),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: BrokaColors.textMid)),
+          ),
+          TextButton(
+            key: const Key('inbox-confirm-delete'),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete', style: TextStyle(
+                color: BrokaColors.danger, fontWeight: FontWeight.w800)),
+          ),
+        ],
+      ),
+    );
+    return sure == true;
+  }
+
+  /// Deletes them on the server; true when every one went. A refusal (a
+  /// deal with money in escrow) says why. Those that went are remembered
+  /// in [_deleted] - [_forget] takes them off the screen.
+  Future<bool> _deleteOnServer(List<Map<String, dynamic>> threads) async {
+    String? problem;
+    for (final t in threads) {
+      final ref = ChatThreadRef.fromInbox(t);
+      if (ref == null) continue;
+      final r = await _deletion.delete(ref);
+      if (r case Failure(:final message)) {
+        problem ??= message;
+      } else {
+        _deleted[ref.key] = t['last_message_id'];
+      }
+    }
+    if (problem != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(problem),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: BrokaColors.danger,
+      ));
+    }
+    return problem == null;
+  }
+
+  void _forget() {
+    if (!mounted) return;
+    setState(() => _applyThreads(_threads));
+    unawaited(LocalChatStore.save(_inboxScope, _threads));
+  }
+
+  Future<void> _deleteChats(List<Map<String, dynamic>> threads) async {
+    if (!await _confirmDelete(threads) || !mounted) return;
+    final all = await _deleteOnServer(threads);
+    _forget();
+    // A refusal has already said why.
+    if (!all || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(threads.length == 1 ? 'Chat deleted' : 'Chats deleted'),
+      behavior: SnackBarBehavior.floating,
+    ));
+  }
+
+  /// Swipe: asks, deletes, and only then lets the row go.
+  Future<bool> _confirmSwipe(Map<String, dynamic> t) async =>
+      await _confirmDelete([t]) && await _deleteOnServer([t]);
+
+  /// Long press on a chat, or on a listing's card for all of its chats.
+  Future<void> _showChatActions(List<Map<String, dynamic>> threads, String title) async {
+    final delete = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: BrokaColors.bgCard,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 10, 8, 8),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Container(width: 38, height: 4, decoration: BoxDecoration(
+                color: BrokaColors.border, borderRadius: BorderRadius.circular(2))),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+              child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: BrokaColors.textHigh,
+                      fontSize: 15, fontWeight: FontWeight.w800)),
+            ),
+            ListTile(
+              key: const Key('inbox-delete-chat'),
+              leading: const Icon(Icons.delete_outline_rounded, color: BrokaColors.danger),
+              title: Text(threads.length == 1 ? 'Delete chat' : 'Delete ${threads.length} chats',
+                  style: const TextStyle(color: BrokaColors.danger, fontWeight: FontWeight.w700)),
+              subtitle: const Text('From your inbox only',
+                  style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
+              onTap: () => Navigator.pop(ctx, true),
+            ),
+          ]),
+        ),
+      ),
+    );
+    if (delete == true && mounted) await _deleteChats(threads);
   }
 
   @override
@@ -455,6 +603,10 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
                     _expanded = isExpanded ? null : lid),
                 threads:     threads,
                 onThreadTap: _openThread,
+                onLongPress: () => _showChatActions(threads, first['listing_name'] as String),
+                onThreadLongPress: (t) => _showChatActions([t], _otherName(t)),
+                confirmThreadDismiss: _confirmSwipe,
+                onThreadDismissed: (_) => _forget(),
               );
             },
             childCount: listingIds.length,
@@ -581,6 +733,12 @@ class _ListingGroup extends StatelessWidget {
   final VoidCallback onToggle;
   final List<Map<String, dynamic>> threads;
   final void Function(Map<String, dynamic>) onThreadTap;
+  // Deleting: a long press offers it (the card: all its chats; a row:
+  // that chat), and a row swiped left asks, deletes, then goes.
+  final VoidCallback onLongPress;
+  final void Function(Map<String, dynamic>) onThreadLongPress;
+  final Future<bool> Function(Map<String, dynamic>) confirmThreadDismiss;
+  final void Function(Map<String, dynamic>) onThreadDismissed;
 
   const _ListingGroup({
     required this.listingId, required this.listingName,
@@ -589,6 +747,8 @@ class _ListingGroup extends StatelessWidget {
     required this.unreadCount, required this.threadCount,
     required this.isExpanded,  required this.onToggle,
     required this.threads,     required this.onThreadTap,
+    required this.onLongPress, required this.onThreadLongPress,
+    required this.confirmThreadDismiss, required this.onThreadDismissed,
   });
 
   // Category-alignment pass (2026-09-18): this four-case switch only
@@ -623,7 +783,9 @@ class _ListingGroup extends StatelessWidget {
       child: Column(children: [
         // ── Group header (tap to expand/collapse) ──
         InkWell(
+          key: ValueKey('inbox-group-$listingId'),
           onTap: onToggle,
+          onLongPress: onLongPress,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
             child: Row(children: [
@@ -712,10 +874,29 @@ class _ListingGroup extends StatelessWidget {
           child: isExpanded
               ? Column(children: [
                   Divider(color: BrokaColors.border.withOpacity(0.7), height: 1),
-                  ...threads.map((t) => _ThreadRow(
-                    thread: t,
-                    onTap: () => onThreadTap(t),
-                  )),
+                  for (final t in threads)
+                    Dismissible(
+                      key: ValueKey('inbox-thread-${ChatThreadRef.fromInbox(t)?.key ?? t['last_message_id']}'),
+                      direction: DismissDirection.endToStart,
+                      confirmDismiss: (_) => confirmThreadDismiss(t),
+                      onDismissed: (_) => onThreadDismissed(t),
+                      background: Container(
+                        color: BrokaColors.danger.withOpacity(0.18),
+                        alignment: Alignment.centerRight,
+                        padding: const EdgeInsets.only(right: 20),
+                        child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(Icons.delete_outline_rounded, color: BrokaColors.danger, size: 20),
+                          SizedBox(width: 6),
+                          Text('Delete', style: TextStyle(color: BrokaColors.danger,
+                              fontWeight: FontWeight.w800, fontSize: 13)),
+                        ]),
+                      ),
+                      child: _ThreadRow(
+                        thread: t,
+                        onTap: () => onThreadTap(t),
+                        onLongPress: () => onThreadLongPress(t),
+                      ),
+                    ),
                 ])
               : const SizedBox.shrink(),
         ),
@@ -729,7 +910,8 @@ class _ListingGroup extends StatelessWidget {
 class _ThreadRow extends StatelessWidget {
   final Map<String, dynamic> thread;
   final VoidCallback onTap;
-  const _ThreadRow({required this.thread, required this.onTap});
+  final VoidCallback? onLongPress;
+  const _ThreadRow({required this.thread, required this.onTap, this.onLongPress});
 
   @override
   Widget build(BuildContext context) {
@@ -792,6 +974,7 @@ class _ThreadRow extends StatelessWidget {
 
     return InkWell(
       onTap: onTap,
+      onLongPress: onLongPress,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
         child: Row(children: [

@@ -18,6 +18,7 @@
 // recent completed deals - beside Deals Done in the header. Buyers see the
 // same figure on the seller's listings and profile. And a Delete on each
 // product, which the dashboard never had.
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -48,6 +49,7 @@ import '../features/listings/presentation/replace_photos.dart';
 import '../features/stores/presentation/store_entry.dart';
 import '../features/stores/presentation/widgets/menu_store_section.dart';
 import '../features/seller_dashboard/data/seller_dashboard_repository.dart';
+import '../features/seller_dashboard/data/reported_listings_repository.dart';
 import '../features/seller_dashboard/presentation/reported_unavailable_panel.dart';
 import '../widgets/stale_data_banner.dart';
 
@@ -523,7 +525,9 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   int    get _totalViews   => _summaryInt('total_views') ?? _listings.fold(0, (s, l) => s + l.views);
   bool   get _isVerified   => _profile?['is_verified'] as bool? ?? false;
   int    get _activeCount  =>
-      _summaryInt('active_listings') ?? _listings.where((l) => l.status.toLowerCase() == 'active').length;
+      _summaryInt('active_listings') ??
+      // A listing a buyer marked unavailable is hidden from buyers: not active.
+      _listings.where((l) => l.status.toLowerCase() == 'active' && !l.reportedSoldOut).length;
   int    get _featuredCount =>
       _summaryInt('featured_listings') ?? _listings.where((l) => l.isFeatured).length;
 
@@ -2485,6 +2489,73 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
     );
   }
 
+  final Set<String> _revoking = {};
+
+  /// "Still available": every open report is revoked and buyers see it
+  /// again (DELETE /listings/{id}/sold-out).
+  Future<void> _revokeReport(Listing l) async {
+    if (_revoking.contains(l.id)) return;
+    HapticFeedback.selectionClick();
+    setState(() => _revoking.add(l.id));
+    final r = await reportedListingsRepository.stillAvailable(l.id);
+    if (!mounted) return;
+    setState(() => _revoking.remove(l.id));
+    final messenger = ScaffoldMessenger.of(context);
+    switch (r) {
+      case Success():
+        messenger.showSnackBar(SnackBar(
+          content: Text('"${l.name}" is back on sale - buyers can see it again.'),
+          behavior: SnackBarBehavior.floating,
+        ));
+        unawaited(_refresh());
+      case Failure(:final message):
+        messenger.showSnackBar(SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: BrokaColors.danger,
+        ));
+    }
+  }
+
+  Widget _buildReportedStrip(Listing l) {
+    final busy = _revoking.contains(l.id);
+    return Container(
+      key: Key('catalogue-reported-${l.id}'),
+      margin: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+      padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+      decoration: BoxDecoration(
+        color: BrokaColors.danger.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: BrokaColors.danger.withOpacity(0.40)),
+      ),
+      child: Row(children: [
+        const Icon(Icons.visibility_off_rounded, color: BrokaColors.danger, size: 16),
+        const SizedBox(width: 8),
+        const Expanded(
+          child: Text('A buyer marked this unavailable - hidden from buyers. Still for sale?',
+              style: TextStyle(color: BrokaColors.textHigh, fontSize: 11.5, height: 1.3,
+                  fontWeight: FontWeight.w600)),
+        ),
+        const SizedBox(width: 8),
+        FilledButton(
+          key: Key('catalogue-still-available-${l.id}'),
+          onPressed: busy ? null : () => _revokeReport(l),
+          style: FilledButton.styleFrom(
+            backgroundColor: BrokaColors.neonGreen.withOpacity(0.18),
+            foregroundColor: BrokaColors.neonGreen,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            minimumSize: const Size(0, 34),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+          child: busy
+              ? const SizedBox(width: 14, height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: BrokaColors.neonGreen))
+              : const Text('Still available', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12)),
+        ),
+      ]),
+    );
+  }
+
   Widget _buildProductCard(Listing l) {
     final isExpanded = _expanded[l.id] ?? false;
     final label      = _dealLabel(l);
@@ -2596,6 +2667,11 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
                   style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
             ]),
           ),
+          // ── Marked unavailable by a buyer ─────────────────────────────────
+          // In the catalogue now (the server keeps it in the owner's list),
+          // with the revoke on the card - it used to vanish from here, the
+          // one place the text about it sends the seller.
+          if (l.reportedSoldOut) _buildReportedStrip(l),
           // ── Time left before it goes offline ───────────────────────────────
           // Always shown (including "No expiry"), on the collapsed card:
           // a seller scanning their products must see each deadline
