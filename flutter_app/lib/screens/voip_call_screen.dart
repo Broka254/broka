@@ -74,6 +74,31 @@ class VoipCallScreen extends StatefulWidget {
   @visibleForTesting
   static void Function(WebRtcService service)? debugOnService;
 
+  /// What a finished call is recorded as - the definitions the server's
+  /// call history uses (calls.py CALL_OUTCOMES):
+  ///
+  ///  * completed: the WebRTC connection came up, however it ended;
+  ///  * failed_to_connect: it was answered, and never connected;
+  ///  * declined: the callee pressed Decline;
+  ///  * cancelled: the caller ended it before any answer;
+  ///  * missed: the callee's ring ran out.
+  ///
+  /// A call the callee had accepted was "completed" - so one that sat on
+  /// "Connecting…" and dropped (2026-11-13) went into the history as a call
+  /// that happened. Before that it was "missed", and the callee who had
+  /// pressed Accept was shown a missed call.
+  static String outcomeFor({
+    required bool everConnected,
+    required bool isCaller,
+    required bool answered,
+    required bool declinedByMe,
+  }) {
+    if (everConnected) return 'completed';
+    if (declinedByMe) return 'declined';
+    if (answered) return 'failed_to_connect';
+    return isCaller ? 'cancelled' : 'missed';
+  }
+
   @override
   State<VoipCallScreen> createState() => _VoipCallScreenState();
 }
@@ -133,6 +158,10 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   bool _setupCancelled = false;
   bool _svcReady = false;
   String _userId = '';
+  // The id the setup was sent under (ApiService.initiateCall): leaving
+  // before it lands cancels the call by it - the server may have placed it
+  // and be ringing their phone (2026-11-13).
+  String _clientCallId = '';
 
   CallState _callState = CallState.connecting;
   Duration  _duration  = Duration.zero;
@@ -213,6 +242,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     _callerRole  = args['callerRole']  as String? ?? 'buyer';
     _callType    = args['callType']    as String? ?? 'audio';
     final autoAccept = args['autoAccept'] as bool? ?? false;
+    _clientCallId = args['clientCallId'] as String? ?? '';
     _callToken = callToken;
     _userId = userId;
     unawaited(_resolvePeer());
@@ -374,6 +404,13 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     };
     _svc.onError = (msg) {
       if (mounted) setState(() => _errorMsg = msg);
+    };
+    _svc.onPushStatus = (status) {
+      // The server answered "sending" and the push to their phone failed
+      // after: the screen says, as it would have at once, that their phone
+      // rings only with BROKA open.
+      if (!mounted || !VoipCallScreen.noPushStatuses.contains(status)) return;
+      setState(() => _pushStatus = status);
     };
     _svc.onPeerRinging = () {
       if (!mounted) return;
@@ -600,26 +637,20 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     }));
   }
 
-  /// Logs the call's outcome once the call truly ends. "completed" if the
-  /// peers ever connected (regardless of who hung up first); otherwise
-  /// "declined" if the callee explicitly tapped Decline before connecting;
-  /// otherwise "cancelled" if I'm the caller (I'm the one ending it before
-  /// any answer - not the same as the callee failing to respond); otherwise
-  /// "missed" (I'm the callee and the ring simply ran out with no action
-  /// from me).
   void _logCallResultOnce() {
     if (!_svcReady) return; // instant-open screen closed before setup: nothing placed yet
     if (_resultLogged) return;
     if ((_listingId.isEmpty && _storeId.isEmpty) || _buyerId.isEmpty) return;
     _resultLogged = true;
-    // A call I accepted was answered, whether or not it then connected:
-    // it was logged as "missed", and the callee who had pressed Accept was
-    // shown a missed call (the server now records it the same way).
-    final outcome = (_everConnected || (!_isCaller && _accepted))
-        ? 'completed'
-        : (_declinedByMe
-            ? 'declined'
-            : (_isCaller ? 'cancelled' : 'missed'));
+    final connected = _everConnected || _svc.everConnected;
+    final outcome = VoipCallScreen.outcomeFor(
+      everConnected: connected,
+      isCaller: _isCaller,
+      // The caller knows they answered from the server (callee_answered) or
+      // their phone joining; the callee, from its own Accept.
+      answered: _isCaller ? (_calleeAnswered || _svc.peerJoined) : _accepted,
+      declinedByMe: _declinedByMe,
+    );
     // Fire-and-forget: don't block call teardown/navigation on this.
     ApiService.logCallResult(
       roomId:    _svc.roomId,
@@ -628,8 +659,11 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       buyerId:   _buyerId,
       outcome:   outcome,
       callerRole: _callerRole,
-      durationSecs: _everConnected ? _duration.inSeconds : null,
+      durationSecs: connected ? _duration.inSeconds : null,
       callType: _callType,
+      reason: outcome == 'failed_to_connect'
+          ? (_svc.failureReason ?? _svc.remoteEndReason ?? (_joinTimedOut ? 'join_timeout' : null))
+          : null,
     );
   }
 
@@ -729,7 +763,11 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     _slowToRingTimer?.cancel();
     _ringEndedSub?.cancel();
     _answerSub?.cancel();
-    if (_awaitingSetup) _setupCancelled = true;
+    if (_awaitingSetup) {
+      // Left (Back, or the app closing the screen) before the setup landed.
+      _setupCancelled = true;
+      _cancelSetupOnServer('screen_closed');
+    }
     final roomId = _svcReady ? _svc.roomId : '';
     RingtoneService.instance.stopFor(roomId);
     // A ringing notification put up when the app went behind another.
@@ -947,6 +985,8 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       case CallState.ended:
         if (_everConnected) return 'Call ended · $_durationLabel';
         if (_joinTimedOut) return "Couldn't connect";
+        // The other phone gave up on a connection that never came up.
+        if (_svc.remoteEndReason == 'failed') return "Couldn't connect";
         if (_svc.remoteEndReason == 'declined') return 'Call declined';
         if (_noAnswer || _svc.remoteEndReason == 'no_answer') return 'No answer';
         return 'Call ended';
@@ -979,6 +1019,9 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     }
     if (_callState == CallState.ended && _isCaller && _joinTimedOut) {
       return "They answered, but their phone couldn't join. Try calling again.";
+    }
+    if (_callState == CallState.ended && !_everConnected && _svc.remoteEndReason == 'failed') {
+      return "The call couldn't connect on their side. Try calling again.";
     }
     if (_overBeforeAnswer && _isOver) {
       return 'The call ended before you answered';
@@ -1414,13 +1457,24 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     _stopRingback();
     if (!_svcReady) {
       // Still waiting on POST /calls/initiate: cancel the setup and
-      // leave; _finishSetup records the call as cancelled if a room was
-      // created in the meantime.
+      // leave. The server may have placed the call already - their phone
+      // ringing - so it is cancelled by the setup's id now, not only once
+      // (if ever) the answer lands; _finishSetup still records the call as
+      // cancelled if a room comes back, for a server without cancel-setup.
       _setupCancelled = true;
+      _cancelSetupOnServer('user_hung_up');
       _closeOwnScreen();
       return;
     }
     _svc.hangup();
+  }
+
+  bool _setupCancelSent = false;
+
+  void _cancelSetupOnServer(String reason) {
+    if (_setupCancelSent || _clientCallId.isEmpty) return;
+    _setupCancelSent = true;
+    unawaited(ApiService.cancelCallSetup(_clientCallId, reason: reason));
   }
 
   /// Turn the camera on: a voice call becomes a video call (or, on a video

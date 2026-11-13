@@ -778,6 +778,7 @@ class _ThreadRow extends StatelessWidget {
         : switch (outcome) {
             'missed' || 'cancelled' => 'Missed call',
             'declined' => 'Call declined',
+            'failed_to_connect' => "Call didn't connect",
             'completed' => 'Call',
             _ => 'Call',
           };

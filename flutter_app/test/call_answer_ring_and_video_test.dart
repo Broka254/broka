@@ -264,13 +264,15 @@ void main() {
     testWidgets('a call I accepted is never logged as missed', (tester) async {
       // Accepted, then the call never connected (here: microphone refused).
       // It was logged "missed" - and the callee, who had pressed Accept,
-      // saw a missed call.
+      // saw a missed call. Nor is it "completed" (2026-11-13): it was
+      // answered and never connected.
       await open(tester, {'isCaller': false, 'autoAccept': true, 'callerRole': 'buyer'});
       await tester.pump(const Duration(seconds: 3));
       final logged = fakeRequests.where(
           (r) => r.method == 'POST' && r.uri.path == '/calls/log-result');
       expect(logged, hasLength(1));
-      expect((logged.single.json as Map)['outcome'], 'completed');
+      expect((logged.single.json as Map)['outcome'], 'failed_to_connect');
+      expect((logged.single.json as Map)['reason'], 'media_failed');
       await close(tester);
     });
 
