@@ -2503,7 +2503,11 @@ async def _signaling(
     last_activity = asyncio.get_running_loop().time()
     stale_after = WS_HEARTBEAT_INTERVAL_SECONDS * (WS_HEARTBEAT_MAX_MISSED + 1)
 
+    # Whether this socket has seen the call connected (the heartbeat below).
+    seen_up = session.ever_connected
+
     async def _heartbeat() -> None:
+        nonlocal seen_up
         while True:
             await asyncio.sleep(WS_HEARTBEAT_INTERVAL_SECONDS)
             idle = asyncio.get_running_loop().time() - last_activity
@@ -2532,7 +2536,15 @@ async def _signaling(
                 renewed = await call_state.renew_session(room_id)
             except Exception:
                 continue  # Redis unreachable: say nothing either way
-            if renewed is None or call_state.is_terminal(renewed.state):
+            if renewed is not None and renewed.ever_connected:
+                seen_up = True
+            # A call that has connected is never deleted - it ends as a
+            # terminal state kept for POST_CALL_GRACE_TTL_SECONDS, and its
+            # session is renewed for hours. Gone, it was lost (Redis
+            # restarted or evicted it), and its audio does not need the
+            # server: it is left up, as it always was.
+            gone = renewed is None and not seen_up
+            if gone or (renewed is not None and call_state.is_terminal(renewed.state)):
                 # The call is over - ended elsewhere, or out of time to be
                 # set up (an answered call whose caller never came: the
                 # session is not renewed for it, and lapses). Its phones are
@@ -2628,6 +2640,9 @@ async def _signaling(
             if msg_type == "state":
                 reported = msg.get("state")
                 if reported in ("connected", "disconnected", "failed"):
+                    if reported == "connected":
+                        seen_up = True
+                        await _leave_accepted(room_id)
                     updated = await call_state.update_state(room_id, CallState(reported))
                     logger.info("[calls] WEBRTC_%s room=%s user=%s",
                                 reported.upper(), room_id, uid)
@@ -2881,6 +2896,18 @@ async def _nobody_left(room_id: str, uid: str) -> None:
         await _hang_up_room(room_id, reason="cancelled")
     elif current_session and not call_state.is_terminal(current_session.state):
         await call_state.update_state(room_id, CallState.ended)
+
+
+async def _leave_accepted(room_id: str) -> None:
+    """A phone says the call is up while the server still has it `accepted`:
+    both joined, but the room-ready check missed it (two replicas' joins
+    crossing). `accepted` is never renewed (call_state._renewed_expiry), and
+    `accepted -> connected` is not a transition, so the call would lapse two
+    minutes after it was answered and the heartbeat would close it under
+    them. It goes through `connecting`, as a room that saw both join does."""
+    current = await call_state.get_session(room_id)
+    if current is not None and current.state == CallState.accepted:
+        await call_state.update_state(room_id, CallState.connecting)
 
 
 async def _standby_accepted(room_id: str, uid: str, connection_id: str,

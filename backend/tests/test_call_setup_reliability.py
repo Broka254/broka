@@ -482,6 +482,64 @@ async def test_a_call_under_way_is_not_closed_by_the_heartbeat(monkeypatch):
     await asyncio.wait_for(asyncio.gather(a_task, b_task), timeout=3)
 
 
+@pytest.mark.asyncio
+async def test_a_call_that_is_up_does_not_lapse_as_only_answered(monkeypatch):
+    """Both phones joined, but the room-ready check missed it (two
+    replicas' joins crossing), so the server still has the call `accepted`
+    - which is never renewed. A phone saying the call is up has to move it
+    on, or the call is closed under them once the setup window runs out."""
+    monkeypatch.setattr(calls, "WS_HEARTBEAT_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr(call_state, "ESTABLISHMENT_SESSION_TTL_SECONDS", 1)
+    monkeypatch.setattr(calls, "_joined", lambda peers, session: set())
+    room, caller, callee = await _ringing_call(ttl_seconds=1)
+    await call_state.mark_answered(room)
+    a, a_task = await _open(room, caller)
+    b, b_task = await _open(room, callee)
+    assert (await call_state.get_session(room)).state == CallState.accepted
+    a.say({"type": "state", "state": "connected"})
+    await asyncio.sleep(1.6)
+    assert a.closed is None and b.closed is None
+    session = await call_state.get_session(room)
+    assert session.state == CallState.connected and session.ever_connected
+    a.say({"type": "hangup"})
+    b.drop()
+    await asyncio.wait_for(asyncio.gather(a_task, b_task), timeout=3)
+
+
+@pytest.mark.asyncio
+async def test_a_call_that_is_up_survives_its_session_being_lost(monkeypatch):
+    """Redis restarting (or evicting the key) loses a session; the call's
+    audio does not need the server, and it is not closed for it."""
+    monkeypatch.setattr(calls, "WS_HEARTBEAT_INTERVAL_SECONDS", 0.05)
+    room, caller, callee = await _ringing_call()
+    a, a_task = await _open(room, caller)
+    b, b_task = await _open(room, callee)
+    a.say({"type": "state", "state": "connected"})
+    b.say({"type": "state", "state": "connected"})
+    await asyncio.sleep(0.05)
+    assert (await call_state.get_session(room)).ever_connected
+    await call_state.end_session(room)
+    await asyncio.sleep(0.4)
+    assert a.closed is None and b.closed is None
+    a.drop()
+    b.drop()
+    await asyncio.wait_for(asyncio.gather(a_task, b_task), timeout=3)
+
+
+@pytest.mark.asyncio
+async def test_a_call_that_never_connected_is_closed_once_its_session_is_gone(monkeypatch):
+    """With Redis, a lapsed setup window is the key expiring: gone, not
+    `expired` - the 2026-11-13 callee alone in the room."""
+    monkeypatch.setattr(calls, "WS_HEARTBEAT_INTERVAL_SECONDS", 0.05)
+    room, caller, callee = await _ringing_call()
+    await call_state.mark_answered(room)
+    ws, task = await _open(room, callee)
+    await call_state.end_session(room)
+    await _until(lambda: ws.closed is not None, timeout=3)
+    assert ws.closed[0] == 4004
+    await asyncio.wait_for(task, timeout=3)
+
+
 # ── What a call is recorded as ───────────────────────────────────────────────
 
 async def _log(client, uid, room, outcome, **extra):
