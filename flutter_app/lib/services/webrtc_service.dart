@@ -35,6 +35,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'api_service.dart';
+import 'call_diagnostics.dart';
 import '../core/errors/user_facing_error.dart';
 
 enum CallState {
@@ -123,16 +124,42 @@ class WebRtcService {
   final String roomId;
   final bool   isCaller;
   final String userId;
-  final String callToken; // short-lived, room-scoped - see GET /calls/turn-credentials's
-                           // sibling auth endpoints and _connectWs() below
+
+  /// Short-lived, room-scoped - see GET /calls/turn-credentials's sibling
+  /// auth endpoints and _connectWs() below. Renewed when a reconnect is
+  /// refused for it (4001): it lasts five minutes, and a socket that
+  /// dropped later in a call could otherwise never come back.
+  String get callToken => _callToken;
+  String _callToken;
 
   WebRtcService({
     required this.roomId,
     required this.isCaller,
     required this.userId,
-    required this.callToken,
+    required String callToken,
     String callType = 'audio',
-  }) : _callType = callType;
+  })  : _callToken = callToken,
+        _callType = callType,
+        diagnostics = CallDiagnostics(roomId: roomId, role: isCaller ? 'caller' : 'callee') {
+    diagnostics.sendOverSocket = _sendDiag;
+  }
+
+  /// This call's events for Render's logs (call_diagnostics.dart).
+  final CallDiagnostics diagnostics;
+
+  /// Why this call failed, when it did: no_offer, ice_failed, ice_timeout,
+  /// signaling_lost, peer_lost, media_failed... - for the screen's message
+  /// and the recorded outcome.
+  String? get failureReason => _failureReason;
+  String? _failureReason;
+
+  /// The WebRTC connection came up at least once.
+  bool get everConnected => _everConnected;
+  bool _everConnected = false;
+
+  /// Caller only: the server could not push the callee's phone after all
+  /// (`push_status`, sent when the push finished after /initiate answered).
+  ValueChanged<String>? onPushStatus;
 
   /// 'audio' | 'video'. A voice call becomes a video call when either side
   /// turns a camera on (upgradeToVideo, or the other side's picture
@@ -280,6 +307,80 @@ class WebRtcService {
   // flushed by _flushPendingIce() the moment the remote description lands.
   final List<RTCIceCandidate> _pendingIce = [];
   static const _maxPendingIce = 120;
+
+  // ── Candidates and the descriptions they belong to (2026-11-13) ─────────
+  // A candidate is only good for the ICE session (offer or answer) it was
+  // gathered for, and it was possible for it to arrive before that one:
+  //
+  //  * here, candidates went out as soon as they were gathered - between
+  //    setLocalDescription and the description itself being sent. For an
+  //    ICE restart, a re-offer after a ringing phone changed, or an answer,
+  //    the other phone could then receive them first and add them to the
+  //    description it still had, where they were refused and lost. The
+  //    relay candidate - the one carrier-grade NAT needs - is gathered last
+  //    and often was the one lost, so a restart meant to rescue a call
+  //    could not.
+  //  * there, a candidate arriving while setRemoteDescription was still
+  //    running was added at once against the old description.
+  //
+  // Now a description's candidates are held until it has been sent
+  // (_holdLocalIce), and a received candidate waits while a description is
+  // being applied (_applyingRemote) or when it names an ICE session other
+  // than the one applied (_remoteUfrag) - it is for a description still on
+  // its way.
+  bool _holdLocalIce = false;
+  bool _applyingRemote = false;
+  String? _remoteUfrag;
+  // This phone's candidates for its current description, sent once: again
+  // after a signalling reconnect, since any trickled while a socket was
+  // down are gone.
+  final List<String> _sentLocalIce = [];
+
+  // ── What the phone sees, for the logs (call_diagnostics.dart) ───────────
+  String _wsState = 'none';
+  String _iceGatheringName = 'new';
+  String _iceConnectionName = 'new';
+  String _pcStateName = 'new';
+  String _path = '-';
+  bool _everOpenedSocket = false;
+  int? _socketReportedEpoch;
+  bool _turnConfigured = false;
+  StreamSubscription<dynamic>? _wsSub;
+  bool _tokenRefreshTried = false;
+
+  // ── A connection that never came up (2026-11-13) ────────────────────────
+  // An ICE failure before the call ever connected ended it at once, with no
+  // second try - often the relay's credentials had not come in time, or
+  // the first path chosen died. The caller now restarts ICE once, with
+  // fresh TURN credentials, before giving up; the callee waits for that.
+  int _initialRestarts = 0;
+  static const _maxInitialRestarts = 1;
+  static const _restartWindow = Duration(seconds: 20);
+  // The callee gives the caller - who drives restarts - longer than the
+  // caller's own budget before it gives up on a connection itself.
+  static const _calleeExtraWait = Duration(seconds: 25);
+  bool _establishmentExtended = false;
+  Timer? _restartWaitTimer;
+  static const _restartWait = Duration(seconds: 12);
+  bool _restartWaited = false;
+  // Candidates gathered for the current local description, by type.
+  final Map<String, int> _roundGathered = {};
+
+  /// "RTCIceConnectionState.RTCIceConnectionStateChecking" -> "checking".
+  static String _stateName(Object state, String prefix) =>
+      state.toString().split('.').last.replaceFirst(prefix, '').toLowerCase();
+
+  /// What each side could be reached by - the first thing to read on a
+  /// connection that failed: no relay on either side on mobile data is
+  /// a call that cannot connect.
+  Map<String, Object?> _iceCounts() => {
+        'host': _roundGathered['host'] ?? 0,
+        'srflx': _roundGathered['srflx'] ?? 0,
+        'relay': _roundGathered['relay'] ?? 0,
+        'received_relay': diagnostics.received['relay'] ?? 0,
+        'count': diagnostics.received.values.fold<int>(0, (a, b) => a + b),
+        'turn': _turnConfigured,
+      };
 
   CallState get state    => _state;
   bool get muted         => _muted;
@@ -486,6 +587,37 @@ class WebRtcService {
   @visibleForTesting
   String? get debugPeerId => _peerId;
 
+  // ── Events for the logs ───────────────────────────────────────────────────
+
+  /// The states every event carries (call_diagnostics.dart).
+  Map<String, Object?> _states() => {
+        'call_state': _state.name,
+        'ws': _wsState,
+        'ice_gathering': _iceGatheringName,
+        'ice': _iceConnectionName,
+        'pc': _pcStateName,
+        'path': _path,
+      };
+
+  /// One event: to Render over the call's socket (or queued for it), and
+  /// to logcat as it always was.
+  void _event(String name, {String? reason, Object? error,
+      Map<String, Object?> extra = const {}, bool terminal = false}) {
+    final e = diagnostics.record(name, _states(),
+        reason: reason, error: error, extra: extra, terminal: terminal);
+    debugPrint('WebRTC: $name room=$roomId role=${diagnostics.role} '
+        'state=${_state.name} ws=$_wsState ice=$_iceConnectionName pc=$_pcStateName'
+        '${reason != null ? ' reason=$reason' : ''}'
+        '${e['error'] != null ? ' error=${e['error']}' : ''}');
+  }
+
+  bool _sendDiag(Map<String, dynamic> frame) {
+    final ws = _ws;
+    if (ws == null || _wsState != 'open') return false;
+    ws.sink.add(jsonEncode(frame));
+    return true;
+  }
+
   // ── Public API ────────────────────────────────────────────────────────────
 
   /// What the call needs from the network, fetched ahead of start() - the
@@ -542,27 +674,30 @@ class WebRtcService {
         return;
       }
       _pc = pc;
-      debugPrint('WebRTC: STANDBY_JOINING room=$roomId peer=$_peerId');
+      _event('PRECONNECT_STARTED', extra: {'peer': _peerId, 'standby': true});
       await _connectWs(ringing: true);
     } catch (e) {
       debugPrint('WebRTC: could not wait in the call while it rings: $e');
-      if (gen == _generation) _abandonPreconnect();
+      if (gen == _generation) _abandonPreconnect(reason: 'standby_failed', error: e);
     }
   }
 
   /// Back to the old way: the ringing socket and its connection go, and
   /// Accept joins the call as it did before. No state change - the phone
   /// is still ringing.
-  void _abandonPreconnect() {
+  void _abandonPreconnect({String reason = 'standby_closed', Object? error}) {
     if (!_standby) return;
-    debugPrint('WebRTC: STANDBY_ABANDONED room=$roomId - answering the old way');
+    _event('PRECONNECT_ABANDONED', reason: reason, error: error);
     _standby = false;
     _peerId = null;
     // The socket's own close must not read as a dropped call to reconnect.
     _wsEpoch++;
     _wsWatchdogTimer?.cancel();
+    _wsState = 'none';
     final ws = _ws;
     _ws = null;
+    unawaited(_wsSub?.cancel());
+    _wsSub = null;
     try { ws?.sink.close(); } catch (_) {}
     _pcGen++;
     final pc = _pc;
@@ -577,6 +712,14 @@ class WebRtcService {
     _transportUp = false;
     _pcState = null;
     _heldRemoteTracks.clear();
+    _holdLocalIce = false;
+    _applyingRemote = false;
+    _remoteUfrag = null;
+    _sentLocalIce.clear();
+    _localIceBeforePeer.clear();
+    _iceGatheringName = 'new';
+    _iceConnectionName = 'new';
+    _pcStateName = 'new';
     // The old way connects after Accept: nothing of it is held.
     _holdRemote = false;
   }
@@ -589,8 +732,10 @@ class WebRtcService {
     _connectingStartedAt = DateTime.now();
     _standby = false;
     _attachingMedia = true;
-    debugPrint('WebRTC: CALL_ACCEPTED room=$roomId role=callee (negotiated while it rang)');
     _setState(CallState.connecting);
+    _event('CALL_ACCEPTED', extra: {
+      'standby': true, 'answered': _remoteDescriptionSet, 'connected': _transportUp,
+    });
     try {
       _ws?.sink.add(jsonEncode({'type': 'accept', 'room_id': roomId}));
     } catch (e) {
@@ -601,22 +746,25 @@ class WebRtcService {
       debugPrint('WebRTC: LOCAL_MEDIA_REQUESTED room=$roomId');
       await _initMedia();
       if (gen != _generation) return;
-      debugPrint('WebRTC: LOCAL_MEDIA_READY room=$roomId');
+      _event('LOCAL_MEDIA_READY');
       onLocalMediaReady?.call();
       await _attachMicrophone();
       if (gen != _generation) return;
       _attachingMedia = false;
       _releaseRemoteMedia();
       if (_transportUp) {
+        _event('PRECONNECT_USED', extra: {'connected': true});
         _onPeerConnected();
       } else {
         // Negotiated, or about to be: the connection comes up on its own,
-        // within the connect timeout `ringing` arms.
+        // within the connect timeout `ringing` arms - and with no offer in
+        // yet (the caller is not in the room), that timeout is the
+        // no-offer one: nobody waits on an empty room.
         _setState(CallState.ringing);
       }
     } catch (e) {
       _attachingMedia = false;
-      if (gen == _generation) _fail('Could not start call: $e');
+      if (gen == _generation) _fail('Could not start call: $e', code: 'media_failed', error: e);
     }
   }
 
@@ -690,8 +838,8 @@ class WebRtcService {
     }
     final gen = _generation;
     _connectingStartedAt = DateTime.now();
-    debugPrint('WebRTC: ${isCaller ? "CALL_INITIATED" : "CALL_ACCEPTED"} room=$roomId role=${isCaller ? "caller" : "callee"} type=$callType');
     _setState(CallState.connecting);
+    _event(isCaller ? 'CALL_INITIATED' : 'CALL_ACCEPTED', extra: {'video': isVideo});
     // The relay credentials come over the network while the microphone
     // opens, not after it.
     final iceConfig = _iceConfigFuture ?? _fetchIceConfiguration();
@@ -712,9 +860,14 @@ class WebRtcService {
         _renderersReady = true;
       }
       debugPrint('WebRTC: LOCAL_MEDIA_REQUESTED room=$roomId');
-      await _initMedia();
+      try {
+        await _initMedia();
+      } catch (e) {
+        if (gen == _generation) _fail('Could not start call: $e', code: 'media_failed', error: e);
+        return;
+      }
       if (gen != _generation) return;
-      debugPrint('WebRTC: LOCAL_MEDIA_READY room=$roomId');
+      _event('LOCAL_MEDIA_READY');
       onLocalMediaReady?.call();
       await _createPc(await iceConfig);
       if (gen != _generation) return;
@@ -741,10 +894,18 @@ class WebRtcService {
         final earlyId = _offerIdBeforePc;
         _offerBeforePc = null;
         _offerIdBeforePc = null;
-        if (early != null) _queueOffer(early, isRestart: false, offerId: earlyId);
+        if (early != null) {
+          _queueOffer(early, isRestart: false, offerId: earlyId);
+        } else if (_state == CallState.connecting) {
+          // Answered, the microphone open, and no offer yet. It used to
+          // wait here with no timer at all: a callee who answered a call
+          // whose caller had gone (2026-11-13) sat on "Connecting…" until
+          // someone hung up. The offer has this long to come.
+          _armConnectTimeout();
+        }
       }
     } catch (e) {
-      if (gen == _generation) _fail('Could not start call: $e');
+      if (gen == _generation) _fail('Could not start call: $e', code: 'setup_failed', error: e);
     }
   }
 
@@ -767,6 +928,16 @@ class WebRtcService {
     // Not from a phone still ringing: it hasn't joined the call, and the
     // server only closes its socket on it - a decline is recorded through
     // POST /calls/log-result, which tells the caller.
+    if (_state != CallState.ended && _state != CallState.failed) {
+      _event('CALL_ENDED', reason: 'local_hangup', terminal: true, extra: {
+        'connected': _everConnected, 'standby': _standby,
+        'duration_s': _everConnected ? _duration.inSeconds : null,
+      });
+    }
+    // The server closes this socket as soon as it has the hangup - inside
+    // the beat below - and that close is the call ending, not a drop to
+    // reconnect from.
+    _endingLocally = true;
     if (!_standby) {
       try {
         _ws?.sink.add(jsonEncode({'type': 'hangup', 'room_id': roomId}));
@@ -945,6 +1116,7 @@ class WebRtcService {
           {'offerToReceiveAudio': true, 'offerToReceiveVideo': true});
       if (gen != _generation || _pc == null) return;
       final tuned = _tuneSdp(offer);
+      _beginLocalDescription();
       await _pc!.setLocalDescription(tuned);
       _lastLocalOffer = tuned;
       _awaitingRestartAnswer = true;
@@ -953,12 +1125,32 @@ class WebRtcService {
         'type': 'offer', 'room_id': roomId, 'sdp': tuned.sdp,
         'restart': true, 'renegotiate': true,
       }));
+      _descriptionSent();
       debugPrint('WebRTC: RENEGOTIATION_OFFER_SENT room=$roomId');
     } catch (e, st) {
       // The call goes on as it was: a camera that couldn't be added is no
       // reason to end it.
+      _holdLocalIce = false;
       debugPrint('WebRTC: renegotiation failed: $e\n$st');
     }
+  }
+
+  /// A new local description is about to be set: its candidates wait until
+  /// it has been sent (see _holdLocalIce), and the last one's are done with.
+  void _beginLocalDescription() {
+    _holdLocalIce = true;
+    _sentLocalIce.clear();
+    _roundGathered.clear();
+    // Held for a description this one replaces (never sent - the socket
+    // was down): they belong to an ICE session that is over.
+    _localIceBeforePeer.clear();
+  }
+
+  /// The local description just went to the other phone: its candidates
+  /// follow it.
+  void _descriptionSent() {
+    _holdLocalIce = false;
+    _flushLocalIce();
   }
 
   Future<void> _disposeStream(MediaStream stream) async {
@@ -1019,24 +1211,31 @@ class WebRtcService {
     // phone negotiated while ringing, for the server's `ready`.
     final peer = _peerId;
     final uri = Uri.parse('$base/calls/ws/$roomId${ringing ? '/ringing' : ''}'
-        '?token=$callToken${peer == null ? '' : '&peer=$peer'}');
+        '?token=$_callToken${peer == null ? '' : '&peer=$peer'}');
 
     // Retire the previous socket explicitly before standing up a new one.
     // Bumping the epoch is what makes the old subscription's callbacks
     // inert (see _wsEpoch); closing it releases the native socket instead
-    // of leaving it dangling until GC.
+    // of leaving it dangling until GC. Its subscription goes too, so
+    // nothing of the old socket outlives it.
     final previous = _ws;
     final epoch = ++_wsEpoch;
+    unawaited(_wsSub?.cancel());
+    _wsSub = null;
     if (previous != null) {
       try { previous.sink.close(); } catch (_) {}
     }
 
     final ws = _openSocket(uri);
     _ws = ws;
-    ws.stream.listen(
+    // Open only once the server has said something on it (_onSignal):
+    // WebSocketChannel.connect is lazy, and a socket refused at the
+    // handshake looks writable until then.
+    _wsState = 'connecting';
+    _wsSub = ws.stream.listen(
       (raw) => _onSignal(raw, epoch),
       onError: (e) { if (epoch == _wsEpoch) _onWsDisrupted('Signal error: $e'); },
-      onDone:  ()  { if (epoch == _wsEpoch) _onWsClosed(ws.closeCode); },
+      onDone:  ()  { if (epoch == _wsEpoch) _onWsClosed(ws.closeCode, ws.closeReason); },
     );
 
     // Announce presence. The server doesn't read this (it authenticates
@@ -1080,6 +1279,18 @@ class WebRtcService {
   void _onSignal(dynamic raw, [int? epoch]) {
     if (epoch != null && epoch != _wsEpoch) return; // superseded socket
     _armWsWatchdog();
+    if (epoch != null && _wsState != 'open') {
+      // The first frame the server sent on this socket: it is up end to
+      // end. What waited for a socket goes now.
+      _wsState = 'open';
+      _tokenRefreshTried = false;
+      final again = _everOpenedSocket;
+      _everOpenedSocket = true;
+      _socketReportedEpoch = null;
+      _event(again ? 'WEBSOCKET_RECONNECTED' : 'WEBSOCKET_CONNECTED',
+          extra: {'epoch': epoch, 'standby': _standby, 'attempt': _reconnectAttempts});
+      diagnostics.flushOverSocket();
+    }
     if (_reconnectAttempts != 0) {
       // Proof the current socket is live end to end (see _connectWs).
       debugPrint('WebRTC: WEBSOCKET_CONFIRMED_LIVE room=$roomId');
@@ -1128,11 +1339,24 @@ class WebRtcService {
           if (isVideo && !_videoEnabled) _sendVideoState();
           if (isCaller) {
             unawaited(_onCallerReady(m['peer'] as String?));
-          } else if (_lastLocalAnswer != null) {
-            // Callee side: we already answered once - resend in case it
-            // never reached the caller before signaling dropped.
-            _resendAnswer();
+          } else {
+            _event('PEER_JOINED', extra: {'answered': _lastLocalAnswer != null});
+            if (_state == CallState.connected) _reportWebRtcState('connected');
+            // Not while an offer is being answered: that answer, and its
+            // candidates, go when it is made.
+            if (_lastLocalAnswer != null && _offersInHand == 0) {
+              // Callee side: we already answered once - resend in case it
+              // never reached the caller before signaling dropped, and the
+              // candidates that followed it.
+              _resendAnswer();
+              _resendLocalIce();
+            }
           }
+          break;
+        case 'push_status':
+          // Server-authored: the push to their phone finished after the
+          // call was placed - and could not be delivered.
+          if (isCaller) onPushStatus?.call(m['status'] as String? ?? '');
           break;
         case 'ringing_ready':
           // Server-authored: a phone of the callee's is in the room while
@@ -1189,18 +1413,23 @@ class WebRtcService {
           }
           break;
         case 'hangup':
-          // Now genuinely only sent when somebody deliberately ended the
-          // call (the peer's own hangup, or the server relaying a decline
-          // or deciding nobody answered).
+          // Somebody ended the call - deliberately (the peer's own hangup,
+          // the server relaying a decline or deciding nobody answered), or
+          // because their connection never came up (`failed`, 2026-11-13:
+          // the other side used to wait on "Connecting…" for it).
           remoteEndReason = m['reason'] as String?;
-          debugPrint('WebRTC: CALL_ENDED room=$roomId reason=${remoteEndReason ?? 'remote_hangup'}');
+          _event('CALL_ENDED', reason: 'remote_${remoteEndReason ?? 'hangup'}',
+              terminal: true, extra: {
+                'connected': _everConnected, 'standby': _standby,
+                'duration_s': _everConnected ? _duration.inSeconds : null,
+              });
           _cleanup();
           _setState(CallState.ended);
           break;
         case 'busy':
           // Turned away while it rings: the old way, on Accept.
           if (_standby) {
-            _abandonPreconnect();
+            _abandonPreconnect(reason: 'busy');
             break;
           }
           if (_reconnectAttempts > 0 && _reconnectAttempts < _maxReconnectAttempts) {
@@ -1212,16 +1441,14 @@ class WebRtcService {
             _scheduleReconnect();
             break;
           }
-          _cleanup();
-          _setState(CallState.failed);
-          onError?.call('Other party is busy');
+          _fail('Other party is busy', code: 'busy');
           break;
         case 'error':
           if (_standby) {
-            _abandonPreconnect();
+            _abandonPreconnect(reason: 'signaling_error');
             break;
           }
-          _fail(m['message'] as String? ?? 'Unknown signaling error');
+          _fail(m['message'] as String? ?? 'Unknown signaling error', code: 'signaling_error');
           break;
       }
     } catch (e) {
@@ -1240,8 +1467,7 @@ class WebRtcService {
     if (_state == CallState.ended || _state == CallState.failed) return;
     if (_peerSignalingDown) return;
     _peerSignalingDown = true;
-    debugPrint('WebRTC: PEER_SIGNALING_LOST room=$roomId - holding for '
-        '${_peerRecoveryTimeout.inSeconds}s');
+    _event('PEER_SIGNALING_LOST', extra: {'ms': _peerRecoveryTimeout.inMilliseconds});
     // Only surface this in the UI if media is ALSO down. If we're still
     // `connected`, the call is genuinely fine and saying "Reconnecting…"
     // would be a lie that alarms the user for no reason.
@@ -1259,7 +1485,7 @@ class WebRtcService {
         debugPrint('WebRTC: peer signaling still down but media healthy - continuing');
         return;
       }
-      _fail('The other person lost connection');
+      _fail('The other person lost connection', code: 'peer_lost');
     });
   }
 
@@ -1268,7 +1494,7 @@ class WebRtcService {
     _peerSignalingDown = false;
     _peerRecoveryTimer?.cancel();
     _peerRecoveryTimer = null;
-    debugPrint('WebRTC: PEER_SIGNALING_RESTORED room=$roomId');
+    _event('PEER_SIGNALING_RESTORED');
   }
 
   /// The server's close code for "this call is over" (api/routers/calls.py:
@@ -1283,13 +1509,23 @@ class WebRtcService {
   /// phone counted as on a call meanwhile. A call that did connect keeps
   /// the old rule: media can outlive its signalling, so it is not ended on
   /// the server's word about the session alone.
-  void _onWsClosed(int? code) {
+  /// The server's close code for "your call token is not (or no longer)
+  /// good" (api/routers/calls.py: "Unauthorized").
+  static const int unauthorizedCloseCode = 4001;
+
+  // Set by hangup(): the socket closing now is this phone's own doing.
+  bool _endingLocally = false;
+
+  void _onWsClosed(int? code, [String? closeReason]) {
+    if (_endingLocally) return;
+    _reportSocketDown(code: code, closeReason: closeReason);
     final neverConnected = _state == CallState.idle ||
         _state == CallState.connecting || _state == CallState.calling ||
         _state == CallState.ringing;
     if (code == callOverCloseCode && neverConnected) {
-      debugPrint('WebRTC: CALL_ENDED room=$roomId reason=call_over (closed by server)');
       remoteEndReason = 'call_over';
+      _event('CALL_ENDED', reason: 'call_over', terminal: true,
+          extra: {'code': code, 'standby': _standby});
       _cleanup();
       _setState(CallState.ended);
       return;
@@ -1298,11 +1534,45 @@ class WebRtcService {
     // ringing), replaced by another phone of theirs (4009), or dropped.
     // Not reconnected - Accept takes the old way.
     if (_standby) {
-      debugPrint('WebRTC: STANDBY_CLOSED room=$roomId code=$code');
-      _abandonPreconnect();
+      _abandonPreconnect(reason: 'standby_closed_$code');
+      return;
+    }
+    if (code == unauthorizedCloseCode && !_tokenRefreshTried &&
+        _state != CallState.ended && _state != CallState.failed) {
+      // The call token ran out (five minutes): a reconnect late in a call
+      // was refused with it for good. One fresh token, then on as before.
+      _tokenRefreshTried = true;
+      unawaited(_reconnectWithFreshToken());
       return;
     }
     _onWsDisrupted(null);
+  }
+
+  Future<void> _reconnectWithFreshToken() async {
+    final gen = _generation;
+    final fresh = await ApiService.refreshCallToken(roomId);
+    if (gen != _generation) return;
+    if (fresh == null) {
+      _onWsDisrupted('Call token could not be renewed');
+      return;
+    }
+    _callToken = fresh;
+    _event('WEBSOCKET_TOKEN_REFRESHED');
+    _scheduleReconnect();
+  }
+
+  /// One WEBSOCKET_DISCONNECTED per socket, however it went (an error, then
+  /// its close).
+  void _reportSocketDown({int? code, String? closeReason, String? error}) {
+    if (_socketReportedEpoch == _wsEpoch) return;
+    _socketReportedEpoch = _wsEpoch;
+    final was = _wsState;
+    _wsState = 'closed';
+    _event('WEBSOCKET_DISCONNECTED',
+        reason: error != null ? 'error' : (was == 'open' ? 'closed' : 'refused_or_unreachable'),
+        error: error,
+        extra: {'code': code, 'close_reason': cleanDiagnosticText(closeReason, max: 60),
+                'epoch': _wsEpoch, 'standby': _standby});
   }
 
   /// The signalling socket closing with [code], as if the server had - for
@@ -1315,10 +1585,10 @@ class WebRtcService {
   /// nothing to reconnect for; otherwise try bounded, backed-off
   /// reconnection before giving up on the call.
   void _onWsDisrupted(String? errorMsg) {
-    debugPrint('WebRTC: ${errorMsg != null ? "WEBSOCKET_ERROR" : "WEBSOCKET_DISCONNECTED"} room=$roomId ${errorMsg ?? ""}');
-    if (_state == CallState.ended || _state == CallState.failed) return;
+    if (_state == CallState.ended || _state == CallState.failed || _endingLocally) return;
+    _reportSocketDown(error: errorMsg);
     if (_standby) {
-      _abandonPreconnect();
+      _abandonPreconnect(reason: 'standby_disrupted');
       return;
     }
     if (_reconnectAttempts >= _maxReconnectAttempts) {
@@ -1332,7 +1602,7 @@ class WebRtcService {
         debugPrint('WebRTC: signaling exhausted but media is up - keeping the call');
         return;
       }
-      _fail(errorMsg ?? 'Connection lost - could not reconnect');
+      _fail(errorMsg ?? 'Connection lost - could not reconnect', code: 'signaling_lost');
       return;
     }
     _scheduleReconnect();
@@ -1347,16 +1617,19 @@ class WebRtcService {
     final baseMs   = 1000 * (1 << (_reconnectAttempts - 1));
     final jitterMs = (baseMs * 0.3 * (Random().nextDouble() * 2 - 1)).round();
     final delay    = Duration(milliseconds: (baseMs + jitterMs).clamp(500, 30000));
-    debugPrint('WebRTC: WS disrupted, reconnect attempt '
-        '$_reconnectAttempts/$_maxReconnectAttempts in ${delay.inMilliseconds}ms');
+    _wsState = 'reconnecting';
+    _event('WEBSOCKET_RECONNECT_SCHEDULED', extra: {
+      'attempt': _reconnectAttempts, 'max_attempts': _maxReconnectAttempts,
+      'ms': delay.inMilliseconds,
+    });
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(delay, () async {
       if (gen != _generation) return;
       if (_state == CallState.ended || _state == CallState.failed) return;
       try {
         await _connectWs();
-      } catch (_) {
-        if (gen == _generation) _onWsDisrupted('Reconnect failed');
+      } catch (e) {
+        if (gen == _generation) _onWsDisrupted('Reconnect failed: $e');
       }
     });
     // NOTE on "room full" during reconnect: the backend caps a room at two
@@ -1391,17 +1664,24 @@ class WebRtcService {
     });
   }
 
-  Future<void> _attemptIceRestart() async {
+  /// [initial]: the connection never came up, and this is its one second
+  /// try (see _initialRestarts) - not a recovery of a call that was up.
+  Future<void> _attemptIceRestart({bool initial = false}) async {
     if (_iceRestartInProgress) return; // never run two restarts concurrently
     if (_pc == null) return;
-    if (_iceRestartAttempts >= _maxIceRestartAttempts) {
-      _fail('Connection could not recover after $_maxIceRestartAttempts attempt(s)');
+    if (!initial && _iceRestartAttempts >= _maxIceRestartAttempts) {
+      _fail('Connection could not recover after $_maxIceRestartAttempts attempt(s)',
+          code: 'restart_failed');
       return;
     }
     _iceRestartInProgress = true;
-    _iceRestartAttempts++;
+    if (!initial) _iceRestartAttempts++;
     final gen = _generation;
-    debugPrint('WebRTC: ICE_RESTART_STARTED room=$roomId attempt=$_iceRestartAttempts/$_maxIceRestartAttempts');
+    _event('ICE_RESTART_STARTED', reason: initial ? 'never_connected' : 'connection_lost', extra: {
+      'attempt': initial ? _initialRestarts : _iceRestartAttempts,
+      'max_attempts': initial ? _maxInitialRestarts : _maxIceRestartAttempts,
+      'turn': _turnConfigured,
+    });
     try {
       // Refresh TURN credentials first if they're at or near expiry (Phase
       // 7) - restarting ICE with an expired TURN username/credential would
@@ -1445,6 +1725,8 @@ class WebRtcService {
             debugPrint('WebRTC: TURN refresh unavailable - keeping existing ICE config');
           } else if (gen == _generation && _pc != null) {
             await _pc!.setConfiguration(freshConfig);
+            _pcConfig = freshConfig;
+            _turnConfigured = true;
             debugPrint('WebRTC: ICE_CONFIG_REFRESHED room=$roomId');
           }
         } catch (e) {
@@ -1464,29 +1746,49 @@ class WebRtcService {
             {'iceRestart': true, 'offerToReceiveAudio': true, 'offerToReceiveVideo': isVideo});
         if (gen != _generation || _pc == null) return;
         final tuned = _tuneSdp(offer);
+        _beginLocalDescription();
         await _pc!.setLocalDescription(tuned);
         _lastLocalOffer = tuned;
         // Tells _handleAnswer that the next answer is a legitimate
         // renegotiation, not a replayed duplicate to be discarded.
         _awaitingRestartAnswer = true;
+        _event('SDP_OFFER_CREATED', extra: {'restart': true, ...sdpDirections(tuned.sdp)});
         if (gen != _generation || _ws == null) return;
         _ws!.sink.add(jsonEncode({
           'type': 'offer', 'room_id': roomId, 'sdp': tuned.sdp, 'restart': true,
         }));
-        debugPrint('WebRTC: ICE_RESTART_OFFER_SENT room=$roomId');
+        _descriptionSent();
+        _event('SDP_OFFER_SENT', extra: {'restart': true});
       }
       // If we're still in `recovering` after another grace period (the
       // restart offer went out but negotiation hasn't completed, or -
       // callee side - no restart offer has arrived yet), arm another
       // grace window; onConnectionState's connected case resets
       // _iceRestartAttempts and cancels this the moment it actually works.
-      _armDisconnectGraceTimer();
+      // Not for a connection that never came up: the connect timeout,
+      // extended for this try, decides that one.
+      if (!initial) _armDisconnectGraceTimer();
     } catch (e, st) {
+      _holdLocalIce = false;
       debugPrint('WebRTC: ICE restart failed: $e\n$st');
-      if (gen == _generation) _fail('Could not restart the connection: $e');
+      if (gen == _generation) _fail('Could not restart the connection: $e', code: 'restart_failed', error: e);
     } finally {
       _iceRestartInProgress = false;
     }
+  }
+
+  /// Caller: one more try at a connection that never came up - ICE
+  /// restarted with fresh relay credentials. Only once there is something
+  /// to restart (their answer is in) and a socket to send it on.
+  bool get _canRestartBeforeConnect =>
+      isCaller && !_everConnected && _initialRestarts < _maxInitialRestarts &&
+      _pc != null && _ws != null && _remoteDescriptionSet && !_preconnecting;
+
+  void _restartBeforeConnect(String why) {
+    _initialRestarts++;
+    debugPrint('WebRTC: restarting ICE before the call ever connected ($why)');
+    _armConnectTimeout(_restartWindow);
+    unawaited(_attemptIceRestart(initial: true));
   }
 
   // ── SDP exchange ──────────────────────────────────────────────────────────
@@ -1516,19 +1818,20 @@ class WebRtcService {
     try {
       final pc = _pc;
       if (pc == null) return null;
-      debugPrint('WebRTC: OFFER_CREATED room=$roomId');
       final offer = await pc.createOffer(
           {'offerToReceiveAudio': true, 'offerToReceiveVideo': isVideo});
       if (gen != _generation || pcGen != _pcGen) return null;
       final tuned = _tuneSdp(offer);
       // Starts ICE gathering: the candidates that come of it wait in
-      // _localIceBeforePeer until the callee is in the room.
+      // _localIceBeforePeer until the callee is in the room and this offer
+      // has gone to it.
+      _beginLocalDescription();
       await pc.setLocalDescription(tuned);
       if (gen != _generation || pcGen != _pcGen) return null;
       _lastLocalOffer = tuned; // cache for resend - see 'ready' handler in _onSignal
       // The answer to this offer names it; one naming another is stale.
       _offerId = '${++_offerSeq}-${Random().nextInt(0x7fffffff).toRadixString(36)}';
-      debugPrint('WebRTC: OFFER_SET_LOCAL room=$roomId');
+      _event('SDP_OFFER_CREATED', extra: {'offer_id': _offerId, ...sdpDirections(tuned.sdp)});
       return tuned;
     } catch (e, st) {
       // FORENSIC FIX (kept from _sendOffer): a failure in createOffer() or
@@ -1536,6 +1839,8 @@ class WebRtcService {
       // error - must be caught and logged, never left an unhandled Future
       // rejection (which surfaced as "the app closes"). Delivery makes one
       // more attempt, then fails the call cleanly.
+      if (pcGen == _pcGen) _holdLocalIce = false;
+      _event('SDP_FAILED', reason: 'offer_failed', error: e);
       debugPrint('WebRTC: offer failed: $e\n$st');
       return null;
     }
@@ -1564,7 +1869,7 @@ class WebRtcService {
         _holdMedia(false);
         return;
       }
-      _fail('Could not create call offer');
+      _fail('Could not create call offer', code: 'offer_failed');
       return;
     }
     if (_ws == null || _remoteDescriptionSet) return;
@@ -1573,9 +1878,12 @@ class WebRtcService {
         'type': 'offer', 'room_id': roomId, 'sdp': offer.sdp,
         if (_offerId != null) 'offer_id': _offerId,
       }));
-      debugPrint('WebRTC: OFFER_SENT room=$roomId'
-          '${_standbyPeer != null && !_calleeJoined ? ' (to their phone, still ringing)' : ''}');
-      _flushLocalIce();
+      final held = _localIceBeforePeer.length;
+      _descriptionSent();
+      _event('SDP_OFFER_SENT', extra: {
+        'offer_id': _offerId, 'count': held,
+        'standby': _standbyPeer != null && !_calleeJoined,
+      });
     } catch (e) {
       // The socket is going down; the reconnect's 'ready' sends it again.
       debugPrint('WebRTC: could not send offer: $e');
@@ -1604,7 +1912,7 @@ class WebRtcService {
     _standbyPeer = peer;
     _holdMedia(true);
     _peerInRoom = true;
-    debugPrint('WebRTC: PRECONNECT_STARTED room=$roomId peer=$peer');
+    _event('PRECONNECT_STARTED', extra: {'peer': peer});
     unawaited(_deliverOffer());
   }
 
@@ -1612,7 +1920,7 @@ class WebRtcService {
   /// negotiated with it goes too; it, or another, answers the old way.
   void _onRingingLeft(String? peer) {
     if (_calleeJoined || peer == null || peer != _standbyPeer) return;
-    debugPrint('WebRTC: PRECONNECT_LEFT room=$roomId peer=$peer');
+    _event('PRECONNECT_ABANDONED', reason: 'ringing_phone_left', extra: {'peer': peer});
     unawaited(_resetPreconnect(peerStillHere: false));
   }
 
@@ -1634,16 +1942,23 @@ class WebRtcService {
     // it is no longer ringing.
     if (first && _state == CallState.calling) _armConnectTimeout();
     if (first) onPeerJoined?.call();
+    _event('PEER_JOINED', extra: {
+      'peer': peer, 'standby': _standbyPeer != null, 'answered': _remoteDescriptionSet,
+      'reconnects': first ? null : _reconnectAttempts,
+    });
+    // Back after a drop with the call up: the server hears it again, in
+    // case that word was lost with the old socket.
+    if (!first && _state == CallState.connected) _reportWebRtcState('connected');
     final negotiatedWith = _standbyPeer;
     _standbyPeer = null;
     _holdMedia(false);
     if (negotiatedWith != null && peer != negotiatedWith) {
-      debugPrint('WebRTC: PRECONNECT_UNUSED room=$roomId - answered by '
-          '${peer == null ? 'a phone that joined afresh' : 'another phone'}');
+      _event('PRECONNECT_ABANDONED',
+          reason: peer == null ? 'answered_afresh' : 'answered_on_another_phone');
       await _resetPreconnect(peerStillHere: true);
       if (gen != _generation) return;
     } else if (negotiatedWith != null && _remoteDescriptionSet) {
-      debugPrint('WebRTC: PRECONNECT_USED room=$roomId transport=${_transportUp ? 'up' : _pcState}');
+      _event('PRECONNECT_USED', extra: {'connected': _transportUp});
       if (_transportUp) {
         _onPeerConnected();
       } else if (_pcState == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
@@ -1657,8 +1972,11 @@ class WebRtcService {
       // The offer - made while their phone rang, or now - and the
       // candidates gathered for it. Again after a signalling reconnect, if
       // the callee never answered (most likely it never reached them): the
-      // SAME sdp, never a fresh one.
-      unawaited(_deliverOffer());
+      // SAME sdp, never a fresh one - and its candidates again, since the
+      // ones trickled meanwhile went down with the old socket.
+      unawaited(_deliverOffer().then((_) {
+        if (!first && gen == _generation) _resendLocalIce();
+      }));
     } else if (_awaitingRestartAnswer && _lastLocalOffer != null) {
       // A restart or a camera being added was offered and its answer
       // never came back - lost with the socket that just reconnected.
@@ -1666,10 +1984,14 @@ class WebRtcService {
         'type': 'offer', 'room_id': roomId, 'sdp': _lastLocalOffer!.sdp,
         'restart': true,
       }));
-      debugPrint('WebRTC: RESTART_OFFER_SENT room=$roomId (resend after reconnect)');
+      _descriptionSent();
+      _resendLocalIce();
+      _event('SDP_OFFER_SENT', extra: {'restart': true, 'reconnects': _reconnectAttempts});
+    } else if (!first) {
+      // Negotiated before the drop; the candidates may not have all made
+      // it across.
+      _resendLocalIce();
     }
-    // else: negotiation finished before this 'ready' arrived (e.g. a
-    // late-arriving duplicate); nothing to resend.
   }
 
   /// Caller: a new peer connection, and a new offer made on it, in place of
@@ -1693,6 +2015,10 @@ class WebRtcService {
       _awaitingRestartAnswer = false;
       _pendingIce.clear();
       _localIceBeforePeer.clear();
+      _sentLocalIce.clear();
+      _holdLocalIce = false;
+      _remoteUfrag = null;
+      _applyingRemote = false;
       _peerInRoom = peerStillHere;
       _pcGen++;
       final old = _pc;
@@ -1722,6 +2048,9 @@ class WebRtcService {
         'type': 'answer', 'room_id': roomId, 'sdp': answer.sdp,
         if (_answeredOfferId != null) 'offer_id': _answeredOfferId,
       }));
+      // An answer that never went (the socket was down as it was made):
+      // its candidates were held for it, and follow it now.
+      _descriptionSent();
       debugPrint('WebRTC: ANSWER_SENT room=$roomId (resend)');
     } catch (_) {}
   }
@@ -1733,15 +2062,31 @@ class WebRtcService {
   bool _peerInRoom = false;
 
   void _flushLocalIce() {
+    if (_holdLocalIce || (isCaller && !_peerInRoom)) return;
     if (_localIceBeforePeer.isEmpty) return;
     final held = List<String>.from(_localIceBeforePeer);
     _localIceBeforePeer.clear();
     for (final frame in held) {
+      _sentLocalIce.add(frame);
       try {
         _ws?.sink.add(frame);
       } catch (_) {}
     }
-    debugPrint('WebRTC: ICE_CANDIDATES_SENT_AFTER_OFFER room=$roomId count=${held.length}');
+    debugPrint('WebRTC: ICE_CANDIDATES_SENT_AFTER_DESCRIPTION room=$roomId count=${held.length}');
+  }
+
+  /// Signalling is back after a drop: this phone's candidates go again -
+  /// any trickled while a socket was down never arrived. Duplicates are
+  /// ignored by the other side's ICE agent.
+  void _resendLocalIce() {
+    _flushLocalIce();
+    if (_holdLocalIce || _sentLocalIce.isEmpty) return;
+    for (final frame in _sentLocalIce) {
+      try {
+        _ws?.sink.add(frame);
+      } catch (_) {}
+    }
+    debugPrint('WebRTC: ICE_CANDIDATES_RESENT room=$roomId count=${_sentLocalIce.length}');
   }
 
   // Callee: an offer that arrived before the peer connection existed (the
@@ -1815,27 +2160,40 @@ class WebRtcService {
         // reconnects, not through a state change here.
         _setState(CallState.ringing);
       }
-      debugPrint('WebRTC: ${isRestart ? "ICE_RESTART_OFFER_RECEIVED" : "OFFER_RECEIVED"} room=$roomId'
-          '${whileRinging ? ' (while ringing)' : ''}');
-      await pc.setRemoteDescription(RTCSessionDescription(sdp, 'offer'));
-      debugPrint('WebRTC: REMOTE_DESCRIPTION_SET room=$roomId (offer)');
+      // The caller's second try at a connection that failed: no longer
+      // waiting for it.
+      if (isRestart) _restartWaitTimer?.cancel();
+      _event('SDP_OFFER_RECEIVED', extra: {
+        'restart': isRestart, 'offer_id': offerId, 'standby': whileRinging, ...sdpDirections(sdp),
+      });
+      // Candidates that arrive while it is applied wait for it (_addIce).
+      _applyingRemote = true;
+      try {
+        await pc.setRemoteDescription(RTCSessionDescription(sdp, 'offer'));
+      } finally {
+        if (pcGen == _pcGen) _applyingRemote = false;
+      }
       if (stale()) return;
       _remoteDescriptionSet = true;
+      _remoteUfrag = sdpIceUfrag(sdp);
       if (!isRestart) await _answerWithMicrophoneSlot(pc);
       if (stale()) return;
       final answer = await pc.createAnswer(
           {'offerToReceiveAudio': true, 'offerToReceiveVideo': isVideo});
-      debugPrint('WebRTC: ANSWER_CREATED room=$roomId');
       if (stale()) return;
       final tunedAnswer = _tuneSdp(answer);
+      _beginLocalDescription();
       await pc.setLocalDescription(tunedAnswer);
       if (stale()) return;
       _lastLocalAnswer = tunedAnswer; // cache for resend - see 'ready' handler in _onSignal
       if (!isRestart) _answeredOfferId = offerId;
-      debugPrint('WebRTC: ANSWER_SET_LOCAL room=$roomId');
+      _event('SDP_ANSWER_CREATED', extra: {
+        'restart': isRestart, 'offer_id': offerId, ...sdpDirections(tunedAnswer.sdp),
+      });
       // The answer goes first: the caller can do nothing until it has it.
-      // The candidates it sent ahead, and the video bitrate cap, follow -
-      // they used to hold the answer back by a platform round trip each.
+      // Its candidates follow it (held until now - _holdLocalIce), then the
+      // caller's that came ahead of it, and the video bitrate cap - those
+      // used to hold the answer back by a platform round trip each.
       _ws?.sink.add(jsonEncode({
         'type': 'answer', 'room_id': roomId, 'sdp': tunedAnswer.sdp,
         // Echo the flag back so the offerer can tell this answer apart from
@@ -1843,7 +2201,9 @@ class WebRtcService {
         if (isRestart) 'restart': true,
         if (!isRestart && offerId != null) 'offer_id': offerId,
       }));
-      debugPrint('WebRTC: ANSWER_SENT room=$roomId');
+      final held = _localIceBeforePeer.length;
+      _descriptionSent();
+      _event('SDP_ANSWER_SENT', extra: {'restart': isRestart, 'offer_id': offerId, 'count': held});
       await _flushPendingIce();
       if (stale()) return;
       // Negotiation is complete on this side, so the sender now has real
@@ -1852,12 +2212,14 @@ class WebRtcService {
     } catch (e, st) {
       // Same fix as _makeOffer() above - see that method's comment.
       if (!stale()) {
+        _holdLocalIce = false;
         debugPrint('WebRTC: _handleOffer failed: $e\n$st');
+        _event('SDP_FAILED', reason: 'answer_failed', error: e, extra: {'restart': isRestart});
         if (_standby) {
           // While it rings: Accept answers the old way.
-          _abandonPreconnect();
+          _abandonPreconnect(reason: 'answer_failed', error: e);
         } else {
-          _fail('Could not answer the call: $e');
+          _fail('Could not answer the call: $e', code: 'answer_failed', error: e);
         }
       }
     }
@@ -1900,7 +2262,14 @@ class WebRtcService {
     _answeredOfferId = null;
     _transportUp = false;
     _pcState = null;
-    _pendingIce.clear();
+    // Not the queued candidates: the caller's new connection may have sent
+    // some ahead of this offer. They name its ICE session and are added
+    // once it is applied; the old connection's never match (_flushPendingIce).
+    _remoteUfrag = null;
+    _applyingRemote = false;
+    _holdLocalIce = false;
+    _sentLocalIce.clear();
+    _localIceBeforePeer.clear();
     _heldRemoteTracks.clear();
     try { await old?.close(); } catch (_) {}
     if (gen != _generation) return false;
@@ -1935,11 +2304,19 @@ class WebRtcService {
     if (pc == null) return;
     final pcGen = _pcGen;
     try {
-      debugPrint('WebRTC: ${restartAnswer ? "ICE_RESTART_ANSWER_RECEIVED" : "ANSWER_RECEIVED"} room=$roomId');
-      await pc.setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
-      debugPrint('WebRTC: REMOTE_DESCRIPTION_SET room=$roomId (answer)');
+      _event('SDP_ANSWER_RECEIVED', extra: {
+        'restart': restartAnswer, 'offer_id': offerId, ...sdpDirections(sdp),
+      });
+      // Candidates that arrive while it is applied wait for it (_addIce).
+      _applyingRemote = true;
+      try {
+        await pc.setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
+      } finally {
+        if (pcGen == _pcGen) _applyingRemote = false;
+      }
       if (gen != _generation || pcGen != _pcGen) return;
       _remoteDescriptionSet = true;
+      _remoteUfrag = sdpIceUfrag(sdp);
       _awaitingRestartAnswer = false;
       await _flushPendingIce();
       if (gen != _generation || pcGen != _pcGen) return;
@@ -1957,7 +2334,9 @@ class WebRtcService {
       // carries on on its replacement.
       if (gen == _generation && pcGen == _pcGen) {
         debugPrint('WebRTC: _handleAnswer failed: $e\n$st');
-        _fail('Could not complete the call connection: $e');
+        _event('SDP_FAILED', reason: 'remote_answer_failed', error: e,
+            extra: {'restart': restartAnswer});
+        _fail('Could not complete the call connection: $e', code: 'answer_failed', error: e);
       }
     }
   }
@@ -1974,13 +2353,21 @@ class WebRtcService {
       debugPrint('WebRTC: malformed ICE candidate payload: $e');
       return;
     }
-    debugPrint('WebRTC: ICE_CANDIDATE_RECEIVED room=$roomId');
-    if (!_remoteDescriptionSet || _pc == null) {
+    final info = CandidateInfo.parse(candidate.candidate);
+    diagnostics.countReceived(info.type);
+    // Named for an ICE session other than the one applied: a description
+    // still on its way (a restart, a new offer) - see _holdLocalIce.
+    final forAnother = _forAnotherSession(info);
+    final queue = !_remoteDescriptionSet || _pc == null || _applyingRemote || forAnother;
+    _event('ICE_CANDIDATE_RECEIVED', extra: {
+      'candidate_type': info.type, 'protocol': info.protocol, 'queued': queue,
+      if (forAnother) 'stale': true,
+    });
+    if (queue) {
       // Candidates can legitimately arrive before the offer/answer that
       // establishes the remote description, depending on network timing -
       // queue instead of calling addCandidate() too early, which throws.
       // Flushed by _flushPendingIce() once the remote description lands.
-      debugPrint('WebRTC: ICE_CANDIDATE_QUEUED room=$roomId');
       // Bounded: if a remote description never arrives (a peer that joined
       // and then vanished mid-negotiation), this queue would otherwise grow
       // for as long as the peer keeps trickling candidates. Dropping the
@@ -1994,6 +2381,9 @@ class WebRtcService {
     }
     _addIceNow(candidate);
   }
+
+  bool _forAnotherSession(CandidateInfo info) =>
+      info.ufrag != null && _remoteUfrag != null && info.ufrag != _remoteUfrag;
 
   Future<void> _addIceNow(RTCIceCandidate candidate) async {
     try {
@@ -2010,7 +2400,8 @@ class WebRtcService {
     } catch (e) {
       // Recorded, not silently swallowed (Section 9) - deliberately logs
       // only the exception, never the candidate/SDP content itself.
-      debugPrint('WebRTC: failed to add ICE candidate: $e');
+      _event('ICE_CANDIDATE_FAILED', error: e,
+          extra: {'candidate_type': CandidateInfo.parse(candidate.candidate).type});
     }
   }
 
@@ -2018,10 +2409,17 @@ class WebRtcService {
     if (_pendingIce.isEmpty) return;
     final queued = List<RTCIceCandidate>.from(_pendingIce);
     _pendingIce.clear();
+    var added = 0;
     for (final c in queued) {
+      if (_forAnotherSession(CandidateInfo.parse(c.candidate))) {
+        // Not this description's: kept for the one it names.
+        _pendingIce.add(c);
+        continue;
+      }
       await _addIceNow(c);
+      added++;
     }
-    debugPrint('WebRTC: ICE_CANDIDATES_FLUSHED room=$roomId count=${queued.length}');
+    debugPrint('WebRTC: ICE_CANDIDATES_FLUSHED room=$roomId count=$added kept=${_pendingIce.length}');
   }
 
   // ── SDP tuning (bandwidth efficiency) ─────────────────────────────────────
@@ -2155,15 +2553,26 @@ class WebRtcService {
   bool _iceConfigIsFallback = false;
 
   Future<Map<String, dynamic>> _fetchIceConfiguration() async {
-    Map<String, dynamic>? creds;
+    _event('TURN_CREDENTIAL_REQUEST');
+    final started = DateTime.now();
+    TurnCredentialsResult result;
     try {
       // With this call's own token: no access token, so no renewal first.
-      creds = await ApiService.getTurnCredentials(roomId: roomId, callToken: callToken);
-    } catch (_) {}
+      result = await ApiService.fetchTurnCredentials(roomId: roomId, callToken: _callToken);
+    } catch (e) {
+      result = TurnCredentialsResult(null, 'error: ${e.runtimeType}');
+    }
+    final ms = DateTime.now().difference(started).inMilliseconds;
+    final creds = result.data;
     final iceServers = creds?['ice_servers'];
     if (creds == null || iceServers is! List || iceServers.isEmpty) {
-      debugPrint('WebRTC: TURN credentials unavailable, using STUN-only ICE');
+      // STUN only: on carrier-grade NAT - most Kenyan mobile data - that
+      // usually means no connection at all. Said, so a call that then
+      // fails says why (2026-11-13: it said nothing).
       _iceConfigIsFallback = true;
+      _event('TURN_CREDENTIAL_FAILURE',
+          reason: creds == null ? (result.failure ?? 'unknown') : 'no_ice_servers',
+          extra: {'ms': ms});
       return _fallbackIceConfig;
     }
     _iceConfigIsFallback = false;
@@ -2171,11 +2580,38 @@ class WebRtcService {
     if (expiresIn is int) {
       _iceCredentialsExpireAt = DateTime.now().add(Duration(seconds: expiresIn));
     }
+    final turnUrls = <String>[
+      for (final s in iceServers)
+        if (s is Map)
+          for (final u in (s['urls'] is List ? s['urls'] as List : [s['urls']]))
+            if (u is String && (u.startsWith('turn:') || u.startsWith('turns:'))) u,
+    ];
+    _event('TURN_CREDENTIAL_RECEIVED', extra: {
+      'turn_urls': turnUrls.length,
+      'udp': turnUrls.any((u) => u.contains('transport=udp')),
+      'tcp': turnUrls.any((u) => u.startsWith('turn:') && u.contains('transport=tcp')),
+      'tls': turnUrls.any((u) => u.startsWith('turns:')),
+      'ttl_s': expiresIn is int ? expiresIn : null,
+      'ms': ms,
+    });
     return {
       'iceServers': iceServers,
       'sdpSemantics': 'unified-plan',
       ..._transportPolicy,
     };
+  }
+
+  static bool _hasTurn(Map<String, dynamic> config) {
+    final servers = config['iceServers'];
+    if (servers is! List) return false;
+    for (final s in servers) {
+      if (s is! Map) continue;
+      final urls = s['urls'];
+      for (final u in (urls is List ? urls : [urls])) {
+        if (u is String && (u.startsWith('turn:') || u.startsWith('turns:'))) return true;
+      }
+    }
+    return false;
   }
 
   Future<void> _createPc(Map<String, dynamic> iceConfig) async {
@@ -2189,6 +2625,10 @@ class WebRtcService {
     final gen = _generation;
     final pcGen = ++_pcGen;
     _pcConfig = iceConfig;
+    _turnConfigured = _hasTurn(iceConfig);
+    _iceGatheringName = 'new';
+    _iceConnectionName = 'new';
+    _pcStateName = 'new';
     bool stale() => gen != _generation || pcGen != _pcGen;
     // Published as _pc only once its tracks and handlers are in place: the
     // callee's socket is open while this runs (start), and an offer handled
@@ -2227,6 +2667,9 @@ class WebRtcService {
       if (stale()) return;
       if (c.candidate == null) return;
       try {
+        final info = CandidateInfo.parse(c.candidate);
+        diagnostics.countGathered(info.type);
+        _roundGathered[info.type ?? 'unknown'] = (_roundGathered[info.type ?? 'unknown'] ?? 0) + 1;
         final frame = jsonEncode({
           'type': 'ice', 'room_id': roomId,
           'candidate': {
@@ -2235,13 +2678,18 @@ class WebRtcService {
             'sdpMLineIndex': c.sdpMLineIndex,
           },
         });
-        if (isCaller && !_peerInRoom) {
-          // Gathered while their phone rings: nobody to relay it to yet.
+        // Gathered while their phone rings (nobody to relay it to yet), or
+        // before the description it belongs to has gone (_holdLocalIce).
+        final hold = (isCaller && !_peerInRoom) || _holdLocalIce;
+        _event('ICE_CANDIDATE_GATHERED', extra: {
+          'candidate_type': info.type, 'protocol': info.protocol, 'held': hold,
+        });
+        if (hold) {
           _localIceBeforePeer.add(frame);
           return;
         }
+        _sentLocalIce.add(frame);
         _ws?.sink.add(frame);
-        debugPrint('WebRTC: ICE_CANDIDATE_SENT room=$roomId');
       } catch (e) {
         debugPrint('WebRTC: failed to send local ICE candidate: $e');
       }
@@ -2253,8 +2701,8 @@ class WebRtcService {
     pc.onConnectionState = (s) {
       if (stale()) return; // stale callback from a torn-down call or connection
       try {
-        debugPrint('WebRTC: PEER_CONNECTION_STATE room=$roomId state=$s');
         _pcState = s;
+        _pcStateName = _stateName(s, 'RTCPeerConnectionState');
         switch (s) {
           case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
             _transportUp = true;
@@ -2262,7 +2710,7 @@ class WebRtcService {
               // Up while their phone rings, or while this one's microphone
               // opens: put through once it is answered (_onCallerReady,
               // _startPreconnected) - not now, and nothing told the server.
-              debugPrint('WebRTC: PRECONNECTED room=$roomId (held until answered)');
+              _event('WEBRTC_CONNECTED', extra: {'held': true});
               break;
             }
             _onPeerConnected();
@@ -2272,21 +2720,43 @@ class WebRtcService {
             if (_preconnecting) {
               // Failed while it rang: not the call failing - nobody has
               // answered. Accept takes the old way.
-              debugPrint('WebRTC: PRECONNECT_FAILED room=$roomId');
+              _event('WEBRTC_FAILED', reason: 'preconnect_failed', extra: _iceCounts());
               if (isCaller) {
                 unawaited(_resetPreconnect(peerStillHere: false));
               } else if (_standby) {
-                _abandonPreconnect();
+                _abandonPreconnect(reason: 'preconnect_failed');
               } else {
                 // Accepted, the microphone still opening: the call failed.
                 _reportWebRtcState('failed');
-                _fail('WebRTC connection failed');
+                _fail('WebRTC connection failed', code: 'ice_failed');
               }
               break;
             }
-            debugPrint('WebRTC: CALL_FAILED room=$roomId reason=peer_connection_failed');
+            if (!_everConnected) {
+              if (_canRestartBeforeConnect) {
+                // The connection never came up: one more try, ICE
+                // restarted with fresh relay credentials.
+                _event('WEBRTC_FAILED', reason: 'ice_failed_retrying', extra: _iceCounts());
+                _restartBeforeConnect('ice_failed');
+                break;
+              }
+              if (!isCaller && !_restartWaited && _ws != null) {
+                // The caller drives that second try: wait for its restart
+                // offer a moment before giving up.
+                _restartWaited = true;
+                _event('WEBRTC_FAILED', reason: 'ice_failed_waiting_for_restart', extra: _iceCounts());
+                _restartWaitTimer?.cancel();
+                _restartWaitTimer = Timer(_restartWait, () {
+                  if (gen != _generation || _everConnected) return;
+                  if (_state == CallState.ended || _state == CallState.failed) return;
+                  _reportWebRtcState('failed');
+                  _fail('WebRTC connection failed', code: 'ice_failed');
+                });
+                break;
+              }
+            }
             _reportWebRtcState('failed');
-            _fail('WebRTC connection failed');
+            _fail('WebRTC connection failed', code: _everConnected ? 'connection_lost' : 'ice_failed');
             break;
           case RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
             _transportUp = false;
@@ -2299,7 +2769,7 @@ class WebRtcService {
               // expires.
               _reportWebRtcState('disconnected');
               _setState(CallState.recovering);
-              debugPrint('WebRTC: entering recovery grace period (${_disconnectGracePeriod.inSeconds}s)');
+              _event('WEBRTC_DISCONNECTED', extra: {'ms': _disconnectGracePeriod.inMilliseconds});
               _armDisconnectGraceTimer();
             }
             break;
@@ -2323,11 +2793,32 @@ class WebRtcService {
     // 10 call out explicitly.
     pc.onIceGatheringState = (s) {
       if (stale()) return;
-      debugPrint('WebRTC: ICE_GATHERING_STATE room=$roomId state=$s');
+      _iceGatheringName = _stateName(s, 'RTCIceGatheringState');
+      if (s != RTCIceGatheringState.RTCIceGatheringStateComplete) return;
+      // What this phone could offer to be reached by. No relay candidate
+      // with TURN configured is the relay itself failing - wrong or
+      // expired credentials, or TURN blocked on this network.
+      final relays = _roundGathered['relay'] ?? 0;
+      _event('ICE_GATHERING_COMPLETE', extra: {
+        'host': _roundGathered['host'] ?? 0, 'srflx': _roundGathered['srflx'] ?? 0,
+        'relay': relays, 'prflx': _roundGathered['prflx'] ?? 0, 'turn': _turnConfigured,
+      });
+      if (_turnConfigured && relays == 0) _event('TURN_NO_RELAY_CANDIDATES');
     };
     pc.onIceConnectionState = (s) {
       if (stale()) return;
-      debugPrint('WebRTC: ICE_CONNECTION_STATE room=$roomId state=$s');
+      _iceConnectionName = _stateName(s, 'RTCIceConnectionState');
+      final name = switch (s) {
+        RTCIceConnectionState.RTCIceConnectionStateChecking => 'ICE_CONNECTION_CHECKING',
+        RTCIceConnectionState.RTCIceConnectionStateConnected => 'ICE_CONNECTION_CONNECTED',
+        RTCIceConnectionState.RTCIceConnectionStateCompleted => 'ICE_CONNECTION_COMPLETED',
+        RTCIceConnectionState.RTCIceConnectionStateFailed => 'ICE_CONNECTION_FAILED',
+        RTCIceConnectionState.RTCIceConnectionStateDisconnected => 'ICE_CONNECTION_DISCONNECTED',
+        RTCIceConnectionState.RTCIceConnectionStateClosed => 'ICE_CONNECTION_CLOSED',
+        _ => null,
+      };
+      if (name == null) return;
+      _event(name, extra: name == 'ICE_CONNECTION_FAILED' ? _iceCounts() : const {});
     };
     pc.onSignalingState = (s) {
       if (stale()) return;
@@ -2373,10 +2864,25 @@ class WebRtcService {
     if (_state == CallState.connected) return;
     _disconnectGraceTimer?.cancel();
     _disconnectGraceTimer = null;
+    _restartWaitTimer?.cancel();
+    final recovered = _everConnected;
+    final restarts = _iceRestartAttempts;
     _iceRestartAttempts = 0; // reset - this is either the first connect or a successful recovery
     _setState(CallState.connected);
     if (_state != CallState.connected) return; // refused (the call is over)
-    debugPrint('WebRTC: CALL_CONNECTED room=$roomId');
+    _everConnected = true;
+    // Connected means the peer connection says so - never the signalling
+    // having crossed (2026-11-13: SDP and ICE were relayed, and nothing
+    // ever connected).
+    _event('WEBRTC_CONNECTED', extra: {
+      'elapsed_ms': recovered || _connectingStartedAt == null
+          ? null
+          : DateTime.now().difference(_connectingStartedAt!).inMilliseconds,
+      'recovered': recovered,
+      'ice_restarts': recovered ? restarts : _initialRestarts,
+      'reconnects': _reconnectAttempts,
+      'turn': _turnConfigured,
+    });
     _startTimer();
     _startQualitySampling();
     onRemoteStreamConnected?.call();
@@ -2675,36 +3181,61 @@ class WebRtcService {
     String path = 'unknown';
     try {
       final stats = await _pc!.getStats();
+      // report.values comes back as Map<dynamic, dynamic> from
+      // flutter_webrtc - converted, since every key is a stats field name.
+      Map<String, dynamic>? byId(Object? id) {
+        if (id == null) return null;
+        for (final report in stats) {
+          if (report.id == id) return Map<String, dynamic>.from(report.values);
+        }
+        return null;
+      }
+
+      // The transport names the pair in use; older stacks only mark it
+      // nominated (or "selected") and succeeded.
       Map<String, dynamic>? selectedPair;
       for (final report in stats) {
-        final v = report.values;
-        if (report.type == 'candidate-pair' &&
-            v['state'] == 'succeeded' &&
-            (v['nominated'] == true || v['selected'] == true)) {
-          // report.values comes back as Map<dynamic, dynamic> from
-          // flutter_webrtc - not assignable to Map<String, dynamic>?
-          // without an explicit conversion, even though every key here is
-          // always a String (a WebRTC stats field name).
-          selectedPair = Map<String, dynamic>.from(v);
-          break;
+        if (report.type == 'transport') {
+          selectedPair = byId(report.values['selectedCandidatePairId']);
+          if (selectedPair != null) break;
         }
       }
-      final localId = selectedPair?['localCandidateId'];
-      if (localId != null) {
+      if (selectedPair == null) {
         for (final report in stats) {
-          if (report.id == localId && report.type == 'local-candidate') {
-            final candidateType = report.values['candidateType'] as String?;
-            if (candidateType == 'relay') {
-              path = 'turn';
-            } else if (candidateType == 'srflx' || candidateType == 'prflx') {
-              path = 'stun';
-            } else if (candidateType == 'host') {
-              path = 'direct';
-            }
+          final v = report.values;
+          if (report.type == 'candidate-pair' &&
+              v['state'] == 'succeeded' &&
+              (v['nominated'] == true || v['selected'] == true)) {
+            selectedPair = Map<String, dynamic>.from(v);
             break;
           }
         }
       }
+      final local = byId(selectedPair?['localCandidateId']);
+      final remote = byId(selectedPair?['remoteCandidateId']);
+      final localType = local?['candidateType'] as String?;
+      final remoteType = remote?['candidateType'] as String?;
+      if (localType == 'relay') {
+        path = 'turn';
+      } else if (localType == 'srflx' || localType == 'prflx') {
+        path = 'stun';
+      } else if (localType == 'host') {
+        path = 'direct';
+      }
+      // host | srflx | relay, as the logs name it: relayed if either side is.
+      _path = (localType == 'relay' || remoteType == 'relay')
+          ? 'relay'
+          : (localType == 'srflx' || localType == 'prflx' ||
+                  remoteType == 'srflx' || remoteType == 'prflx')
+              ? 'srflx'
+              : (localType == 'host' ? 'host' : '-');
+      final rtt = selectedPair?['currentRoundTripTime'];
+      _event('ICE_CANDIDATE_PAIR_SELECTED', extra: {
+        'local_type': localType, 'remote_type': remoteType,
+        'local_protocol': local?['protocol'], 'remote_protocol': remote?['protocol'],
+        'relay_protocol': local?['relayProtocol'],
+        'rtt_ms': rtt is num ? (rtt * 1000).round() : null,
+      });
     } catch (e) {
       // Never crashes the call over a diagnostics-only failure - see
       // Section 9's "don't silently swallow, but don't let it break
@@ -2851,6 +3382,16 @@ class WebRtcService {
     _wsWatchdogTimer?.cancel();
     _peerRecoveryTimer?.cancel();
     _qualityTimer?.cancel();
+    _restartWaitTimer?.cancel();
+    final sub = _wsSub;
+    _wsSub = null;
+    unawaited(sub?.cancel());
+    _wsState = 'closed';
+    // What never reached Render over the socket - it was down, or the call
+    // ended as it happened - goes in one post, now, with the token the
+    // call has (the server takes it a while after it expires).
+    final unsent = diagnostics.takeUnsent();
+    if (unsent.isNotEmpty) unawaited(ApiService.postCallEvents(roomId, _callToken, unsent));
     // Detach the renderers from the streams BEFORE those streams are
     // stopped and disposed. flutter_webrtc's native side can crash if a
     // renderer is still holding a track that's been torn down underneath
@@ -2895,6 +3436,10 @@ class WebRtcService {
     _transportUp = false;
     _pcState = null;
     _localIceBeforePeer.clear();
+    _sentLocalIce.clear();
+    _holdLocalIce = false;
+    _applyingRemote = false;
+    _remoteUfrag = null;
     _renegotiationQueued = false;
     _pendingIce.clear();
     _peerSignalingDown = false;
@@ -2929,7 +3474,8 @@ class WebRtcService {
     // from there 30s really is a stuck negotiation. The no-answer window is
     // the call screen's (and the server's). Since 2026-11-09 an offer can go
     // to a phone still ringing: the clock starts at `ready`, when the
-    // callee has joined (_onCallerReady), not at the offer.
+    // callee has joined (_onCallerReady), not at the offer. The callee's
+    // `connecting` is armed by start() once its microphone is open.
     if (s == CallState.ringing || (s == CallState.calling && _calleeJoined)) {
       _armConnectTimeout();
     } else {
@@ -2938,16 +3484,54 @@ class WebRtcService {
     onStateChange?.call(s);
   }
 
-  void _armConnectTimeout() {
+  void _armConnectTimeout([Duration? after]) {
     _connectTimeoutTimer?.cancel();
-    _connectTimeoutTimer = Timer(_connectTimeout, () {
-      // Distinct failure reason from the VoIP screen's own 45s "nobody
-      // answered" ring timeout - this fires only once SDP exchange has
-      // actually started (calling/ringing) and then stalled.
-      if (_state == CallState.calling || _state == CallState.ringing) {
-        _fail('Call timed out while connecting');
-      }
+    final gen = _generation;
+    _connectTimeoutTimer = Timer(after ?? _connectTimeout, () {
+      if (gen == _generation) _onConnectTimeout();
     });
+  }
+
+  /// The connection did not come up in time. Distinct from the VoIP
+  /// screen's own "nobody answered" ring timeout: this runs only once the
+  /// call has been answered - and each side gives up on its own terms:
+  ///
+  ///  * callee with no offer at all: the caller is not in the room - it
+  ///    gave up before it could join, or never got the room (2026-11-13).
+  ///    Nothing is coming; it ends now, saying so.
+  ///  * callee with an offer: the caller drives the connection's second
+  ///    try (an ICE restart), so the callee waits that much longer, once.
+  ///  * caller: one ICE restart with fresh relay credentials, then it ends.
+  void _onConnectTimeout() {
+    final waiting = _state == CallState.calling || _state == CallState.ringing ||
+        (_state == CallState.connecting && !isCaller);
+    if (!waiting) return;
+    if (!isCaller) {
+      if (!_remoteDescriptionSet) {
+        _event('CALL_TIMEOUT', reason: 'no_offer');
+        _fail("The caller couldn't connect. Try calling them back.", code: 'no_offer');
+        return;
+      }
+      if (!_establishmentExtended) {
+        _establishmentExtended = true;
+        _armConnectTimeout(_calleeExtraWait);
+        return;
+      }
+      _event('CALL_TIMEOUT', reason: 'ice_timeout', extra: _iceCounts());
+      _fail("The call couldn't connect. Check your connection and try again.", code: 'ice_timeout');
+      return;
+    }
+    if (!_remoteDescriptionSet) {
+      _event('CALL_TIMEOUT', reason: 'no_answer_sdp');
+      _fail("Their phone couldn't join the call. Try again.", code: 'no_answer_sdp');
+      return;
+    }
+    if (_canRestartBeforeConnect) {
+      _restartBeforeConnect('connect_timeout');
+      return;
+    }
+    _event('CALL_TIMEOUT', reason: 'ice_timeout', extra: _iceCounts());
+    _fail("The call couldn't connect. Check your connection and try again.", code: 'ice_timeout');
   }
 
   void _disarmConnectTimeout() {
@@ -2955,8 +3539,33 @@ class WebRtcService {
     _connectTimeoutTimer = null;
   }
 
-  void _fail(String msg) {
-    debugPrint('WebRTC: CALL_FAILED room=$roomId reason=$msg');
+  // The failures that are the connection's, as WEBRTC_FAILED.
+  static const _connectionFailures = {
+    'ice_failed', 'ice_timeout', 'connection_lost', 'restart_failed',
+  };
+
+  /// The call failed: the other phone is told (it used to be left on
+  /// "Connecting…" until its own timeout), the logs are told why, and the
+  /// screen gets a sentence a person can act on. [code] is the reason in
+  /// one word, for the recorded outcome and the logs.
+  void _fail(String msg, {String code = 'failed', Object? error}) {
+    if (_state == CallState.ended || _state == CallState.failed) return;
+    _failureReason ??= code;
+    final reported = error ?? (msg == code ? null : msg);
+    if (_connectionFailures.contains(code)) {
+      _event('WEBRTC_FAILED', reason: code, error: reported, extra: _iceCounts(), terminal: true);
+    }
+    _event('CALL_ENDED', reason: code, error: reported, terminal: true, extra: {
+      'connected': _everConnected, 'outcome': 'failed',
+      'ice_restarts': _initialRestarts + _iceRestartAttempts, 'reconnects': _reconnectAttempts,
+    });
+    if (!_standby) {
+      try {
+        _ws?.sink.add(jsonEncode({
+          'type': 'hangup', 'room_id': roomId, 'reason': 'failed', 'detail': code,
+        }));
+      } catch (_) {}
+    }
     _cleanup();
     _setState(CallState.failed);
     // [msg] can carry the exception that ended the call (a socket

@@ -69,9 +69,14 @@ class _JsonFormatter(logging.Formatter):
             "msg":     record.getMessage(),
             "rid":     request_id_var.get("-"),
         }
+        # A call event's fields as an object too (api/core/call_events.py),
+        # so Render's log search can filter on any of them.
+        call_event = getattr(record, "call_event", None)
+        if isinstance(call_event, dict):
+            data["call_event"] = call_event
         if record.exc_info:
             data["exc"] = self.formatException(record.exc_info)
-        return json.dumps(data)
+        return json.dumps(data, default=str)
 
 
 def configure_logging(json_logs: bool = False) -> None:

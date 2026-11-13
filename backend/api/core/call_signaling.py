@@ -285,6 +285,9 @@ class CallSignalingHub:
             peers = await self.distributed_peers(room_id)
             if recipient_id not in peers:
                 await self._buffer(room_id, recipient_id, envelope)
+                # Told to the caller of this (calls.py's relay log): the
+                # other phone is not in the room at all.
+                envelope["buffered"] = True
                 logger.info("[signaling] SIGNAL_BUFFERED instance=%s room=%s sender=%s event=%s target=%s", self.instance_id, room_id, sender_id, msg_type, recipient_id)
                 return envelope
         await self._publish(room_id, envelope)

@@ -3503,17 +3503,22 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       // initiate_call - a listing can have multiple buyer threads, so the
       // backend can't infer which buyer to ring the way it can infer
       // the seller).
+      // One id for this attempt: the setup's retries reuse it, and the
+      // call screen cancels by it if the user leaves before it lands.
+      final clientCallId = ApiService.newClientCallId();
       final setup = ApiService.initiateCall(
         listingId: listing?.id,
         storeId: _storeId,
         listingName: threadName,
         callType: callType,
-        calleeId: _role == 'seller' ? _buyerId : null);
+        calleeId: _role == 'seller' ? _buyerId : null,
+        clientCallId: clientCallId);
       if (!mounted) return;
       Navigator.pushNamed(context, '/voip-call', arguments: {
         'roomId': '', 'userId': ApiService.currentUserId ?? 'anon',
         'callToken': '',
         'callSetup': setup,
+        'clientCallId': clientCallId,
         'peerName': _counterpartyName,
         // Lets the call screen fetch the name itself when the profile
         // hadn't loaded by the time the call was placed.
@@ -5811,7 +5816,8 @@ class _CallCard extends StatelessWidget {
   Widget build(BuildContext context) {
     // The card carries the caller's role: mine when I placed the call.
     final outgoing = message.role == userRole;
-    final outcome = message.content; // "completed" | "missed" | "declined" | "cancelled"
+    // "completed" | "failed_to_connect" | "missed" | "declined" | "cancelled"
+    final outcome = message.content;
     final callType = message.callType ?? 'audio';
     final isVideo = callType == 'video';
     // It rang me and nobody picked up; "cancelled" only says the caller gave

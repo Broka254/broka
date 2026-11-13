@@ -156,12 +156,15 @@ class CallHistoryPage {
 /// What happened on a call, in the words of the person looking at it -
 /// the Calls screen and the call cards in a chat say the same thing.
 /// [isOutgoing]: they placed the call. [outcome] is the call card's:
-/// completed | missed | declined | cancelled.
+/// completed | failed_to_connect | missed | declined | cancelled.
 String callSummary({required String outcome, required bool isOutgoing, int? durationSecs}) {
   if (outcome == 'completed') {
     final d = durationSecs;
     return d == null || d <= 0 ? 'Answered' : formatCallDuration(d);
   }
+  // Answered, and the call never came through (2026-11-13: it said
+  // "Answered", as if it had).
+  if (outcome == 'failed_to_connect') return "Couldn't connect";
   if (outcome == 'declined') return isOutgoing ? 'Declined' : 'You declined';
   // An outgoing call nobody answered, cancelled or rung out.
   if (isOutgoing) return outcome == 'cancelled' ? 'Cancelled' : 'No answer';

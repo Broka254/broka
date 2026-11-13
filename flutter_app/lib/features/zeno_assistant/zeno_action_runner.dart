@@ -199,6 +199,8 @@ class ZenoActionRunner {
     // Open the call screen at once (see negotiation_screen): awaiting
     // POST /calls/initiate first made the tap look dead for seconds.
     // The running request travels with the route as `callSetup`.
+    // One id for this attempt (see negotiation_screen's _initiateCall).
+    final clientCallId = ApiService.newClientCallId();
     final setup = ApiService.initiateCall(
       listingId: c.listingId.isEmpty ? null : c.listingId,
       storeId: c.storeId,
@@ -207,6 +209,7 @@ class ZenoActionRunner {
       // The seller has to say which buyer; a buyer's call goes to the
       // listing's seller (calls.py initiate_call).
       calleeId: c.role == 'seller' ? c.buyerId : null,
+      clientCallId: clientCallId,
     );
     if (!nav.mounted) return false;
     unawaited(nav.pushNamed('/voip-call', arguments: {
@@ -214,6 +217,7 @@ class ZenoActionRunner {
       'userId': ApiService.currentUserId ?? '',
       'callToken': '',
       'callSetup': setup,
+      'clientCallId': clientCallId,
       'isCaller': true,
       'peerName': c.peerName,
       'peerId': c.peerId,

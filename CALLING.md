@@ -1103,3 +1103,177 @@ Tests: `flutter_app/test/call_answer_ring_and_video_test.dart`,
 `backend/tests/test_chat_socket_and_albums.py`
 (`test_a_ring_acknowledgement_survives_a_racing_session_write`,
 `test_iphones_ring_alongside_android_phones_not_before_them`).
+
+
+# A call placed is a call the caller can join (2026-11-13)
+
+Reported: A calls, B's phone rings, B accepts, and both sit on "Connecting…"
+until the call drops about ten seconds in. A's screen says "Could not start the
+call - please check your connection and try again."
+
+## What happened
+
+That sentence is the call screen's answer to `POST /calls/initiate` failing
+(`VoipCallScreen._finishSetup`), and the app gave that request one try of ten
+seconds. The server pushed B's phone *before* answering A: the busy checks,
+the session writes, the token and photo lookups and Firebase's round trip all
+ran first - Upstash, Supabase and Google, from one Render instance. When they
+ran past ten seconds, B's phone was ringing for a call A had been told never
+started, and A had no room id: it could neither join nor hang up. B answered
+into an empty room. Nothing ended it. A callee answering from its
+notification waits in `connecting`, which armed no timer, and its socket's
+heartbeat renewed the `accepted` session every 15 seconds. B's screen then
+logged the call as "completed".
+
+To recognise it in Render's logs: `[http] POST /calls/initiate 200 <ms>` over
+10000 for the call, and every `WS_CONNECTED` for its room naming the callee.
+
+## What changed
+
+**The caller is answered first.** `/initiate` waits for the callee's push at
+most `CALL_PUSH_WAIT_SECONDS` (3 s, `_RingJob`); a slower push finishes in the
+background and the caller gets `status: "sending"`. If it then fails, the
+caller's socket gets `push_status` and its screen says the phone rings only
+with BROKA open, as for `push_failed` before.
+
+**One attempt, one call.** The app names each attempt (`client_call_id`) and
+asks again under the same id - tries of 8, 6 and 6 seconds - when a try times
+out, the connection fails, or the server answers 5xx. The server answers a
+repeat with the call it already placed, with a fresh call token, and rings
+nobody twice. When every try fails, or the user leaves "Calling…", the app
+sends `POST /calls/cancel-setup` with the id: an unanswered call is cancelled
+(the ring stops, a missed call is left); an answered one is recorded as
+`failed_to_connect` and the callee gets `hangup` with reason `failed` at once.
+
+**Nobody waits on an empty room.**
+
+- The callee's connect timeout starts once its microphone is open. With no
+  offer after 30 s it ends with `no_offer`: "The caller couldn't connect. Try
+  calling them back."
+- With an offer, the callee waits 55 s in all, because the caller drives
+  the second try (below).
+- The server no longer renews an `accepted` session (`_renewed_expiry`). It
+  lapses 120 s after the answer. The heartbeat closes the sockets of a call
+  that is over or lapsed with 4004, so builds without the timer end too.
+- On joining, a socket gets `joined` at once. Before, a callee alone in
+  the room heard nothing until the first ping, 15 s later.
+
+**Candidates go with their description.** A phone holds the candidates for a
+new offer or answer until that description has been sent (`_holdLocalIce`).
+They used to go as soon as they were gathered: for an answer, an ICE restart
+or a re-offer to another ringing phone, the other side could receive them
+first and add them to the description it still had, where they were lost -
+often the relay candidate, gathered last. A received candidate waits while a
+description is being applied, or when it names an ICE session (`ufrag`) other
+than the one applied, and is added once its own description is.
+
+**A connection that never came up gets one more try.** On ICE failure or the
+30 s connect timeout before the call ever connected, the caller restarts ICE
+once, fetching TURN credentials again if the first fetch failed, and gives it
+20 s more. The callee waits 12 s for that restart after its own failure.
+
+**A failure is told to the other phone.** A phone that gives up sends
+`hangup` with `reason: "failed"` and `detail` (the reason code) before it
+tears down. The server marks the call `failed` - or, unanswered,
+`cancelled` - and the other phone ends with "Couldn't connect" instead of
+waiting out a timer.
+
+**Signalling that comes back.** After a reconnect (`ready` again) each phone
+sends its candidates again; any trickled while a socket was down never
+arrived. A reconnect refused with 4001 (the call token lasts five minutes)
+fetches a fresh token once (`GET /calls/{room}/token`) and tries again; it
+used to retry with the dead token until it gave up. A socket's own late
+callbacks never touch a newer one (`_wsEpoch`, and its subscription is
+cancelled), and a phone's own hangup is never treated as a drop.
+
+## What a call is recorded as
+
+| Outcome | Meaning |
+|---|---|
+| `completed` | The WebRTC connection came up, however the call ended |
+| `failed_to_connect` | Answered, and the connection never came up |
+| `declined` | The callee pressed Decline |
+| `cancelled` | The caller ended it before any answer (a missed call to the callee) |
+| `missed` | The callee's ring ran out |
+
+`VoipCallScreen.outcomeFor` and the server's `_normalized_outcome` use these
+definitions. Older builds logged an accepted, never-connected call as
+`completed` with no duration; the server records that report as
+`failed_to_connect` when no phone ever reported `connected`. A duration, even
+0, means the reporting phone's call timer ran, and that report stands. The
+history shows it as "Couldn't connect"; nobody is told they missed it. Older
+app builds draw a `failed_to_connect` card as "No answer" (outgoing) or
+"Missed" (incoming), without the missed-call styling or notification.
+
+## Render logs
+
+Every event of a call is one `[call-event]` line, from the server or
+reported by a phone (`diag` frames on the socket; what could not go is posted
+to `POST /calls/{room}/events` as the call ends, with a call token that may
+have expired up to 6 hours before). Search Render for the room id to read a
+call end to end:
+
+```
+[call-event] event=ICE_CONNECTION_FAILED room=… role=caller source=client
+  ts=2026-11-13T15:52:03.468Z call_state=calling ws=open ice_gathering=complete
+  ice=failed pc=connecting count=2 host=1 received_relay=0 relay=0 srflx=1 turn=false
+```
+
+Every line has: `room`, `role` (caller/callee, from the session, never from
+the phone), `source` (server/client), `ts` (server UTC), and the phone's
+`call_state`, `ws`, `ice_gathering`, `ice`, `pc`, `path` (host/srflx/relay
+once connected), `reason` and `error`. Phones add `client_ts` and `seq`. In
+production the same fields are also an object, `call_event`, on the JSON
+line.
+
+Events: CALL_INITIATED, CALL_SETUP_REPLAYED, CALL_SETUP_CANCELLED,
+CALL_PUSH_RESULT, CALL_RINGING, CALL_ACCEPTED, WEBSOCKET_CONNECTED,
+WEBSOCKET_DISCONNECTED, WEBSOCKET_RECONNECTED, WEBSOCKET_RECONNECT_SCHEDULED,
+WEBSOCKET_TOKEN_REFRESHED, PEER_JOINED, PEER_SIGNALING_LOST/RESTORED,
+PRECONNECT_STARTED/USED/ABANDONED, LOCAL_MEDIA_READY, SDP_OFFER_CREATED,
+SDP_OFFER_SENT, SDP_OFFER_RECEIVED, SDP_OFFER_RELAYED, SDP_ANSWER_CREATED,
+SDP_ANSWER_SENT, SDP_ANSWER_RECEIVED, SDP_ANSWER_RELAYED, SDP_FAILED,
+ICE_CANDIDATE_GATHERED, ICE_CANDIDATE_RECEIVED, ICE_CANDIDATE_FAILED,
+ICE_GATHERING_COMPLETE, ICE_CONNECTION_CHECKING/CONNECTED/COMPLETED/FAILED/
+DISCONNECTED/CLOSED, ICE_CANDIDATE_PAIR_SELECTED, ICE_RESTART_STARTED,
+TURN_CREDENTIAL_REQUEST, TURN_CREDENTIAL_ISSUED, TURN_CREDENTIAL_RECEIVED,
+TURN_CREDENTIAL_FAILURE, TURN_NO_RELAY_CANDIDATES, WEBRTC_CONNECTED,
+WEBRTC_DISCONNECTED, WEBRTC_FAILED, CALL_TIMEOUT, CALL_HANGUP, CALL_ENDED.
+The server's `CALL_ENDED` carries the recorded outcome. Failures are logged
+at WARNING.
+
+Never logged: tokens, TURN credentials, SDP, ICE candidate lines or IP
+addresses - candidates appear by type and protocol only. A phone's strings
+are cleaned on the phone (`cleanDiagnosticText`) and again on the server
+(`call_events.clean`); a phone can only report events and fields on the
+server's allowlists, at most 400 per socket and 120 per post.
+
+Reading a failed call: `TURN_CREDENTIAL_FAILURE` or
+`ICE_GATHERING_COMPLETE … relay=0 turn=true` (`TURN_NO_RELAY_CANDIDATES`)
+says the relay was missing; `ICE_CONNECTION_FAILED … received_relay=0` says
+the other side's relay never arrived; `CALL_ACCEPTED … caller_in_room=false`
+followed by `CALL_TIMEOUT reason=no_offer` is a caller who never joined.
+
+## Signalling additions
+
+| Type | Direction | Meaning |
+|---|---|---|
+| `joined` | server → client | This socket is in the room (sent at once on joining). |
+| `push_status` | server → caller | `{status}`: the push to the callee's phones finished after `/initiate` answered, and failed. |
+| `diag` | client → server | One of the phone's call events, logged and never relayed. |
+| `hangup` | (existing) | Now with `reason: "failed"` and `detail` when a phone gives up on a connection. |
+
+## Verification
+
+Backend: `tests/test_call_setup_reliability.py`; App:
+`test/call_setup_reliability_test.dart`, `test/call_connect_reliability_test.dart`.
+Each bug test fails against the code before this pass. The two-phone
+simulation (`scripts/call_e2e/README.md`) runs both phones' `WebRtcService`
+against the real backend through scenarios A-I. Its WebRTC stack is
+simulated, so it carries no audio and no real NAT.
+
+Not device-verified. On two Android phones, check: each Wi-Fi / mobile-data
+pairing; Accept from the notification with the app in the background and
+closed; airplane mode for 5 s during "Connecting…"; a network change mid-call;
+a call longer than five minutes that loses signalling (the token renewal);
+and in Render, that one room's `[call-event]` lines tell each call's story.

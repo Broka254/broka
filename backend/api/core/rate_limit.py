@@ -283,6 +283,11 @@ zeno_sms_limiter = _make_limiter("zeno_sms", limit=5, window_seconds=3600)
 call_initiate_limiter      = _make_limiter("call_initiate",      limit=10, window_seconds=60)
 turn_credential_limiter    = _make_limiter("turn_credential",    limit=20, window_seconds=60)
 call_ws_connect_limiter    = _make_limiter("call_ws_connect",    limit=20, window_seconds=60)
+# POST /calls/{room}/events, keyed by the reporting user: a phone posts its
+# call's diagnostics once as the call ends, more only after a reconnect
+# storm. Each request writes up to 120 log lines, so the cap is what keeps
+# a client from turning Render's logs into its own storage.
+call_events_limiter        = _make_limiter("call_events",        limit=30, window_seconds=60)
 # IP-keyed and checked BEFORE token decode (unlike call_ws_connect_limiter
 # above, which only ever sees successfully-authenticated attempts) - a
 # flood of garbage/expired tokens at the WS endpoint would otherwise never

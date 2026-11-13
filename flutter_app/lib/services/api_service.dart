@@ -1,6 +1,7 @@
 // BROKA - API Service
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' show Random;
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, debugPrint, TargetPlatform, visibleForTesting;
@@ -2384,57 +2385,163 @@ class ApiService {
     return (supported: true, known: false, call: null);
   }
 
+  /// A fresh id for one attempt to place a call - see [initiateCall].
+  static String newClientCallId() {
+    const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    final random = Random.secure();
+    return 'c${List.generate(23, (_) => alphabet[random.nextInt(alphabet.length)]).join()}';
+  }
+
+  /// How long each try at POST /calls/initiate may take (2026-11-13). It
+  /// was one try of 10 seconds. The server rang the callee before it
+  /// answered, so a slow answer meant the callee's phone rang for a call
+  /// this phone had already reported as "Could not start the call" - with
+  /// no room to join or hang up. Now the same attempt is asked again under
+  /// the same id, and the server answers a repeat with the call it placed.
+  @visibleForTesting
+  static List<Duration> initiateAttemptTimeouts = const [
+    Duration(seconds: 8), Duration(seconds: 6), Duration(seconds: 6),
+  ];
+
   /// Notify the seller (via FCM) that a call is incoming, and get back the
   /// server-generated room_id + a call_token scoped to it for the caller's
   /// own WebSocket connection. Returns null on failure (network error, or
   /// a 401 that survives a relogin attempt) - the caller must not navigate
   /// to the VoIP screen in that case, since there's no valid room_id/token
   /// to connect with.
+  ///
+  /// [clientCallId] names this attempt (one from [newClientCallId]; made
+  /// here when not given). A try that times out or fails on the way is
+  /// made again under it - the server answers with the call the first try
+  /// placed, and rings nobody twice - and when every try fails the call is
+  /// cancelled by it ([cancelCallSetup]): the server may have placed it,
+  /// and the callee's phone may be ringing.
   static Future<Map<String, dynamic>?> initiateCall({
     String? listingId,
     String? storeId,
     required String listingName,
     String callType = 'audio', // 'audio' | 'video'
     String? calleeId, // required when the SELLER is calling - see calls.py's initiate_call()
+    String? clientCallId,
   }) async {
     _requireExactlyOneThread(listingId, storeId);
-    Future<http.Response> send() => http.post(
+    final attempt = clientCallId ?? newClientCallId();
+    final body = jsonEncode({
+      if (listingId != null && listingId.isNotEmpty) 'listing_id': listingId,
+      if (storeId != null && storeId.isNotEmpty) 'store_id': storeId,
+      'caller_name':  currentUserName ?? 'Buyer',
+      'listing_name': listingName,
+      'call_type':    callType,
+      if (calleeId != null) 'callee_id': calleeId,
+      'client_call_id': attempt,
+    });
+    Future<http.Response> send(Duration timeout) => http.post(
       Uri.parse('$baseUrl/calls/initiate'),
       headers: _headers,
-      body: jsonEncode({
-        if (listingId != null && listingId.isNotEmpty) 'listing_id': listingId,
-        if (storeId != null && storeId.isNotEmpty) 'store_id': storeId,
-        'caller_name':  currentUserName ?? 'Buyer',
-        'listing_name': listingName,
-        'call_type':    callType,
-        if (calleeId != null) 'callee_id': calleeId,
-      }),
-    ).timeout(const Duration(seconds: 10));
+      body: body,
+    ).timeout(timeout);
+    final timeouts = initiateAttemptTimeouts;
+    var relogged = false;
+    // Whether a try may have placed the call without this phone hearing so.
+    var mayHavePlaced = false;
+    for (var i = 0; i < timeouts.length; i++) {
+      try {
+        var response = await send(timeouts[i]);
+        // FIX (2026-08-13): this used to swallow every outcome, including a
+        // 401 - meaning if the CALLER's own access token had expired, the
+        // call never registered server-side and the buyer would sit on the
+        // VoIP screen believing it was ringing while the seller's poll
+        // correctly found nothing to return at all. One retry after a
+        // successful refresh/relogin covers this.
+        if (response.statusCode == 401 && !relogged) {
+          relogged = true;
+          if (await _tryRelogin()) response = await send(timeouts[i]);
+        }
+        if (response.statusCode == 200) {
+          return jsonDecode(response.body) as Map<String, dynamic>;
+        }
+        // One call at a time (calls.py _admit_call): the server would not
+        // place it, and says why - {code, message, call?}. Returned as
+        // {'refused': ...}; NotificationService.handleCallRefused acts on it.
+        if (response.statusCode == 409) {
+          final detail = (jsonDecode(response.body) as Map)['detail'];
+          if (detail is Map) {
+            return {'refused': Map<String, dynamic>.from(detail)};
+          }
+        }
+        // The server or its proxy failed on the way (5xx): the call may
+        // have been placed, so it is asked again. A refusal (4xx) stands.
+        if (response.statusCode < 500) break;
+        mayHavePlaced = true;
+        debugPrint('[Call] CALL_SETUP_RETRY attempt=${i + 1} status=${response.statusCode}');
+      } catch (e) {
+        // Timed out, or the connection failed: the server may have placed
+        // the call anyway. The same attempt again finds it.
+        mayHavePlaced = true;
+        debugPrint('[Call] CALL_SETUP_RETRY attempt=${i + 1} error=${e.runtimeType}');
+      }
+    }
+    if (mayHavePlaced) unawaited(cancelCallSetup(attempt, reason: 'setup_failed'));
+    return null;
+  }
+
+  /// End a call this phone tried to place and gave up on before it learned
+  /// the call's room (POST /calls/cancel-setup, by [clientCallId]): the
+  /// server may have placed it, and the other person's phone rings - or,
+  /// answered, waits on "Connecting…" - for a caller who is not coming.
+  /// Best effort: the server's own timeouts end it when this can't reach it.
+  static Future<void> cancelCallSetup(String clientCallId, {String reason = 'setup_abandoned'}) async {
+    if (clientCallId.isEmpty) return;
+    Future<http.Response> send() => http.post(
+      Uri.parse('$baseUrl/calls/cancel-setup'),
+      headers: _headers,
+      body: jsonEncode({'client_call_id': clientCallId, 'reason': reason}),
+    ).timeout(const Duration(seconds: 6));
+    try {
+      final response = await send();
+      if (response.statusCode == 401 && await _tryRelogin()) await send();
+    } catch (_) {}
+  }
+
+  /// A fresh call token for [roomId] (GET /calls/{room}/token). A call
+  /// token lasts five minutes; a signalling socket that drops later in a
+  /// call is refused with it (4001) and could never come back.
+  static Future<String?> refreshCallToken(String roomId) async {
+    if (roomId.isEmpty) return null;
+    Future<http.Response> send() => http
+        .get(Uri.parse('$baseUrl/calls/${Uri.encodeComponent(roomId)}/token'), headers: _headers)
+        .timeout(const Duration(seconds: 8));
     try {
       var response = await send();
-      // FIX (2026-08-13): this used to swallow every outcome, including a
-      // 401 - meaning if the CALLER's own access token had expired, the
-      // call never registered server-side and the buyer would sit on the
-      // VoIP screen believing it was ringing while the seller's poll
-      // correctly found nothing to return at all. One retry after a
-      // successful refresh/relogin covers this.
-      if (response.statusCode == 401 && await _tryRelogin()) {
-        response = await send();
-      }
+      if (response.statusCode == 401 && await _tryRelogin()) response = await send();
       if (response.statusCode == 200) {
-        return jsonDecode(response.body) as Map<String, dynamic>;
-      }
-      // One call at a time (calls.py _admit_call): the server would not
-      // place it, and says why - {code, message, call?}. Returned as
-      // {'refused': ...}; NotificationService.handleCallRefused acts on it.
-      if (response.statusCode == 409) {
-        final detail = (jsonDecode(response.body) as Map)['detail'];
-        if (detail is Map) {
-          return {'refused': Map<String, dynamic>.from(detail)};
-        }
+        final token = (jsonDecode(response.body) as Map)['call_token'];
+        if (token is String && token.isNotEmpty) return token;
       }
     } catch (_) {}
     return null;
+  }
+
+  /// A call's diagnostics that could not go over its socket, posted as the
+  /// call ends (POST /calls/{room}/events - see call_diagnostics.dart).
+  /// Fire-and-forget: a lost report never touches the call.
+  static Future<void> postCallEvents(
+      String roomId, String callToken, List<Map<String, dynamic>> events) async {
+    if (roomId.isEmpty || callToken.isEmpty || events.isEmpty) return;
+    for (var i = 0; i < events.length; i += 120) {
+      final batch = events.sublist(i, i + 120 > events.length ? events.length : i + 120);
+      try {
+        await http
+            .post(
+              Uri.parse('$baseUrl/calls/${Uri.encodeComponent(roomId)}/events'),
+              headers: const {'Content-Type': 'application/json'},
+              body: jsonEncode({'call_token': callToken, 'events': batch}),
+            )
+            .timeout(const Duration(seconds: 8));
+      } catch (_) {
+        return;
+      }
+    }
   }
 
   /// Record a call's outcome ("completed" | "missed" | "declined") so both
@@ -2456,6 +2563,9 @@ class ApiService {
     required String callerRole,
     int? durationSecs,
     String callType = 'audio', // 'audio' | 'video'
+    // Why a call that failed did ("no_offer", "ice_failed"...), for the
+    // server's log of it.
+    String? reason,
   }) async {
     _requireExactlyOneThread(listingId, storeId);
     final body = jsonEncode({
@@ -2467,6 +2577,8 @@ class ApiService {
       'caller_role':  callerRole,
       if (durationSecs != null) 'duration_secs': durationSecs,
       'call_type':    callType,
+      if (reason != null && reason.isNotEmpty)
+        'reason': reason.length > 40 ? reason.substring(0, 40) : reason,
     });
     Future<http.Response> send() => http.post(
       Uri.parse('$baseUrl/calls/log-result'),
@@ -2503,7 +2615,24 @@ class ApiService {
   static Future<Map<String, dynamic>?> getTurnCredentials({
     String? roomId,
     String? callToken,
+  }) async =>
+      (await fetchTurnCredentials(roomId: roomId, callToken: callToken)).data;
+
+  /// [getTurnCredentials], saying why when there are none: "call_over"
+  /// (410), "relay_unavailable" (503 - Cloudflare refused or is not
+  /// configured), "timeout", "network", or "http_<status>". A call that
+  /// went STUN-only used to leave no trace anywhere of why - on carrier-
+  /// grade NAT that is a call that never connects (2026-11-13).
+  ///
+  /// Each request gets 6 seconds (they had 8 and 10): the caller's
+  /// connection waits on this before it is made.
+  static Future<TurnCredentialsResult> fetchTurnCredentials({
+    String? roomId,
+    String? callToken,
   }) async {
+    const timeout = Duration(seconds: 6);
+    String failure = 'network';
+    String reasonOf(Object e) => e is TimeoutException ? 'timeout' : 'network';
     if (roomId != null && roomId.isNotEmpty &&
         callToken != null && callToken.isNotEmpty) {
       try {
@@ -2513,21 +2642,26 @@ class ApiService {
               headers: const {'Content-Type': 'application/json'},
               body: jsonEncode({'call_token': callToken}),
             )
-            .timeout(const Duration(seconds: 8));
+            .timeout(timeout);
         if (res.statusCode == 200) {
-          return jsonDecode(res.body) as Map<String, dynamic>;
+          return TurnCredentialsResult(jsonDecode(res.body) as Map<String, dynamic>);
         }
         // The call is over, or the relay is down: the signed-in route
         // would say the same.
-        if (res.statusCode == 410 || res.statusCode == 503) return null;
-      } catch (_) {}
-      // An older server without the route: ask the signed-in way.
+        if (res.statusCode == 410) return const TurnCredentialsResult(null, 'call_over');
+        if (res.statusCode == 503) return const TurnCredentialsResult(null, 'relay_unavailable');
+        failure = 'http_${res.statusCode}';
+      } catch (e) {
+        failure = reasonOf(e);
+      }
+      // An expired call token, or an older server without the route: ask
+      // the signed-in way.
     }
     try {
       var response = await http.get(
         Uri.parse('$baseUrl/calls/turn-credentials'),
         headers: _headers,
-      ).timeout(const Duration(seconds: 10));
+      ).timeout(timeout);
       // Same 401-retry-once pattern as the other /calls endpoints above -
       // an expired access token shouldn't silently fail call setup when a
       // refresh/relogin could recover it.
@@ -2535,13 +2669,16 @@ class ApiService {
         response = await http.get(
           Uri.parse('$baseUrl/calls/turn-credentials'),
           headers: _headers,
-        ).timeout(const Duration(seconds: 10));
+        ).timeout(timeout);
       }
       if (response.statusCode == 200) {
-        return jsonDecode(response.body) as Map<String, dynamic>;
+        return TurnCredentialsResult(jsonDecode(response.body) as Map<String, dynamic>);
       }
-    } catch (_) {} // non-fatal - caller falls back to STUN-only ICE
-    return null;
+      failure = response.statusCode == 503 ? 'relay_unavailable' : 'http_${response.statusCode}';
+    } catch (e) {
+      failure = reasonOf(e);
+    } // non-fatal - caller falls back to STUN-only ICE
+    return TurnCredentialsResult(null, failure);
   }
 
   // ── Featured Listing Boost ─────────────────────────────────────────────────
@@ -2926,6 +3063,18 @@ class SyncAckAnswer {
 
   bool get ok => status == 200;
   bool get unsupported => status == 404 || status == 405;
+}
+
+/// TURN credentials for a call, or why there are none
+/// (ApiService.fetchTurnCredentials).
+class TurnCredentialsResult {
+  const TurnCredentialsResult(this.data, [this.failure]);
+
+  /// {ice_servers, expires_in}, or null.
+  final Map<String, dynamic>? data;
+
+  /// Set when [data] is null.
+  final String? failure;
 }
 
 /// What the server said to Accept (ApiService.answerCall).

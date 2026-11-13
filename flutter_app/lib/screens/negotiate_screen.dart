@@ -1713,11 +1713,14 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     // Open the call screen at once (see negotiation_screen): awaiting
     // POST /calls/initiate first made the tap look dead for seconds.
     // The running request travels with the route as `callSetup`.
+    // One id for this attempt (see negotiation_screen's _initiateCall).
+    final clientCallId = ApiService.newClientCallId();
     final setup = ApiService.initiateCall(
       listingId: listing.id,
       listingName: listing.name,
       callType: callType,
       calleeId: isSeller ? _buyerId : null,
+      clientCallId: clientCallId,
     );
     if (!mounted) return;
     Navigator.pushNamed(context, '/voip-call', arguments: {
@@ -1725,6 +1728,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
       'userId': ApiService.currentUserId ?? '',
       'callToken': '',
       'callSetup': setup,
+      'clientCallId': clientCallId,
       'isCaller': true,
       'peerName': _counterName,
       'peerId': _role == 'seller' ? _buyerId : _listing?.sellerId,
