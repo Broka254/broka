@@ -24,7 +24,7 @@ MONTH = timedelta(days=30)
 ENDING_SOON = timedelta(days=7)
 
 
-def live_clause(now: Optional[datetime] = None):
+def live_clause(now: Optional[datetime] = None, include_reported: bool = False):
     """SQL: the listing is paid for, or no fee applies to it - its store's
     plan is paid up when store billing is on - and, while auctions are off
     (AUCTIONS_ENABLED), it is not an auction.
@@ -41,7 +41,13 @@ def live_clause(now: Optional[datetime] = None):
     pays for its listings (stores/billing.py), so a store whose plan has
     lapsed disappears from every list - not just the directory - until it
     pays again. Personal listings have no store_id and are never touched
-    by it."""
+    by it.
+
+    include_reported: the seller reading their own catalogue (GET
+    /listings/?seller_id=<themselves>). A listing a buyer marked
+    unavailable is out of every list a buyer browses, and it used to be
+    out of its own seller's catalogue as well - the one place they look
+    for it after the text telling them to revoke the report."""
     now = now or datetime.utcnow()
     # Store listings carry no listing fee (fee_applies): a paid_until left
     # over from before the listing joined its store must not take it
@@ -50,7 +56,8 @@ def live_clause(now: Optional[datetime] = None):
                Listing.paid_until.is_(None), Listing.paid_until > now)
     # Reported sold out by a buyer (listings/sold_out.py) rides here for the
     # same reason: out of every list until its seller says it is still there.
-    paid = and_(paid, Listing.sold_out_reported_at.is_(None))
+    if not include_reported:
+        paid = and_(paid, Listing.sold_out_reported_at.is_(None))
     if settings.store_billing_enabled:
         # Imported here, not at the top: stores.billing imports the payment
         # stack, and this module is loaded by the database layer itself.
