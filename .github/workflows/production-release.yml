@@ -46,14 +46,46 @@ jobs:
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
 
-      - name: Set up Python 3.11
+      - name: Guard production release to application changes
+        id: release_scope
+        shell: bash
+        env:
+          WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          tested_sha="${WORKFLOW_RUN_HEAD_SHA:-$GITHUB_SHA}"
+          changed_files="$(git diff --name-only "${tested_sha}^" "$tested_sha")"
+          if [[ -z "$changed_files" ]]; then
+            echo "::error::Could not determine changed files; refusing production release."
+            exit 1
+          fi
+
+          while IFS= read -r file; do
+            if [[ "$file" != .github/workflows/* && "$file" != "graphify.md" ]]; then
+              echo "Application/release input changed: $file"
+              echo "should_release=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done <<< "$changed_files"
+
+          echo "Workflow/documentation-only change; production migration and Render deploy are skipped."
+          echo "should_release=false" >> "$GITHUB_OUTPUT"
+
+      - name:
+        if: steps.release_scope.outputs.should_release == 'true' Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: backend/requirements.txt
 
-      - name: Reject stale CI runs
+      - name:
+        if: steps.release_scope.outputs.should_release == 'true' Reject stale CI runs
         id: guard
         shell: bash
         run: |
@@ -77,7 +109,8 @@ jobs:
           echo "The tested application commit is current: $tested_sha"
           echo "RELEASE_COMMIT=$tested_sha" >> "$GITHUB_ENV"
 
-      - name: Validate production secrets and Render target
+      - name:
+        if: steps.release_scope.outputs.should_release == 'true' Validate production secrets and Render target
         shell: bash
         run: |
           set -euo pipefail
@@ -104,13 +137,15 @@ jobs:
           print("Supabase target validated.")
           PY
 
-      - name: Install backend dependencies
+      - name:
+        if: steps.release_scope.outputs.should_release == 'true' Install backend dependencies
         working-directory: backend
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Apply the schema required by this exact commit
+      - name:
+        if: steps.release_scope.outputs.should_release == 'true' Apply the schema required by this exact commit
         working-directory: backend
         run: |
           python -u -m api.migrate
@@ -131,7 +166,8 @@ jobs:
           asyncio.run(main())
           PY
 
-      - name: Trigger Render deployment for the tested commit
+      - name:
+        if: steps.release_scope.outputs.should_release == 'true' Trigger Render deployment for the tested commit
         id: render
         shell: bash
         run: |
@@ -151,7 +187,8 @@ jobs:
           echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
           echo "Render deployment queued: $deploy_id"
 
-      - name: Wait for Render to become live
+      - name:
+        if: steps.release_scope.outputs.should_release == 'true' Wait for Render to become live
         env:
           DEPLOY_ID: ${{ steps.render.outputs.deploy_id }}
         shell: bash
