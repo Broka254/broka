@@ -1672,6 +1672,7 @@ Modules:
 | `.github/workflows/build.yml` | `build-apk` | Build Android APK |
 | `.github/workflows/production-release.yml` | `release` | Migrate Supabase, then deploy Render |
 | `.github/workflows/supabase-schema-release.yml` | `migrate` | Migrate Supabase production schema |
+| `.github/workflows/sync-render-env-to-railway.yml` | `sync` | Sync Render variables to Railway |
 
 ## Documents
 
