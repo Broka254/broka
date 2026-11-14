@@ -128,11 +128,26 @@ class RequestIdMiddleware:
 
 # ── Latency logging middleware ────────────────────────────────────────────────
 
+# A request that runs this many statements or more is named in a warning:
+# the inbox ran several hundred per poll before its figures were batched,
+# and nothing in the log said so.
+DB_REQUEST_QUERY_WARN = max(1, int(os.getenv("DB_REQUEST_QUERY_WARN", "60")))
+
+
 class LatencyLogMiddleware:
-    """Logs method, path, status, and duration for every request."""
+    """Logs method, path, status, duration and database work for every request.
+
+    The database part (api/database.py's statement and pool timing) is the
+    request's statement count, the time those statements ran, and the time
+    it queued for a pooled connection - the two causes of a slow request that
+    look the same from outside. Counts and times only.
+    """
 
     def __init__(self, app):
         self.app = app
+        from api.database import end_request_stats, start_request_stats
+        self._start_db_stats = start_request_stats
+        self._end_db_stats = end_request_stats
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -147,15 +162,32 @@ class LatencyLogMiddleware:
                 status[0] = message.get("status", 200)
             await send(message)
 
-        await self.app(scope, receive, capture_status)
+        db, db_token = self._start_db_stats()
+        try:
+            await self.app(scope, receive, capture_status)
+        finally:
+            self._end_db_stats(db_token)
         elapsed_ms = (time.perf_counter() - start) * 1000
 
         method = scope.get("method", "?")
         path   = safe_log_path(scope.get("path", "/"))
+        rid    = request_id_var.get("-")
         logger.info(
-            "[http] %s %s %d %.1fms rid=%s",
-            method, path, status[0], elapsed_ms, request_id_var.get("-"),
+            "[http] %s %s %d %.1fms db_queries=%d db_ms=%.1f db_wait_ms=%.1f rid=%s",
+            method, path, status[0], elapsed_ms,
+            db.queries, db.query_seconds * 1000, db.pool_wait_seconds * 1000, rid,
         )
+        if db.queries >= DB_REQUEST_QUERY_WARN:
+            # The handler's name, which every request to the endpoint shares,
+            # so the warning can be counted per endpoint whatever the ids in
+            # the path.
+            endpoint = getattr(scope.get("endpoint"), "__name__", "-")
+            logging.getLogger("api.database").warning(
+                "[db] DB_REQUEST_HEAVY endpoint=%s method=%s path=%s queries=%d "
+                "db_ms=%.1f db_wait_ms=%.1f rid=%s",
+                endpoint, method, path, db.queries, db.query_seconds * 1000,
+                db.pool_wait_seconds * 1000, rid,
+            )
 
 
 # ── Sentry ────────────────────────────────────────────────────────────────────
