@@ -360,6 +360,12 @@ async def apply_event(db: AsyncSession, event: zetupay.ZetuPayEvent, source: str
 
 
 async def _ask(db: AsyncSession, reference: str, payment_key: str) -> Optional[str]:
+    # Every caller has only read so far (the sweep's batch, a status poll's
+    # row): that read ends before ZetuPay is asked, rather than hold a
+    # connection through the round trip. apply_event re-reads the payment
+    # itself, as it does for the webhook.
+    from api.database import release_connection
+    await release_connection(db, before="zetupay.transaction_status")
     try:
         event = await zetupay.transaction_status(payment_key, reference)
     except zetupay.ZetuPayUnavailable as exc:

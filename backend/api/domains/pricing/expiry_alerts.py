@@ -20,8 +20,10 @@ Rules that keep this from becoming spam or nonsense:
   * quiet hours (nudge_templates.is_quiet_hours): deferred, not dropped -
     no dedup row is written, so the morning pass sends it. A seller who
     renews overnight simply never gets a text about a deadline that moved.
-  * a failed send keeps no dedup row, so the next pass retries. The cost
-    ledger records the SMS inside the provider, as for every BROKA text.
+  * a failed send keeps no dedup row, so the next pass retries. The claim
+    is committed before the text is sent, so no transaction is held through
+    the provider (_sent_or_unclaimed). The cost ledger records the SMS
+    inside the provider, as for every BROKA text.
 """
 from __future__ import annotations
 
@@ -108,6 +110,25 @@ async def _send(phone: Optional[str], text: str) -> bool:
         return False
 
 
+async def _sent_or_unclaimed(db: AsyncSession, entity_type: str, entity_id: str,
+                             paid_until: datetime, phone: str, text: str) -> bool:
+    """Text one seller about a period whose claim the caller has just
+    committed; on a failed send, give the claim back so the next pass
+    retries. True when the text went.
+
+    The claim is committed first so that no transaction - and no pooled
+    connection - is held through the SMS provider's round trip, and so a
+    second replica's claim on the same period fails at once instead of
+    waiting on this one's uncommitted row. A process that dies between the
+    claim and the send leaves the period claimed: one warning lost, where a
+    commit failing after the sends used to text every one of them again."""
+    if await _send(phone, text):
+        return True
+    await _unclaim(db, entity_type, entity_id, paid_until)
+    await db.commit()
+    return False
+
+
 async def send_due_expiry_alerts(db: AsyncSession,
                                  now: Optional[datetime] = None) -> dict:
     """One sweep pass. Returns {"listings": n, "stores": n} actually texted."""
@@ -150,14 +171,13 @@ async def send_due_expiry_alerts(db: AsyncSession,
         if not await _claim(db, ExpiryEntity.LISTING, listing.id,
                             listing.seller_id, listing.paid_until):
             continue
-        ok = await _send(
-            seller.phone,
+        # Committed before the text goes (see _sent_or_unclaimed).
+        await db.commit()
+        if await _sent_or_unclaimed(
+            db, ExpiryEntity.LISTING, listing.id, listing.paid_until, seller.phone,
             listing_sms(listing.name or "your item", listing.paid_until, now),
-        )
-        if ok:
+        ):
             sent["listings"] += 1
-        else:
-            await _unclaim(db, ExpiryEntity.LISTING, listing.id, listing.paid_until)
 
     # ── Stores ────────────────────────────────────────────────────────────
     rows = (await db.execute(
@@ -180,14 +200,12 @@ async def send_due_expiry_alerts(db: AsyncSession,
         if not await _claim(db, ExpiryEntity.STORE, store.id,
                             store.owner_id, sub.paid_until):
             continue
-        ok = await _send(
-            owner.phone,
+        await db.commit()
+        if await _sent_or_unclaimed(
+            db, ExpiryEntity.STORE, store.id, sub.paid_until, owner.phone,
             store_sms(store.name or "your store", sub.paid_until, now),
-        )
-        if ok:
+        ):
             sent["stores"] += 1
-        else:
-            await _unclaim(db, ExpiryEntity.STORE, store.id, sub.paid_until)
 
     await db.commit()
     if sent["listings"] or sent["stores"]:

@@ -3,7 +3,7 @@ BROKA — availability-nudge SMS composition.
 
 System-generated, not AI-generated. This replaces the
 `AIBrokerService.draft_availability_nudge_sms()` call in
-`api/core/workers.py::_fire_availability_nudge`.
+`api/core/workers.py::_prepare_availability_nudge`.
 
 Why move this off the LLM:
 
