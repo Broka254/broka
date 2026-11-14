@@ -1,0 +1,182 @@
+name: Sync Render environment to Railway development
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Preview first; choose apply only after reviewing the listed keys"
+        required: true
+        type: choice
+        default: preview
+        options:
+          - preview
+          - apply
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-to-railway-env-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync Render variables to Railway
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Validate branch and credentials
+        shell: bash
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == "refs/heads/main" ]] || { echo "::error::Run from main only."; exit 1; }
+          [[ -n "$RENDER_API_KEY" ]] || { echo "::error::Missing RENDER_API_KEY."; exit 1; }
+          [[ -n "$RAILWAY_API_TOKEN" ]] || { echo "::error::Missing RAILWAY_API_TOKEN."; exit 1; }
+          echo "Required credential secret names are present."
+
+      - name: Read Render variables and sync to Railway
+        shell: bash
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          SYNC_MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json, os, sys, urllib.error, urllib.parse, urllib.request
+
+          RENDER_API = "https://api.render.com/v1"
+          RAILWAY_API = "https://backboard.railway.com/graphql/v2"
+          PROJECT_ID = "ab13099f-7b98-4ee7-81da-71b051d40425"
+          ENVIRONMENT_ID = "d9116c4a-f7e1-4e64-8138-7d6d9160081e"
+
+          SERVICES = [
+              {
+                  "label": "API",
+                  "render_id": "srv-dbegua5g1s2s73fifsrg",
+                  "railway_id": "5943e370-5fea-4665-b184-3cb28106333c",
+                  "required": ["DATABASE_URL", "REDIS_URL", "SECRET_KEY"],
+                  "overrides": {"ENV": "development", "ENVIRONMENT": "development", "DEBUG": "false"},
+              },
+              {
+                  "label": "Admin",
+                  "render_id": "srv-dbehgfivcj2c73cvlg60",
+                  "railway_id": "6e22dd5f-af59-4256-835b-f29fcfbf6b84",
+                  "required": [],
+                  "overrides": {
+                      "BROKA_API_URL": "http://broka-api.railway.internal:8000",
+                      "BROKA_COOKIE_SECURE": "true",
+                  },
+              },
+          ]
+
+          def http_json(url, headers, body=None):
+              data = None if body is None else json.dumps(body).encode()
+              request = urllib.request.Request(
+                  url, data=data, headers=headers,
+                  method="GET" if body is None else "POST",
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=45) as response:
+                      return json.loads(response.read().decode())
+              except urllib.error.HTTPError as error:
+                  raise RuntimeError("HTTP " + str(error.code) + " from " + urllib.parse.urlparse(url).netloc + urllib.parse.urlparse(url).path) from None
+              except urllib.error.URLError as error:
+                  raise RuntimeError("Network error calling " + urllib.parse.urlparse(url).netloc) from None
+
+          def read_render(service_id):
+              headers = {"Authorization": "Bearer " + os.environ["RENDER_API_KEY"], "Accept": "application/json"}
+              result, cursor = {}, None
+              for _ in range(30):
+                  params = {"limit": "100"}
+                  if cursor:
+                      params["cursor"] = cursor
+                  url = RENDER_API + "/services/" + service_id + "/env-vars?" + urllib.parse.urlencode(params)
+                  page = http_json(url, headers)
+                  if not isinstance(page, list):
+                      raise RuntimeError("Unexpected Render environment-variable response.")
+                  for item in page:
+                      var = item.get("envVar") or {}
+                      key, value = var.get("key"), var.get("value")
+                      if not key or value is None or value == "":
+                          continue
+                      if key == "PORT" or key == "RENDER" or key.startswith("RENDER_"):
+                          continue
+                      result[key] = str(value)
+                  next_cursor = page[-1].get("cursor") if page else None
+                  if len(page) < 100 or not next_cursor or next_cursor == cursor:
+                      break
+                  cursor = next_cursor
+              else:
+                  raise RuntimeError("Render pagination exceeded 30 pages.")
+              return result
+
+          def write_railway(service_id, variables):
+              query = """
+              mutation variableCollectionUpsert($input: VariableCollectionUpsertInput!) {
+                variableCollectionUpsert(input: $input)
+              }
+              """
+              payload = {
+                  "query": query,
+                  "variables": {"input": {
+                      "projectId": PROJECT_ID,
+                      "environmentId": ENVIRONMENT_ID,
+                      "serviceId": service_id,
+                      "variables": variables,
+                      "skipDeploys": True,
+                      "replace": False,
+                  }},
+              }
+              headers = {
+                  "Authorization": "Bearer " + os.environ["RAILWAY_API_TOKEN"],
+                  "Content-Type": "application/json",
+                  "Accept": "application/json",
+              }
+              response = http_json(RAILWAY_API, headers, payload)
+              if response.get("errors"):
+                  messages = [str(item.get("message", "GraphQL error")) for item in response["errors"]]
+                  raise RuntimeError("Railway rejected update: " + "; ".join(messages))
+              if response.get("data") is None:
+                  raise RuntimeError("Railway returned no data for the variable update.")
+
+          apply = os.environ.get("SYNC_MODE") == "apply"
+          print("Mode: " + ("APPLY" if apply else "PREVIEW ONLY"))
+          print("Destination: Broka-Development / development")
+          print("Only service-level Render variables are available from this endpoint; linked Render Environment Groups are not included.")
+          print("RENDER_* and PORT are excluded. Existing Railway variables are merged, not removed.")
+          print("Automatic Railway deployments are disabled for this sync.")
+
+          total = 0
+          failures = []
+          for service in SERVICES:
+              try:
+                  variables = read_render(service["render_id"])
+                  variables.update(service["overrides"])
+                  missing = [key for key in service["required"] if not variables.get(key)]
+                  print("\n" + service["label"] + ": " + str(len(variables)) + " variables discovered.")
+                  print("Keys: " + ", ".join(sorted(variables.keys())))
+                  if missing:
+                      raise RuntimeError("Required source variables missing: " + ", ".join(missing))
+                  if apply:
+                      write_railway(service["railway_id"], variables)
+                      print(service["label"] + ": synced successfully; values hidden.")
+                  else:
+                      print(service["label"] + ": preview only; nothing written.")
+                  total += len(variables)
+              except Exception as error:
+                  failures.append(service["label"])
+                  print("::error::" + service["label"] + " sync failed: " + str(error))
+
+          if failures:
+              print("Sync failed for: " + ", ".join(failures))
+              sys.exit(1)
+          print("\nCompleted " + ("sync of " if apply else "preview of ") + str(total) + " variable assignments.")
+          if apply:
+              print("Review Railway variables, then deploy the API and admin separately.")
+          else:
+              print("Review the names above and rerun with mode=apply to transfer values.")
+          PY
