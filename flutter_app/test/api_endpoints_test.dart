@@ -1,7 +1,7 @@
 // The app's backend address is compiled in, in two --dart-define names that
 // four files default separately: API_URL (ApiService, ApiClient) for
 // requests and API_WS_URL (DealWsClient, AuctionWsClient) for live deal and
-// auction updates. Moving the app between hosts (Render to Azure, or back)
+// auction updates. Moving the app between hosts (Render to Railway, or back)
 // means changing all of them. A build that moves only some sends requests to
 // one backend and listens for live updates on the other, where the WebSocket
 // hubs (process-local) never hear about the deal - nothing errors, updates
@@ -50,12 +50,12 @@ void main() {
         defaults['API_URL']!.first.replaceFirst('https://', 'wss://'));
   });
 
-  test('the defaults name the production Render backend', () {
+  test('the defaults name the Railway backend', () {
     // CI passes no --dart-define, so a release APK ships exactly these
     // defaults. Keep them on the new host, or every installed app keeps
-    // calling the retired Railway one.
-    expect(defaults['API_URL']!.first, 'https://broka-a6vh.onrender.com');
-    expect(defaults['API_WS_URL']!.first, 'wss://broka-a6vh.onrender.com');
+    // calling the retired Render one.
+    expect(defaults['API_URL']!.first, 'https://broka-api-development.up.railway.app');
+    expect(defaults['API_WS_URL']!.first, 'wss://broka-api-development.up.railway.app');
   });
 
   test('ApiService and ApiClient resolve to the same base URL', () {

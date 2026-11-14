@@ -2,12 +2,13 @@
 import 'server-only'
 
 /**
- * The BROKA API: the Render service at broka-a6vh.onrender.com.
+ * The BROKA API: the Railway service at broka-api-development.up.railway.app
+ * (it replaced the Render service at broka-a6vh.onrender.com).
  * Point elsewhere with BROKA_API_URL (a redeploy, no code change); local
  * development sets it to http://127.0.0.1:8000.
  */
 export const API_URL = (
-  process.env.BROKA_API_URL?.trim() || 'https://broka-a6vh.onrender.com'
+  process.env.BROKA_API_URL?.trim() || 'https://broka-api-development.up.railway.app'
 ).replace(/\/+$/, '')
 
 /**

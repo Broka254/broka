@@ -4,7 +4,7 @@
 // back to a retired host, store pages silently stop loading.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const PRODUCTION_API = 'https://broka-a6vh.onrender.com'
+const PRODUCTION_API = 'https://broka-api-development.up.railway.app'
 
 describe('API_URL', () => {
   afterEach(() => {
@@ -12,7 +12,7 @@ describe('API_URL', () => {
     vi.resetModules()
   })
 
-  it('defaults to the production backend on Render', async () => {
+  it('defaults to the production backend on Railway', async () => {
     delete process.env.BROKA_API_URL
     vi.resetModules()
     const { API_URL } = await import('./server-config')
