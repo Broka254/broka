@@ -127,6 +127,10 @@ async def shopping_advisor(
 
     svc = ListingService(db)
     shortlist = await svc.list_listings(category_id=category_id, limit=20)
+    # The shortlist is plain data now; nothing is written here. The read
+    # ends before the model's round trip instead of holding a connection.
+    from api.database import release_connection
+    await release_connection(db, before="ai.shopping_advisor")
     advisor = AIBrokerService()
     result = await advisor.shopping_advisor(query=body.query, shortlist=shortlist, history=body.history)
     # shortlist included alongside the reply (not just prose) so the

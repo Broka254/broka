@@ -26,7 +26,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from typing import Any, Callable, Coroutine
+from dataclasses import dataclass
+from typing import Any, Callable, Coroutine, Optional
 
 from sqlalchemy import text
 
@@ -853,24 +854,27 @@ async def task_check_deal_timers(ctx: dict) -> None:
     from sqlalchemy import select
     from api.database import AsyncSessionLocal, Deal, DealStatus, User
 
+    open_statuses = (
+        DealStatus.paid,
+        DealStatus.goods_not_arrived,
+        DealStatus.awaiting_replacement,
+        DealStatus.awaiting_condition_check,
+        DealStatus.awaiting_resolution,
+    )
     async with AsyncSessionLocal() as session:
         now = datetime.utcnow()
+        # Ids only: each deal is locked and handled in a transaction of its
+        # own below (_process_due_deal_timer).
         result = await session.execute(
-            select(Deal).where(
+            select(Deal.id).where(
                 Deal.timer_deadline.isnot(None),
                 Deal.timer_deadline <= now,
                 Deal.timer_cancelled_at.is_(None),
                 Deal.timer_fired_at.is_(None),
-                Deal.status.in_((
-                    DealStatus.paid,
-                    DealStatus.goods_not_arrived,
-                    DealStatus.awaiting_replacement,
-                    DealStatus.awaiting_condition_check,
-                    DealStatus.awaiting_resolution,
-                )),
+                Deal.status.in_(open_statuses),
             )
         )
-        due_deals = result.scalars().all()
+        due_deal_ids = list(result.scalars().all())
 
         # ── Detect expected-delivery-date passing → start buyer-delivery-silence ──
         # If the expected delivery date has now passed and the buyer has not
@@ -899,74 +903,110 @@ async def task_check_deal_timers(ctx: dict) -> None:
             await session.commit()
             logger.info("[sweep] started buyer-delivery-silence for %d deal(s)", len(delivery_due_deals))
 
-        for deal in due_deals:
-            try:
-                # Race guard: this deal was read in the bulk select above,
-                # which can be stale by the time THIS iteration runs (a
-                # manual buyer/seller action in routers/negotiate.py could
-                # have already moved it past the status that made it
-                # eligible here - especially for deals later in a large
-                # batch). Re-fetch under a row lock and re-verify against
-                # the same status set the bulk query used; skip silently
-                # if another transaction already handled it. See
-                # domains/escrow/service.lock_deal_if_status.
-                from api.domains.escrow.service import lock_deal_if_status
-                locked_deal = await lock_deal_if_status(session, deal.id, (
-                    DealStatus.paid, DealStatus.goods_not_arrived,
-                    DealStatus.awaiting_replacement, DealStatus.awaiting_condition_check,
-                    DealStatus.awaiting_resolution,
-                ))
-                if locked_deal is None:
-                    logger.info("[sweep] deal %s already handled elsewhere - skipping", deal.id)
-                    continue
-                deal = locked_deal
+    for deal_id in due_deal_ids:
+        await _process_due_deal_timer(deal_id, now, open_statuses)
+    if due_deal_ids:
+        logger.info("[sweep] processed %d due deal timer(s)", len(due_deal_ids))
 
-                if deal.timer_type == "seller_silence_refund":
-                    await _fire_auto_refund(session, deal)
-                    deal.timer_fired_at = now
-                elif deal.timer_type == "buyer_silence_release":
-                    await _fire_auto_release(session, deal)
-                    deal.timer_fired_at = now
-                elif deal.timer_type == "seller_claimed_delivery":
-                    # Multi-step: reminders every 12 hours, texts on days 2
-                    # and 3, and the release once the buyer has been silent
-                    # for 72 hours since the seller's claim
-                    # (api/domains/escrow/protection.py).
-                    from api.domains.escrow.protection import process_delivery_claim
-                    if await process_delivery_claim(session, deal, now):
-                        await _fire_claimed_delivery_release(session, deal)
-                elif deal.timer_type == "refund_request":
-                    # The buyer asked for a refund before any delivery claim:
-                    # the seller's reminders, then the refund if they stayed
-                    # silent (api/domains/escrow/protection.py).
-                    from api.domains.escrow.protection import process_refund_request
-                    await process_refund_request(session, deal, now)
-                elif deal.timer_type == "goods_not_arrived_contact_seller":
-                    # Branch B: expected delivery date passed, buyer reported
-                    # goods haven't arrived. Zeno contacts seller every 24h
-                    # for 3 days. If still no response → auto-refund buyer.
-                    await _process_goods_not_arrived_checkin(session, deal, now)
-                elif deal.timer_type == "buyer_delivery_silence":
-                    # Buyer didn't respond to "did goods arrive?" on expected
-                    # delivery date. 4-day / 24h-checkin / SMS-day-3 sequence,
-                    # then auto-release if still silent.
-                    await _process_buyer_delivery_silence_checkin(session, deal, now)
-                else:
-                    logger.warning("[sweep] deal %s has unknown timer_type=%s - skipping",
-                                    deal.id, deal.timer_type)
-                    continue
-            except Exception as exc:
-                logger.error("[sweep] failed to fire timer for deal %s: %s", deal.id, exc)
 
-        if due_deals:
+async def _process_due_deal_timer(deal_id: str, now, open_statuses) -> None:
+    """One due deal timer, in a short transaction of its own.
+
+    The sweep used to handle every due deal in ONE transaction: each deal's
+    row lock held until the whole batch was done, every reminder's push and
+    text sent under those locks, and one commit at the end - a failure in it
+    (or a session left broken by one deal's error) rolled back every deal,
+    refunds already paid out included, for the next pass to pay again.
+
+    Now each deal is locked, decided and committed on its own. The reminders
+    it decides on go out after its commit (api/core/after_commit), with no
+    connection held; so do its events and an E-Confirm release, as before.
+    What stays inside the transaction is the money: a refund's status,
+    ledger entry and timer mark, under the lock, with the legacy M-Pesa B2C
+    payout (_fire_auto_refund) - moving that call out of the lock is a
+    change to how a refund is claimed and reconciled, not to connection
+    handling, and is left to its own review (ESCROW_AUDIT.md).
+    """
+    from api.core.after_commit import defer_sends, run_sends, take_sends
+    from api.database import AsyncSessionLocal
+    from api.domains.escrow.service import lock_deal_if_status
+
+    async with AsyncSessionLocal() as session:
+        defer_sends(session)
+        try:
+            # Race guard: this deal was read in the bulk select above,
+            # which can be stale by the time THIS iteration runs (a
+            # manual buyer/seller action in routers/negotiate.py could
+            # have already moved it past the status that made it
+            # eligible here - especially for deals later in a large
+            # batch). Re-fetch under a row lock and re-verify against
+            # the same status set the bulk query used; skip silently
+            # if another transaction already handled it. See
+            # domains/escrow/service.lock_deal_if_status.
+            deal = await lock_deal_if_status(session, deal_id, open_statuses)
+            if deal is None:
+                logger.info("[sweep] deal %s already handled elsewhere - skipping", deal_id)
+            else:
+                await _fire_deal_timer(session, deal, now)
+        except Exception as exc:
+            # As the batch always did: logged, and what this deal's pass did
+            # is still committed below - a refund already paid out must not
+            # roll back into "due" for the next pass to pay again.
+            logger.error("[sweep] failed to fire timer for deal %s: %s", deal_id, exc)
+        try:
             await session.commit()
-            logger.info("[sweep] processed %d due deal timer(s)", len(due_deals))
+        except Exception as exc:
+            # Nothing of this pass was recorded, so nothing it decided to
+            # announce is sent: the next pass decides again.
+            logger.error("[sweep] could not record the timer pass for deal %s: %s", deal_id, exc)
+            await session.rollback()
+            return
         # Only now that the status changes are committed may the rest of the
         # system hear about them - see _queue_after_commit.
         await _publish_queued_events(session)
         releases = session.info.pop("broka_post_commit_releases", [])
-    for deal_id in releases:
-        await _release_econfirm_after_claim(deal_id)
+        sends = take_sends(session)
+    await run_sends(sends)
+    for released_deal_id in releases:
+        await _release_econfirm_after_claim(released_deal_id)
+
+
+async def _fire_deal_timer(session, deal, now) -> None:
+    """What a due timer does to a deal locked in `session` (the caller
+    commits): fires it, or sends the reminder that is due."""
+    if deal.timer_type == "seller_silence_refund":
+        await _fire_auto_refund(session, deal)
+        deal.timer_fired_at = now
+    elif deal.timer_type == "buyer_silence_release":
+        await _fire_auto_release(session, deal)
+        deal.timer_fired_at = now
+    elif deal.timer_type == "seller_claimed_delivery":
+        # Multi-step: reminders every 12 hours, texts on days 2
+        # and 3, and the release once the buyer has been silent
+        # for 72 hours since the seller's claim
+        # (api/domains/escrow/protection.py).
+        from api.domains.escrow.protection import process_delivery_claim
+        if await process_delivery_claim(session, deal, now):
+            await _fire_claimed_delivery_release(session, deal)
+    elif deal.timer_type == "refund_request":
+        # The buyer asked for a refund before any delivery claim:
+        # the seller's reminders, then the refund if they stayed
+        # silent (api/domains/escrow/protection.py).
+        from api.domains.escrow.protection import process_refund_request
+        await process_refund_request(session, deal, now)
+    elif deal.timer_type == "goods_not_arrived_contact_seller":
+        # Branch B: expected delivery date passed, buyer reported
+        # goods haven't arrived. Zeno contacts seller every 24h
+        # for 3 days. If still no response → auto-refund buyer.
+        await _process_goods_not_arrived_checkin(session, deal, now)
+    elif deal.timer_type == "buyer_delivery_silence":
+        # Buyer didn't respond to "did goods arrive?" on expected
+        # delivery date. 4-day / 24h-checkin / SMS-day-3 sequence,
+        # then auto-release if still silent.
+        await _process_buyer_delivery_silence_checkin(session, deal, now)
+    else:
+        logger.warning("[sweep] deal %s has unknown timer_type=%s - skipping",
+                       deal.id, deal.timer_type)
 
 
 async def _fire_claimed_delivery_release(session, deal) -> None:
@@ -1163,10 +1203,8 @@ async def _process_goods_not_arrived_checkin(session, deal, now) -> None:
 
     # Send SMS-style push on the second-last day (index len-2)
     if next_checkin_index == len(_GOODS_NOT_ARRIVED_SCHEDULE_DAYS) - 2:
-        try:
-            await _send_seller_nondelivery_sms(deal)
-        except Exception as exc:
-            logger.error("[sweep] seller non-delivery SMS failed for deal %s: %s", deal.id, exc)
+        await _notify_after_commit(session, "seller non-delivery push",
+                                   _send_seller_nondelivery_sms, deal)
 
     # Also notify the buyer that we're still chasing
     buyer_update = NegotiationMessage(
@@ -1267,20 +1305,46 @@ async def _process_buyer_delivery_silence_checkin(session, deal, now) -> None:
 
     # SMS on day 3 (second-to-last)
     if is_sms_day:
-        try:
-            await _send_buyer_delivery_silence_sms(deal)
-        except Exception as exc:
-            logger.error("[sweep] buyer delivery silence SMS failed for deal %s: %s", deal.id, exc)
+        await _notify_after_commit(session, "buyer delivery-silence push",
+                                   _send_buyer_delivery_silence_sms, deal)
 
     # Push notification
-    try:
-        await _send_checkin_notification(deal, is_final=is_final)
-    except Exception as exc:
-        logger.error("[sweep] buyer delivery silence push failed for deal %s: %s", deal.id, exc)
+    await _notify_after_commit(session, "buyer delivery check-in push",
+                               _send_checkin_notification, deal, is_final=is_final)
 
     deal.timer_deadline = now
     logger.info("[sweep] deal %s buyer-delivery-silence check-in %d/%d sent",
                 deal.id, deal.checkin_count, len(_BUYER_DELIVERY_SILENCE_SCHEDULE_DAYS))
+
+
+def _deal_ref(deal):
+    """The fields the notification helpers read, as plain values: they run
+    after the sweep's session has committed and closed."""
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        id=deal.id, listing_id=deal.listing_id, buyer_id=deal.buyer_id,
+        seller_id=deal.seller_id, replacement_cycle=deal.replacement_cycle,
+    )
+
+
+async def _notify_after_commit(session, label: str, helper, deal, **kwargs) -> None:
+    """Run a deal notification helper once the sweep's transaction commits
+    (api/core/after_commit) - not under the deal's row lock, and not while
+    its connection is out, which is where the helper used to open a second
+    one for its token lookup. Sent at once when the session does not defer.
+    """
+    from api.core.after_commit import send_after_commit
+    ref = _deal_ref(deal)
+
+    async def send() -> None:
+        await helper(ref, **kwargs)
+
+    if send_after_commit(session, f"{label} deal={ref.id}", send):
+        return
+    try:
+        await send()
+    except Exception as exc:
+        logger.error("[sweep] %s failed for deal %s: %s", label, ref.id, exc)
 
 
 async def _send_seller_nondelivery_sms(deal) -> None:
@@ -1359,8 +1423,17 @@ async def task_check_interest_nudges(ctx: dict) -> None:
     from sqlalchemy import select
     from api.database import AsyncSessionLocal, Interest
 
+    # Three short sessions, none open through an SMS. The sweep used to read,
+    # text every due seller and write in one transaction: a pooled connection
+    # held for the whole batch of provider round trips, and one failed commit
+    # at the end forgot every text already sent, so the next pass sent them
+    # all again.
+    #
+    # 1. Decide, in one read: who is due, who has answered since (cancelled),
+    #    who can't be texted (cancelled), what each text says.
+    now = datetime.utcnow()
+    pending: list = []
     async with AsyncSessionLocal() as session:
-        now = datetime.utcnow()
         result = await session.execute(
             select(Interest).where(
                 Interest.nudge_deadline.isnot(None),
@@ -1371,32 +1444,43 @@ async def task_check_interest_nudges(ctx: dict) -> None:
         )
         due = result.scalars().all()
 
-        sent = 0
         for interest in due:
             try:
                 if await _seller_has_responded(session, interest):
                     # Real reply found in the thread — nothing to send.
                     interest.nudge_cancelled_at = now
                     continue
-                if await _fire_availability_nudge(session, interest):
-                    interest.nudge_sent_at = now
-                    sent += 1
-                # else: SMS send failed (or listing/seller/buyer missing,
-                # which _fire_availability_nudge marks cancelled itself) —
-                # if still due, next sweep pass retries it.
+                nudge = await _prepare_availability_nudge(session, interest)
+                if nudge is not None:
+                    pending.append(nudge)
+                # else: listing/seller/buyer missing or the seller opted out
+                # (cancelled there), or quiet hours (left due for the next
+                # pass in daylight).
             except Exception as exc:
                 logger.error("[sweep] interest nudge check failed for interest %s: %s",
                              interest.id, exc)
-
-        # NOT behind `if not due: return` - the whole point is that a row
-        # already texted is due for its update, and on most passes there is
-        # nothing new to text at all. Returning early here made the buyer's
-        # note unreachable.
-        await _tell_buyers_still_waiting(session, now)
-
         await session.commit()
-        if sent:
-            logger.info("[sweep] sent %d availability nudge SMS", sent)
+
+    # 2. Text each seller with no connection held (_send_availability_nudge
+    #    claims the row first, in its own short transaction).
+    sent = 0
+    for nudge in pending:
+        try:
+            if await _send_availability_nudge(nudge, now):
+                sent += 1
+        except Exception as exc:
+            logger.error("[sweep] interest nudge send failed for interest %s: %s",
+                         nudge.interest_id, exc)
+
+    # 3. NOT behind `if not due: return` - the whole point is that a row
+    # already texted is due for its update, and on most passes there is
+    # nothing new to text at all. Returning early here made the buyer's
+    # note unreachable.
+    async with AsyncSessionLocal() as session:
+        await _tell_buyers_still_waiting(session, now)
+        await session.commit()
+    if sent:
+        logger.info("[sweep] sent %d availability nudge SMS", sent)
 
 
 async def _tell_buyers_still_waiting(session, now) -> None:
@@ -1500,13 +1584,27 @@ async def _seller_has_responded(session, interest) -> bool:
     return result.scalar_one_or_none() is not None
 
 
-async def _fire_availability_nudge(session, interest) -> bool:
-    """Drafts (AI, with a template fallback) and sends the SMS. Returns True
-    only on confirmed send, so the caller knows whether to mark it done."""
+@dataclass(frozen=True)
+class _PendingNudge:
+    """One availability text, decided and worded, as plain values: it is
+    sent after the session that read it has closed."""
+    interest_id: str
+    phone: str
+    text: str
+    listing_id: str
+    listing_name: str
+    seller_first: str
+    buyer_id: str
+
+
+async def _prepare_availability_nudge(session, interest) -> Optional[_PendingNudge]:
+    """Decides whether this seller is texted now and words the text - the
+    gates and the wording, not the send (_send_availability_nudge). None
+    when there is nothing to send this pass: a permanent reason is marked
+    cancelled here; quiet hours leave the interest due."""
     from datetime import datetime
     from sqlalchemy import select
     from api.database import Listing, User
-    from api.core.sms import get_sms_provider
 
     listing_r = await session.execute(select(Listing).where(Listing.id == interest.listing_id))
     listing = listing_r.scalar_one_or_none()
@@ -1520,7 +1618,7 @@ async def _fire_availability_nudge(session, interest) -> bool:
     if not listing or not seller or not buyer:
         # Permanent condition (e.g. listing removed since) — stop retrying.
         interest.nudge_cancelled_at = datetime.utcnow()
-        return False
+        return None
 
     # The seller answered Zeno's "should I text you when a buyer shows up?"
     # with no when they listed it (Listing.sms_alerts). Cancelled, not left
@@ -1528,7 +1626,7 @@ async def _fire_availability_nudge(session, interest) -> bool:
     # re-read it.
     if getattr(listing, "sms_alerts", True) is False:
         interest.nudge_cancelled_at = datetime.utcnow()
-        return False
+        return None
 
     # SYSTEM-GENERATED, NOT AI-GENERATED (2026-09-14).
     #
@@ -1549,7 +1647,7 @@ async def _fire_availability_nudge(session, interest) -> bool:
     # The deal is not lost by waiting; the buyer is asleep too.
     if is_quiet_hours():
         logger.info("[sweep] nudge for interest %s deferred - quiet hours", interest.id)
-        return False
+        return None
 
     text = compose_availability_nudge(
         seller_name=seller.name,
@@ -1565,6 +1663,43 @@ async def _fire_availability_nudge(session, interest) -> bool:
         # reasonably read as a second buyer.
         seed=interest.id,
     )
+    return _PendingNudge(
+        interest_id=interest.id,
+        phone=seller.phone,
+        text=text,
+        listing_id=listing.id,
+        listing_name=listing.name,
+        seller_first=(seller.name or "the seller").split()[0],
+        buyer_id=interest.buyer_id,
+    )
+
+
+async def _send_availability_nudge(nudge: _PendingNudge, now) -> bool:
+    """Texts the seller: claim, send, record - each database step its own
+    short transaction, none open through the SMS provider. True only on a
+    confirmed send.
+
+    The claim (nudge_sent_at, set only while still unsent and uncancelled)
+    is what lets the connection go during the send: a seller reply that
+    cancelled the interest meanwhile, or another pass that got there first,
+    leaves nothing to claim and nothing is sent. A send that fails gives the
+    claim back, so the next sweep tries again, as a failed send always did.
+    """
+    from sqlalchemy import update
+    from api.database import AsyncSessionLocal, Interest, NegotiationMessage
+    from api.core.sms import get_sms_provider
+
+    async with AsyncSessionLocal() as session:
+        claimed = await session.execute(
+            update(Interest)
+            .where(Interest.id == nudge.interest_id,
+                   Interest.nudge_sent_at.is_(None),
+                   Interest.nudge_cancelled_at.is_(None))
+            .values(nudge_sent_at=now)
+        )
+        await session.commit()
+    if claimed.rowcount != 1:
+        return False
 
     # The availability text is free for every seller (2026-11-08). It used
     # to spend one of the seller's plan's SMS alerts, so a seller without a
@@ -1572,40 +1707,48 @@ async def _fire_availability_nudge(session, interest) -> bool:
     # a real buyer. `sms_alerts` above is the seller's own opt-out and stays
     # the only answer that stops this text.
     try:
-        sent = bool(await get_sms_provider().send(seller.phone, text))
+        sent = bool(await get_sms_provider().send(nudge.phone, nudge.text))
     except Exception as exc:
-        logger.error("[sweep] SMS send raised for interest %s: %s", interest.id, exc)
+        logger.error("[sweep] SMS send raised for interest %s: %s", nudge.interest_id, exc)
         sent = False
-    if not sent:
-        # Not delivered; the next sweep tries again.
-        return False
 
-    # Close the loop with the buyer. The SMS is real and already sent, so
-    # telling them it happened is a fact, not a reassuring fiction - and a
-    # person who promised to chase the seller and then reports back is what
-    # makes Zeno feel like an intermediary rather than a form. The row is
-    # addressed to the buyer only (recipient_role), so it never appears in
-    # the seller's thread or notifications, and the usual session hook
-    # pushes it if their app is closed.
-    try:
-        from api.database import NegotiationMessage
-        seller_first = (seller.name or "the seller").split()[0]
-        session.add(NegotiationMessage(
-            listing_id=listing.id,
-            sender_id="broker",
-            role="broker",
-            recipient_role="buyer",
-            content=(f"I've just texted {seller_first} to make sure they see "
-                     f"your message about {listing.name}. I'll tell you the "
-                     f"moment they answer."),
-            buyer_id=interest.buyer_id,
-            msg_type="text",
-        ))
-    except Exception as exc:
-        # The SMS went; failing to write the note must not unmark the
-        # nudge or make the sweep send a second text.
-        logger.warning("[sweep] buyer follow-up message failed for interest %s: %s",
-                       interest.id, exc)
+    async with AsyncSessionLocal() as session:
+        if not sent:
+            # Not delivered: the claim goes back and the next sweep tries
+            # again - only this pass's claim, never a newer one.
+            await session.execute(
+                update(Interest)
+                .where(Interest.id == nudge.interest_id, Interest.nudge_sent_at == now)
+                .values(nudge_sent_at=None)
+            )
+            await session.commit()
+            return False
+
+        # Close the loop with the buyer. The SMS is real and already sent, so
+        # telling them it happened is a fact, not a reassuring fiction - and a
+        # person who promised to chase the seller and then reports back is what
+        # makes Zeno feel like an intermediary rather than a form. The row is
+        # addressed to the buyer only (recipient_role), so it never appears in
+        # the seller's thread or notifications, and the usual session hook
+        # pushes it if their app is closed.
+        try:
+            session.add(NegotiationMessage(
+                listing_id=nudge.listing_id,
+                sender_id="broker",
+                role="broker",
+                recipient_role="buyer",
+                content=(f"I've just texted {nudge.seller_first} to make sure they see "
+                         f"your message about {nudge.listing_name}. I'll tell you the "
+                         f"moment they answer."),
+                buyer_id=nudge.buyer_id,
+                msg_type="text",
+            ))
+            await session.commit()
+        except Exception as exc:
+            # The SMS went; failing to write the note must not unmark the
+            # nudge or make the sweep send a second text.
+            logger.warning("[sweep] buyer follow-up message failed for interest %s: %s",
+                           nudge.interest_id, exc)
     return True
 
 
@@ -2311,7 +2454,7 @@ async def task_reconcile_mpesa(ctx: dict, db_url: str) -> None:
     terminal states, an ambiguous answer stays pending, and a truly
     unreferenced initiation raises a reconciliation alert for a person.
     """
-    from sqlalchemy import select
+    from sqlalchemy import select, update
     from datetime import datetime, timedelta
     from api.core import mpesa_stk
 
@@ -2351,38 +2494,61 @@ async def task_reconcile_mpesa(ctx: dict, db_url: str) -> None:
         await session.commit()
 
         cutoff  = datetime.utcnow() - timedelta(minutes=10)
-        result  = await session.execute(
-            select(MpesaTransaction).where(
+        # Ids only, and the read ends here: Safaricom is asked about each
+        # prompt with no transaction open (up to 15 s a query), and each
+        # answer is applied in a short transaction to the row as it is
+        # THEN - the callback may have settled it while the query ran.
+        stale = (await session.execute(
+            select(MpesaTransaction.id, MpesaTransaction.checkout_request_id).where(
                 MpesaTransaction.status     == MpesaStatus.pending,
                 MpesaTransaction.created_at <= cutoff,
             ).limit(100)
-        )
-        stale = result.scalars().all()
-        for tx in stale:
-            if not tx.checkout_request_id:
+        )).all()
+        await session.commit()
+
+        async def still_pending(tx_id):
+            # Fresh from the database (sessions keep what they loaded): a
+            # prompt the callback settled meanwhile is left as it left it.
+            return (await session.execute(
+                select(MpesaTransaction)
+                .where(MpesaTransaction.id == tx_id,
+                       MpesaTransaction.status == MpesaStatus.pending)
+                .execution_options(populate_existing=True)
+            )).scalar_one_or_none()
+
+        for tx_id, checkout_request_id in stale:
+            if not checkout_request_id:
                 # Safaricom accepted (or may have accepted) a request but we
                 # never received its identifier. There is no id to query and
                 # no safe automatic terminal state. Keep the unique
                 # active_intent claim in place, which blocks a replacement
                 # prompt, and ask a human to reconcile it.
+                tx = await still_pending(tx_id)
                 message = "STK initiation has no provider identifier; reconcile manually"
-                if tx.last_error != message:
+                if tx is not None and tx.last_error != message:
                     tx.last_error = message
                     report_reconciliation(
                         "mpesa_initiation_unknown", deal_id=tx.deal_id,
                         reason=message,
                     )
+                await session.commit()
                 continue
 
             try:
-                answer = await mpesa_stk.stk_query(tx.checkout_request_id)
-                outcome = mpesa_stk.query_outcome(answer)
+                answer = await mpesa_stk.stk_query(checkout_request_id)
+                outcome, query_error = mpesa_stk.query_outcome(answer), None
             except Exception as exc:
                 # Transport/credentials uncertainty is not a payment result.
-                tx.last_error = f"reconciliation query unavailable: {type(exc).__name__}"
-                continue
+                outcome = None
+                query_error = f"reconciliation query unavailable: {type(exc).__name__}"
 
-            if outcome is True:
+            tx = await still_pending(tx_id)
+            if tx is None:
+                await session.commit()
+                continue
+            if query_error is not None:
+                tx.last_error = query_error
+            elif outcome is True:
                 from api.routers.mpesa import _settle_successful_stk
                 # A query carries no receipt, so leave callback_processed
                 # false: the callback (or a later inbox retry) still needs
@@ -2390,16 +2556,19 @@ async def task_reconcile_mpesa(ctx: dict, db_url: str) -> None:
                 await _settle_successful_stk(session, tx, mark_processed=False)
                 logger.info("[worker:reconcile] settled tx=%s from provider query", tx.id)
             elif outcome is False:
-                tx.status = MpesaStatus.failed
-                tx.callback_processed = True
-                tx.active_intent = None
-                tx.last_error = None
-                logger.info("[worker:reconcile] provider says tx=%s ended unpaid", tx.id)
+                # Only while still pending: a success the callback commits
+                # between the read above and this write is not overwritten.
+                await session.execute(
+                    update(MpesaTransaction)
+                    .where(MpesaTransaction.id == tx_id,
+                           MpesaTransaction.status == MpesaStatus.pending)
+                    .values(status=MpesaStatus.failed, callback_processed=True,
+                            active_intent=None, last_error=None)
+                )
+                logger.info("[worker:reconcile] provider says tx=%s ended unpaid", tx_id)
             else:
                 tx.last_error = "provider still reports the prompt as open"
-
-        # Explicitly release the read transaction before the engine closes.
-        await session.commit()
+            await session.commit()
     await _dispose_task_engine(engine)
 
 
@@ -2618,6 +2787,10 @@ async def task_lapse_unpaid_auction_wins(ctx: dict) -> None:
                 )).scalar_one_or_none()
                 if listing is None:
                     continue
+                # The lapse is committed; the listing read ends before the
+                # winner's and seller's pushes are sent.
+                from api.database import release_connection
+                await release_connection(db, before="auction.payment_lapsed")
                 await auction_events.emit_payment_lapsed(
                     listing_id=listing_id,
                     listing_name=listing.name,

@@ -36,7 +36,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, update
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, Field
 from typing import List, NamedTuple, Optional
@@ -48,7 +48,10 @@ import re
 import json
 import time
 
-from api.database import get_db, NegotiationMessage, Listing, User, Deal, DealStatus, ThreadReadState
+from api.database import (
+    get_db, NegotiationMessage, Listing, User, Deal, DealStatus, ThreadReadState,
+    release_connection,
+)
 from api.domains.listings.handover import IN_PLACE_NOTE, is_deliverable
 from api.routers.auth import _approx_location
 from api.core import gemini, text_guard
@@ -59,6 +62,7 @@ from api.core.message_visibility import (
 )
 from api.core import message_delivery
 from api.core import thread_clears
+from api.core import inbox_threads
 from api.core.audit import record_audit
 from api.core.chat_files import message_media_fields
 from api.core.config import settings
@@ -1510,7 +1514,7 @@ LANGUAGE INSTRUCTION: {_language_instruction(lang)}
 async def _seller_can_be_texted(listing, seller) -> bool:
     """Whether the 5-minute follow-up text will actually go out.
 
-    The same two gates api/core/workers._fire_availability_nudge applies
+    The same two gates api/core/workers._prepare_availability_nudge applies
     before it sends: the listing-level opt-out and a phone number on file.
     Texts are free for every seller (2026-11-08), so a plan no longer closes
     this gate. Zeno makes this promise in the buyer's own conversation, so a
@@ -2005,8 +2009,15 @@ async def send_message(
     #
     # Idempotent per (listing, buyer) - a chatty buyer does not keep pushing
     # their own seller's reminder out of reach.
-    if actual_role == "buyer" and data.intent not in _NON_MESSAGE_INTENTS:
-        from api.core.interest_arming import arm_availability_nudge
+    #
+    # Armed here, inside the transaction the intent's first commit ends, so
+    # the reminder and what the buyer sent land together - except for the
+    # availability check, which writes nothing until Zeno's two replies come
+    # back: it arms with them (below), so the AI wait holds no unsaved write
+    # and the connection can go back to the pool for it.
+    from api.core.interest_arming import arm_availability_nudge
+    if (actual_role == "buyer" and data.intent not in _NON_MESSAGE_INTENTS
+            and data.intent != "ask_seller_availability"):
         await arm_availability_nudge(
             db, data.listing_id, authenticated_uid, seller_id=listing.seller_id,
         )
@@ -2142,6 +2153,11 @@ async def send_message(
             db, listing, seller, b_name, dist_str, lang, actual_role,
             direct_chat_summary + delivery_context + silence_context,
         )
+        # Everything the greeting needs is read and nothing is written yet
+        # (a greeting arms no reminder): the connection goes back to the
+        # pool for the model's round trip, and a short transaction below
+        # stores the greeting.
+        await release_connection(db, before="ai.opening_greeting")
         reply = await _call_ai(sys_prompt, [{"role": "user", "content": "Begin."}])
         _greet_row = NegotiationMessage(
             listing_id=data.listing_id, sender_id="broker",
@@ -2168,15 +2184,29 @@ async def send_message(
     # separate private reassurance to the buyer (confirming it was sent).
     if data.intent == "ask_seller_availability":
         import asyncio as _asyncio
-        sys_seller, sys_buyer = await _asyncio.gather(
-            _system_for_seller_availability_check(db, listing, seller, b_name, dist_str, lang),
-            _system_for_buyer_reassurance(db, listing, seller, b_name, dist_str, lang),
-        )
+        # One after the other: both read the seller's reviews through this
+        # request's session, and a session runs one statement at a time -
+        # gathered, the second ran while the first was still on the
+        # connection, which asyncpg refuses ("another operation is in
+        # progress").
+        sys_seller = await _system_for_seller_availability_check(
+            db, listing, seller, b_name, dist_str, lang)
+        sys_buyer = await _system_for_buyer_reassurance(
+            db, listing, seller, b_name, dist_str, lang)
+        # Read, and nothing written: the reminder is armed with the replies.
+        await release_connection(db, before="ai.availability_check")
         reply_seller, reply_buyer = await _asyncio.gather(
             _call_ai(sys_seller, [{"role": "user", "content": "Begin."}]),
             _call_ai(sys_buyer,  [{"role": "user", "content": "Begin."}]),
         )
         effective_buyer_id = authenticated_uid if actual_role == "buyer" else data.buyer_id
+        if actual_role == "buyer":
+            # In the same transaction as the two messages, as it was when
+            # armed at the top: the seller's reminder runs for a relay that
+            # was sent, never for one whose generation failed.
+            await arm_availability_nudge(
+                db, data.listing_id, authenticated_uid, seller_id=listing.seller_id,
+            )
         broker_msg_seller = NegotiationMessage(
             listing_id=data.listing_id, sender_id="broker",
             role="broker", recipient_role="seller",
@@ -2200,6 +2230,8 @@ async def send_message(
         # Translate INTO the requester's own language - they're asking
         # "what did the other party mean", not asking to compose a reply.
         target_lang_instruction = _language_instruction(lang)
+        # Nothing is stored for a translation: the read is done.
+        await release_connection(db, before="ai.translation")
         reply = await _call_ai(
             _system_for_translation(target_lang_instruction),
             [{"role": "user", "content": data.content}],
@@ -2631,6 +2663,9 @@ async def send_message(
             )
             try:
                 from api.core.vision import prepare_for_model
+                # The deal's new state is committed above; nothing is
+                # pending through the analysis.
+                await release_connection(db, before="ai.damage_photo")
                 # Any provider that can see (Gemini, then DeepSeek), and only
                 # one that can: the result is quoted to the seller as "my
                 # image analysis shows", so "I can't see it" must not be.
@@ -2784,6 +2819,12 @@ async def send_message(
         if buyer_user and buyer_user.phone:
             try:
                 from api.routers.disputes import _mpesa_b2c_refund
+                # The refund itself - status, ledger entry, under the deal's
+                # lock - was committed above, before the payout, as it always
+                # was. All that is open now is the buyer's read: it ends
+                # rather than holding a connection through Daraja's OAuth and
+                # B2C round trips.
+                await release_connection(db, before="mpesa.b2c_refund")
                 await _mpesa_b2c_refund(buyer_user.phone, refund_amount, active_deal.id)
             except Exception as exc:
                 logger.error("[negotiate] refund B2C failed for deal %s: %s", active_deal.id, exc)
@@ -3226,13 +3267,27 @@ async def send_message(
         )
         pending_deal = pending_deal_result.scalar_one_or_none()
         if pending_deal:
+            pending_deal_id = pending_deal.id
             try:
+                # The user's message and any audit row are committed above;
+                # only this read is open. It ends before the model is asked,
+                # and the date is written in a short transaction of its own.
+                await release_connection(db, before="ai.delivery_date")
                 parsed = await _extract_delivery_date(data.content)
                 if parsed:
-                    pending_deal.expected_delivery_date = parsed
+                    # Still unset: the read above no longer holds anything,
+                    # and a date the other side's message recorded meanwhile
+                    # is not overwritten by this one.
+                    recorded = await db.execute(
+                        update(Deal)
+                        .where(Deal.id == pending_deal_id,
+                               Deal.expected_delivery_date.is_(None))
+                        .values(expected_delivery_date=parsed)
+                    )
                     await db.commit()
-                    logger.info("[negotiate] recorded expected_delivery_date=%s for deal=%s",
-                                parsed.isoformat(), pending_deal.id)
+                    if recorded.rowcount:
+                        logger.info("[negotiate] recorded expected_delivery_date=%s for deal=%s",
+                                    parsed.isoformat(), pending_deal_id)
             except Exception as exc:
                 logger.warning("[negotiate] delivery-date extraction failed: %s", exc)
 
@@ -3256,6 +3311,12 @@ async def send_message(
     # sender "confirm you passed it to the seller" - regardless of whether
     # anything worth relaying was actually said. That unconditional framing
     # is what led Zeno to fabricate a seller response that never happened.
+    #
+    # The classifier is a model call: no transaction is held through it.
+    # What it decides picks which rows are read next, so those reads follow
+    # it, each a short transaction, and the connection is given back again
+    # before the replies are drafted.
+    await release_connection(db, before="ai.classify_relay")
     classification = await _classify_relay(data.content, sender_role, other_role)
     grounding = await _grounding_transcript(db, data.listing_id, effective_buyer_id, sender_role)
 
@@ -3346,6 +3407,11 @@ async def send_message(
             buyer_location=buyer_location,
         )
         msgs_other = _build_messages_for_party(history, data, other_role)
+        # Every row the drafts need is in hand and nothing is unsaved (the
+        # user's message was committed before any model was asked): the
+        # connection goes back for the drafting, the slowest wait of the
+        # request. If a provider fails, the message is already stored.
+        await release_connection(db, before="ai.drafts")
         reply_sender, reply_other = await asyncio.gather(
             _call_ai(sys_sender, msgs_sender, image_base64=image),
             _call_ai(sys_other,  msgs_other),
@@ -3356,6 +3422,7 @@ async def send_message(
             content=reply_other, buyer_id=effective_buyer_id, msg_type="text",
         )
     else:
+        await release_connection(db, before="ai.reply")
         reply_sender = await _call_ai(sys_sender, msgs_sender, image_base64=image)
 
     # Broker messages carry buyer_id so /history can scope them to the right thread.
@@ -3414,6 +3481,11 @@ async def send_message(
         # Same cheap length gate as before (raised from 40 because "can you
         # video call him for me" is legitimate and longer than the old cap).
         # Longer messages are conversation, not a command.
+        #
+        # Zeno's replies are committed and re-read above; that read ends
+        # before the classifier's round trip. Nothing below touches the
+        # database.
+        await release_connection(db, before="ai.classify_action")
         action_value = await _classify_zeno_action(data.content, grounding, sender_role)
 
     # `buyer` and `seller` are both loaded near the top of send_message
@@ -3565,6 +3637,10 @@ async def zeno_draft_sms(
     await entitlements.consume(db, current["id"], entitlements.Feature.SMS)
 
     from api.core.sms import get_sms_provider
+    # consume() commits the alert it spends; when it counts nothing (no
+    # plan limits, a trial) the reads above are still open. Either way no
+    # transaction is held through the SMS provider's round trip.
+    await release_connection(db, before="sms.zeno_text")
     try:
         ok = bool(await get_sms_provider().send(other.phone, body))
     except Exception as exc:
@@ -4410,76 +4486,6 @@ async def _thread_unread_and_seen(
         and counterpart_last_delivered >= last_msg.created_at
     )
     return unread, seen, delivered
-
-
-async def _unread_by_kind(
-    db: AsyncSession, listing_id: Optional[str], buyer_id: str, my_role: str,
-    *, store_id: Optional[str] = None, cleared_at: Optional[_dt] = None,
-) -> tuple[Optional[dict], Optional[dict]]:
-    """The other side's newest unread message, and their newest unread
-    missed call, in one thread - each None when there is none.
-
-    The inbox describes a thread by its last row, and the app's sweep
-    announces that row. So a text followed by a missed call announced only
-    the missed call - reported from phones (2026-10-07): "only missed call
-    was displayed despite there being an unread text message" - and a
-    missed call followed by a text, only the text. These are the two a last
-    row can hide; the app announces whichever it has not yet.
-
-    Unread by the same watermark as `unread`, so a thread read on another
-    phone has nothing here. "cancelled" is a missed call too: the caller
-    hung up before it was answered.
-    """
-    counterpart_role = "seller" if my_role == "buyer" else "buyer"
-    if store_id:
-        _trs_cond = (ThreadReadState.store_id == store_id)
-        _msg_cond = (NegotiationMessage.store_id == store_id)
-    else:
-        _trs_cond = (ThreadReadState.listing_id == listing_id)
-        _msg_cond = (NegotiationMessage.listing_id == listing_id)
-    my_last_read = (await db.execute(select(ThreadReadState.last_read_at).where(
-        _trs_cond,
-        ThreadReadState.buyer_id   == buyer_id,
-        ThreadReadState.role       == my_role,
-    ))).scalar_one_or_none()
-    conds = [
-        _msg_cond,
-        NegotiationMessage.buyer_id   == buyer_id,
-        NegotiationMessage.role       == counterpart_role,
-        or_(NegotiationMessage.via_ai.is_(False),
-            NegotiationMessage.via_ai.is_(None)),
-        or_(NegotiationMessage.recipient_role.is_(None),
-            NegotiationMessage.recipient_role == my_role),
-        # Same reason as `unread`: a tombstone has nothing left to announce.
-        NegotiationMessage.deleted_at.is_(None),
-    ]
-    floor = thread_clears.later(my_last_read, cleared_at)
-    if floor:
-        conds.append(NegotiationMessage.created_at > floor)
-
-    async def _newest(*extra):
-        # visibility-ok: conds above - the other side's direct messages, via_ai and others' recipient_role excluded
-        return (await db.execute(
-            select(NegotiationMessage).where(*conds, *extra)
-            .order_by(NegotiationMessage.created_at.desc()).limit(1)
-        )).scalar_one_or_none()
-
-    msg = await _newest(or_(NegotiationMessage.msg_type.is_(None),
-                            NegotiationMessage.msg_type != "call"))
-    call = await _newest(NegotiationMessage.msg_type == "call",
-                         NegotiationMessage.content.in_(("missed", "cancelled")))
-    return (
-        {
-            "id":       msg.id,
-            "content":  ("Message deleted" if getattr(msg, "deleted_at", None)
-                         else (msg.content or "[media]"))[:80],
-            "msg_type": msg.msg_type or "text",
-        } if msg else None,
-        {
-            "id":        call.id,
-            "call_type": call.call_type,
-        } if call else None,
-    )
 
 
 def _zeno_read_role(role: str) -> str:
@@ -5736,7 +5742,8 @@ async def get_inbox(
 
     # Conversations this user deleted (thread_clears): only what was sent
     # after the deletion counts, and one with nothing newer is not listed.
-    cleared = await thread_clears.clears_for(db, user_id)
+    # The figures below join each deletion in SQL (api/core/inbox_threads),
+    # so there is no list of them to read first.
 
     def _time_ago(dt) -> str:
         if dt is None:
@@ -5752,6 +5759,9 @@ async def get_inbox(
         return online_status(dt)
 
     threads = []
+    # Every user this inbox names, each loaded once: the store threads below
+    # reuse a seller or buyer the listing threads already fetched.
+    users_by_id: dict = {}
 
     # ── Buyer view: one thread per listing the buyer messaged on ─────────────
     # visibility-ok: selects listing_id only, no message content
@@ -5766,12 +5776,6 @@ async def get_inbox(
     # Batched: one query for every Listing+User this buyer's threads touch,
     # instead of one query per listing (was a real N+1 - a buyer active on
     # many listings triggered that many round trips just for this part).
-    # Everything downstream (last-message-per-thread, unread/seen via
-    # _thread_unread_and_seen) is untouched - those still query per-thread,
-    # a separate, harder-to-safely-batch concern noted but not tackled in
-    # this pass (would need a greatest-n-per-group query and touches
-    # unread/seen state directly, which isn't something to rewrite without
-    # being able to verify against live data).
     buyer_listings_by_id: dict = {}
     if buyer_listing_ids:
         buyer_listings_r = await db.execute(
@@ -5781,6 +5785,7 @@ async def get_inbox(
         )
         for listing, seller in buyer_listings_r.all():
             buyer_listings_by_id[listing.id] = (listing, seller)
+            users_by_id[seller.id] = seller
 
     # The seller's own listings, fetched here so every listing this inbox
     # touches has its photo resolved in one batched media lookup below
@@ -5801,58 +5806,54 @@ async def get_inbox(
         # A photo must never take the inbox down with it.
         logger.debug("[negotiate] inbox listing images unavailable: %s", exc)
 
+    # Every buyer thread's figures at once: its newest row, the unread and
+    # Zeno counts, the delivered and seen ticks, and the unread message and
+    # missed call a last row can hide. They were queried thread by thread -
+    # five to eight round trips per conversation, on every 7-second poll -
+    # and are now a few grouped queries whatever the number of threads
+    # (api/core/inbox_threads.py; tests/test_inbox_batched.py holds them to
+    # the per-thread helpers' answers).
+    #
+    # PRIVACY: never surface a message addressed to the other party.
+    #
+    # Broker messages carry recipient_role, and Zeno writes a
+    # DIFFERENT message to each side of the same relay - the buyer's
+    # copy is private to the buyer. This query had no such filter, so
+    # it took whatever row was newest in the thread. When Zeno's last
+    # act was replying to the buyer, the SELLER's inbox preview
+    # displayed the buyer's private message, attributed to the buyer
+    # by name: "Clinton Henry - No problem. Shout if you need
+    # anything else." Clinton never wrote that. Zeno wrote it TO
+    # Clinton.
+    #
+    # /history has always filtered this correctly (see the
+    # recipient_role check in get_history) and test_thread_privacy
+    # covers the AI context path. The inbox was the third surface
+    # reading the same table and the one nobody filtered.
+    #
+    # The predicate also excludes via_ai=True human rows: a buyer's
+    # private words to Zeno are not the seller's preview, and a
+    # broker row with recipient_role NULL is a legacy shared reply -
+    # previewing it would attribute Zeno's words to the buyer.
+    buyer_figures = await inbox_threads.figures(
+        db, inbox_threads.ThreadGroup("listing", "buyer", user_id),
+        thread_visible_to_role_clause("buyer"),
+        [(lid, user_id) for lid in buyer_listing_ids if lid in buyer_listings_by_id],
+        zeno=True,
+    )
+
     for lid in buyer_listing_ids:
         row = buyer_listings_by_id.get(lid)
         if not row:
             continue
         listing, seller = row
-
-        # PRIVACY: never surface a message addressed to the other party.
-        #
-        # Broker messages carry recipient_role, and Zeno writes a
-        # DIFFERENT message to each side of the same relay - the buyer's
-        # copy is private to the buyer. This query had no such filter, so
-        # it took whatever row was newest in the thread. When Zeno's last
-        # act was replying to the buyer, the SELLER's inbox preview
-        # displayed the buyer's private message, attributed to the buyer
-        # by name: "Clinton Henry - No problem. Shout if you need
-        # anything else." Clinton never wrote that. Zeno wrote it TO
-        # Clinton.
-        #
-        # /history has always filtered this correctly (see the
-        # recipient_role check in get_history) and test_thread_privacy
-        # covers the AI context path. The inbox was the third surface
-        # reading the same table and the one nobody filtered.
-        #
-        # The predicate also excludes via_ai=True human rows: a buyer's
-        # private words to Zeno are not the seller's preview, and a
-        # broker row with recipient_role NULL is a legacy shared reply -
-        # previewing it would attribute Zeno's words to the buyer.
-        cut = cleared.get(("listing", lid, user_id))
-        # visibility-ok: thread_visible_to_role_clause applies recipient_role and via_ai audience rules
-        last_q = (
-            select(NegotiationMessage)
-            .where(
-                NegotiationMessage.listing_id == lid,
-                NegotiationMessage.buyer_id == user_id,
-                thread_visible_to_role_clause("buyer"),
-            )
-        )
-        if cut:
-            last_q = last_q.where(NegotiationMessage.created_at > cut)
-        last_result = await db.execute(
-            last_q.order_by(NegotiationMessage.created_at.desc()).limit(1))
-        last_msg = last_result.scalar_one_or_none()
-        if not last_msg:
+        fig = buyer_figures.get((lid, user_id))
+        if fig is None:
             continue
+        last_msg = fig.last
 
         is_on, last_seen_str = _online_str(seller.last_seen)
-        unread, last_seen_flag, last_delivered_flag = await _thread_unread_and_seen(
-            db, lid, user_id, "buyer", last_msg, cleared_at=cut)
-        zeno_unread = await _zeno_unread(db, lid, user_id, "buyer", cleared_at=cut)
-        unread_message, unread_missed_call = (
-            await _unread_by_kind(db, lid, user_id, "buyer", cleared_at=cut)
-            if unread else (None, None))
+        unread = fig.unread
         threads.append({
             "_sort_ts":          last_msg.created_at.timestamp() if last_msg.created_at else 0.0,
             "listing_id":        listing.id,
@@ -5906,16 +5907,16 @@ async def get_inbox(
             # this is Zeno's to this viewer, unseen in the Zeno room. The
             # inbox opens whichever of the two screens the user last used
             # for the thread, unless only the other one has news.
-            "zeno_unread":       zeno_unread,
-            # What the last message can hide - see _unread_by_kind.
-            "unread_message":     unread_message,
-            "unread_missed_call": unread_missed_call,
-            "last_message_seen": last_seen_flag,
+            "zeno_unread":       fig.zeno_unread,
+            # What the last message can hide - see inbox_threads.unread_by_kind.
+            "unread_message":     fig.unread_message,
+            "unread_missed_call": fig.unread_missed_call,
+            "last_message_seen": fig.seen,
             # Delivered is its own step, not "seen in passing": the inbox
             # used to draw one grey tick until the counterpart READ the
             # message, so a phone that had received it and a server that
             # still held it looked identical.
-            "last_message_delivered": last_delivered_flag,
+            "last_message_delivered": fig.delivered,
             "time_ago":          _time_ago(last_msg.created_at),
             "my_role":           "buyer",
         })
@@ -5923,90 +5924,46 @@ async def get_inbox(
     # ── Seller view: one thread per (listing, buyer_id) pair ─────────────────
     # seller_listings was fetched above, with the buyer view's listings,
     # so their photos could be resolved in one batched media lookup.
+    seller_group = inbox_threads.ThreadGroup("listing", "seller", user_id)
+    # Batched: the buyers of all the seller's listings in one query, and all
+    # of them as users in one more. It was a query for each listing's buyers
+    # and another for their users, inside the per-listing loop.
+    buyers_by_listing = (await inbox_threads.buyers_by_thread(db, seller_group)
+                         if seller_listings else {})
+    _missing = {bid for bids in buyers_by_listing.values() for bid in bids} - users_by_id.keys()
+    if _missing:
+        buyers_r = await db.execute(select(User).where(User.id.in_(list(_missing))))
+        for buyer in buyers_r.scalars().all():
+            users_by_id[buyer.id] = buyer
+
+    # The same figures for every (listing, buyer) thread, and the same
+    # PRIVACY rule as the buyer view above, from the seller's side: a
+    # seller's private words to Zeno are not the buyer's preview, and a
+    # broker row with recipient_role NULL is a legacy shared reply -
+    # previewing it would attribute Zeno's words to the seller.
+    seller_figures = await inbox_threads.figures(
+        db, seller_group,
+        thread_visible_to_role_clause("seller"),
+        [(listing.id, bid) for listing in seller_listings
+         for bid in buyers_by_listing.get(listing.id, ())],
+        zeno=True,
+    )
 
     for listing in seller_listings:
         lid = listing.id
-
-        # Find distinct buyer_ids that have messaged on this listing
-        # visibility-ok: selects buyer_id only, no message content
-        buyer_ids_result = await db.execute(
-            select(NegotiationMessage.buyer_id)
-            .where(
-                NegotiationMessage.listing_id == lid,
-                NegotiationMessage.buyer_id.isnot(None),
-                NegotiationMessage.role == "buyer",
-            )
-            .distinct()
-        )
-        buyer_ids = [r[0] for r in buyer_ids_result.all()]
-
-        # Batched: one query for every buyer on this listing, instead of one
-        # query per buyer (was a real N+1 nested inside the per-listing loop -
-        # a seller with many buyers per listing triggered listings x buyers
-        # round trips just for this part). last-message and unread/seen
-        # queries below are still per-thread - see the buyer-view comment
-        # above for why those weren't tackled in this pass.
-        buyers_by_id: dict = {}
-        if buyer_ids:
-            buyers_r = await db.execute(select(User).where(User.id.in_(buyer_ids)))
-            for buyer in buyers_r.scalars().all():
-                buyers_by_id[buyer.id] = buyer
-
-        for bid in buyer_ids:
-            # Fetch buyer info
-            buyer_info = buyers_by_id.get(bid)
-
-            # PRIVACY: never surface a message addressed to the other party.
-            #
-            # Broker messages carry recipient_role, and Zeno writes a
-            # DIFFERENT message to each side of the same relay - the buyer's
-            # copy is private to the buyer. This query had no such filter, so
-            # it took whatever row was newest in the thread. When Zeno's last
-            # act was replying to the buyer, the SELLER's inbox preview
-            # displayed the buyer's private message, attributed to the buyer
-            # by name: "Clinton Henry - No problem. Shout if you need
-            # anything else." Clinton never wrote that. Zeno wrote it TO
-            # Clinton.
-            #
-            # /history has always filtered this correctly (see the
-            # recipient_role check in get_history) and test_thread_privacy
-            # covers the AI context path. The inbox was the third surface
-            # reading the same table and the one nobody filtered.
-            #
-            # The predicate also excludes via_ai=True human rows: a
-            # seller's private words to Zeno are not the buyer's preview,
-            # and a broker row with recipient_role NULL is a legacy shared
-            # reply - previewing it would attribute Zeno's words to the
-            # seller.
-            cut = cleared.get(("listing", lid, bid))
-            # visibility-ok: thread_visible_to_role_clause applies recipient_role and via_ai audience rules
-            last_q = (
-                select(NegotiationMessage)
-                .where(
-                    NegotiationMessage.listing_id == lid,
-                    NegotiationMessage.buyer_id == bid,
-                    thread_visible_to_role_clause("seller"),
-                )
-            )
-            if cut:
-                last_q = last_q.where(NegotiationMessage.created_at > cut)
-            last_result = await db.execute(
-                last_q.order_by(NegotiationMessage.created_at.desc()).limit(1))
-            last_msg = last_result.scalar_one_or_none()
-            if not last_msg:
+        for bid in buyers_by_listing.get(lid, ()):
+            buyer_info = users_by_id.get(bid)
+            fig = seller_figures.get((lid, bid))
+            if fig is None:
                 continue
+            last_msg = fig.last
 
             is_on, last_seen_str = _online_str(
                 buyer_info.last_seen if buyer_info else None
             )
             counterpart_name  = buyer_info.name  if buyer_info else "Buyer"
             counterpart_photo = buyer_info.profile_photo if buyer_info else None
-            unread, last_seen_flag, last_delivered_flag = await _thread_unread_and_seen(
-                db, lid, bid, "seller", last_msg, cleared_at=cut)
-            zeno_unread = await _zeno_unread(db, lid, bid, "seller", cleared_at=cut)
-            unread_message, unread_missed_call = (
-                await _unread_by_kind(db, lid, bid, "seller", cleared_at=cut)
-                if unread else (None, None))
+            unread = fig.unread
 
             threads.append({
                 "_sort_ts":          last_msg.created_at.timestamp() if last_msg.created_at else 0.0,
@@ -6050,11 +6007,11 @@ async def get_inbox(
                 # existing reader of `unread` working.
                 "unread_count":      unread,
                 "unread":            unread,
-                "zeno_unread":       zeno_unread,
-                "unread_message":     unread_message,
-                "unread_missed_call": unread_missed_call,
-                "last_message_seen": last_seen_flag,
-                "last_message_delivered": last_delivered_flag,
+                "zeno_unread":       fig.zeno_unread,
+                "unread_message":     fig.unread_message,
+                "unread_missed_call": fig.unread_missed_call,
+                "last_message_seen": fig.seen,
+                "last_message_delivered": fig.delivered,
                 "time_ago":          _time_ago(last_msg.created_at),
                 "my_role":           "seller",
             })
@@ -6076,19 +6033,15 @@ async def get_inbox(
             select(Store.id).where(Store.owner_id == user_id,
                                    Store.deleted_at.is_(None))
         )).all()]
+        store_seller_group = inbox_threads.ThreadGroup("store", "seller", user_id)
+        # Batched like the listing buyers: one query for every owned store.
+        buyers_by_store = (await inbox_threads.buyers_by_thread(db, store_seller_group)
+                           if owned_store_ids else {})
         store_thread_keys: list[tuple[str, str, str]] = []  # (store_id, buyer_id, my_role)
         for sid in buyer_store_ids:
             store_thread_keys.append((sid, user_id, "buyer"))
         for sid in owned_store_ids:
-            # visibility-ok: selects buyer_id only, no message content
-            bids = [r[0] for r in (await db.execute(
-                select(NegotiationMessage.buyer_id)
-                .where(NegotiationMessage.store_id == sid,
-                       NegotiationMessage.buyer_id.isnot(None),
-                       NegotiationMessage.role == "buyer")
-                .distinct()
-            )).all() if r[0]]
-            for bid in bids:
+            for bid in buyers_by_store.get(sid, ()):
                 if bid == user_id:
                     continue
                 store_thread_keys.append((sid, bid, "seller"))
@@ -6109,12 +6062,17 @@ async def get_inbox(
             stores_by_id = {s.id: s for s in srows}
             counterpart_ids = {k[1] for k in _uniq_keys if k[2] == "seller"}
             counterpart_ids.update(s.owner_id for s in srows)
-        users_by_id: dict = {}
-        if counterpart_ids:
+        _missing = counterpart_ids - users_by_id.keys()
+        if _missing:
             urows = (await db.execute(
-                select(User).where(User.id.in_(list(counterpart_ids)))
+                select(User).where(User.id.in_(list(_missing)))
             )).scalars().all()
-            users_by_id = {u.id: u for u in urows}
+            for u in urows:
+                users_by_id[u.id] = u
+        # Only the store threads' own people: a buyer's own name stays off
+        # their row in a store's thread, as it always has, even when the
+        # listing threads above loaded them.
+        store_users = {i: users_by_id[i] for i in counterpart_ids if i in users_by_id}
         # Store photos and logos via asset resolution (shop photos, cover, logo).
         store_photo_by_id: dict = {}
         store_logo_by_id: dict = {}
@@ -6173,29 +6131,36 @@ async def get_inbox(
                 store_logo_by_id[s.id] = best_logo
         except Exception as exc:
             logger.debug("[negotiate] inbox store images unavailable: %s", exc)
+        _live_keys = [k for k in _uniq_keys
+                      if stores_by_id.get(k[0]) is not None
+                      and getattr(stores_by_id[k[0]], "deleted_at", None) is None]
+        # Each side's store threads in one batch, under the same audience
+        # rule as the listing threads. A store thread has no Zeno room, so
+        # no Zeno count either.
+        store_figures = {
+            "buyer": await inbox_threads.figures(
+                db, inbox_threads.ThreadGroup("store", "buyer", user_id),
+                thread_visible_to_role_clause("buyer"),
+                [(sid, bid) for sid, bid, role in _live_keys if role == "buyer"],
+                zeno=False,
+            ),
+            "seller": await inbox_threads.figures(
+                db, store_seller_group,
+                thread_visible_to_role_clause("seller"),
+                [(sid, bid) for sid, bid, role in _live_keys if role == "seller"],
+                zeno=False,
+            ),
+        }
         for sid, bid, my_role in _uniq_keys:
             store = stores_by_id.get(sid)
             if store is None or getattr(store, "deleted_at", None) is not None:
                 continue
-            cut = cleared.get(("store", sid, bid))
-            # visibility-ok: thread_visible_to_role_clause applies audience rules
-            last_q = (
-                select(NegotiationMessage)
-                .where(
-                    NegotiationMessage.store_id == sid,
-                    NegotiationMessage.buyer_id == bid,
-                    thread_visible_to_role_clause(my_role),
-                )
-            )
-            if cut:
-                last_q = last_q.where(NegotiationMessage.created_at > cut)
-            last_msg = (await db.execute(
-                last_q.order_by(NegotiationMessage.created_at.desc()).limit(1)
-            )).scalar_one_or_none()
-            if not last_msg:
+            fig = store_figures[my_role].get((sid, bid))
+            if fig is None:
                 continue
-            owner = users_by_id.get(store.owner_id)
-            buyer_user = users_by_id.get(bid)
+            last_msg = fig.last
+            owner = store_users.get(store.owner_id)
+            buyer_user = store_users.get(bid)
             if my_role == "buyer":
                 counterpart = owner
                 counterpart_name = store.name
@@ -6203,11 +6168,7 @@ async def get_inbox(
                 counterpart = buyer_user
                 counterpart_name = buyer_user.name if buyer_user else "Buyer"
             is_on, last_seen_str = _online_str(counterpart.last_seen if counterpart else None)
-            unread, seen_flag, delivered_flag = await _thread_unread_and_seen(
-                db, None, bid, my_role, last_msg, store_id=sid, cleared_at=cut)
-            unread_message, unread_missed_call = (
-                await _unread_by_kind(db, None, bid, my_role, store_id=sid, cleared_at=cut)
-                if unread else (None, None))
+            unread = fig.unread
             threads.append({
                 "_sort_ts":          last_msg.created_at.timestamp() if last_msg.created_at else 0.0,
                 "thread_type":       "store",
@@ -6243,10 +6204,10 @@ async def get_inbox(
                 "unread_count":      unread,
                 "unread":            unread,
                 "zeno_unread":       0,
-                "unread_message":     unread_message,
-                "unread_missed_call": unread_missed_call,
-                "last_message_seen": seen_flag,
-                "last_message_delivered": delivered_flag,
+                "unread_message":     fig.unread_message,
+                "unread_missed_call": fig.unread_missed_call,
+                "last_message_seen": fig.seen,
+                "last_message_delivered": fig.delivered,
                 "time_ago":          _time_ago(last_msg.created_at),
                 "my_role":           my_role,
             })

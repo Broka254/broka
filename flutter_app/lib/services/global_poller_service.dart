@@ -34,10 +34,12 @@
 // whichever user is now authenticated on this device.
 
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import '../core/network/data_saver.dart';
+import '../core/network/poll_pacing.dart';
 import 'api_service.dart';
 import 'connectivity_monitor.dart';
 import 'local_chat_store.dart';
@@ -72,7 +74,27 @@ class GlobalPollerService {
   /// This phone's push token is registered with a server that can push:
   /// calls and messages reach it with the app closed, so the background
   /// sweep is redundant.
-  bool pushReady = false;
+  ///
+  /// Losing it puts the sweep straight back to full speed, with a sweep at
+  /// once and the timer running again even in the background: until push
+  /// is back, this sweep is how a message or a call reaches the phone, and
+  /// the idle pace push allowed must not outlast it.
+  bool get pushReady => _pushReady;
+  bool _pushReady = false;
+  set pushReady(bool value) {
+    final lost = _pushReady && !value;
+    _pushReady = value;
+    if (!lost || !_running) return;
+    _quietSweeps = 0;
+    if (_timer == null) _startTimer();
+    unawaited(_checkAll());
+  }
+
+  // Spreads the sweep's timing between phones (core/network/poll_pacing).
+  Random _random = Random();
+
+  @visibleForTesting
+  set random(Random value) => _random = value;
 
   /// Firebase started (main.dart). False for an APK built without
   /// google-services.json, which can never be reached while closed -
@@ -186,7 +208,17 @@ class GlobalPollerService {
   void _startTimer() {
     _timer?.cancel();
     _ticksSinceSweep = 0;
-    _timer = Timer.periodic(sweepInterval, (_) => _onTick());
+    _ticksSinceInbox = 0;
+    // Each phone ticks from its own point in the 7 seconds. Phones that
+    // start together - the app updated, the server back after a deploy -
+    // otherwise ask together on every tick from then on.
+    _timer = Timer(upTo(sweepInterval, _random), () {
+      if (!_running) {
+        _timer = null;
+        return;
+      }
+      _timer = Timer.periodic(sweepInterval, (_) => _onTick());
+    });
   }
 
   // ── Pace ──────────────────────────────────────────────────────────────────
@@ -239,18 +271,83 @@ class GlobalPollerService {
         dataSaver: DataSaver.isOn,
       );
 
+  // Ticks since the inbox was last fetched, and the slack a failure
+  // backoff gets on top of its pace (see _onTick).
+  int _ticksSinceInbox = 0;
+  int _slackTicks = 0;
+
+  int get _inboxTicksNeeded => inboxTicksBetween(
+        callTicks: _ticksNeeded,
+        quietSweeps: _quietSweeps,
+        pushReady: pushReady,
+        dataSaver: DataSaver.isOn,
+        failing: _failedSweeps > 0,
+      );
+
+  /// A sweep is due every [ticksBetweenSweeps] ticks, as before - plus, while
+  /// backing off from failures, a little slack drawn at random
+  /// ([failureSlackTicks]) so the phones the outage hit do not all come back
+  /// on the same tick. A due sweep always checks for an incoming call; it
+  /// fetches the inbox too only when [inboxTicksBetween] says so, which is
+  /// every time unless push is healthy and the inbox has gone quiet. Against
+  /// a server without GET /calls/incoming, calls are found through the
+  /// inbox, so every sweep is a full one.
   void _onTick() {
     _ticksSinceSweep++;
-    if (_ticksSinceSweep < _ticksNeeded) return;
-    unawaited(_checkAll());
+    _ticksSinceInbox++;
+    if (_ticksSinceSweep < _ticksNeeded + _slackTicks) return;
+    if (!_incomingEndpoint || _ticksSinceInbox >= _inboxTicksNeeded) {
+      unawaited(_checkAll());
+    } else {
+      unawaited(_checkCalls());
+    }
   }
 
+  // A nudge's sweep, waiting out its spread (see nudge).
+  Timer? _nudgeTimer;
+
+  /// How far apart a nudge spreads its sweep. A push that reaches many phones
+  /// at once - an announcement, the network back for a whole town - used to
+  /// have every one of them fetch its inbox in the same instant.
+  @visibleForTesting
+  Duration nudgeSpread = const Duration(milliseconds: 1200);
+
   /// Something happened that the sweep should see now: a push arrived in
-  /// the foreground. Back to full speed, and one sweep straight away.
+  /// the foreground. Back to full speed, and one sweep within [nudgeSpread];
+  /// nudges arriving meanwhile share it.
   void nudge() {
     _quietSweeps = 0;
-    if (_running) unawaited(_checkAll());
+    if (!_running || _nudgeTimer != null) return;
+    _nudgeTimer = Timer(upTo(nudgeSpread, _random), () {
+      _nudgeTimer = null;
+      if (_running) unawaited(_checkAll());
+    });
   }
+
+  /// The incoming-call check alone, on the ticks between two inbox fetches
+  /// (see _onTick): a call ringing for this phone is found at the same pace
+  /// as before. The threads are the last inbox's, for the call's listing name.
+  Future<void> _checkCalls() async {
+    if (_checking) return;
+    if (ApiService.currentUserId == null) return;
+    _checking = true;
+    _ticksSinceSweep = 0;
+    try {
+      final last = inbox.value;
+      await _checkIncomingCall(last != null && last.userId == ApiService.currentUserId
+          ? last.threads
+          : const <Map<String, dynamic>>[]);
+    } catch (_) {
+      // The next tick asks again. A server that is down shows in the next
+      // inbox fetch, which owns the backoff.
+    } finally {
+      _checking = false;
+    }
+  }
+
+  /// One incoming-call check, as a tick between inbox fetches would run it.
+  @visibleForTesting
+  Future<void> checkCallsOnly() => _checkCalls();
 
   /// One sweep, as a tick would run it.
   @visibleForTesting
@@ -513,8 +610,12 @@ class GlobalPollerService {
     pushReady = false;
     _timer?.cancel();
     _timer = null;
+    _nudgeTimer?.cancel();
+    _nudgeTimer = null;
     _failedSweeps = 0;
     _quietSweeps = 0;
+    _slackTicks = 0;
+    _ticksSinceInbox = 0;
     _pushRetryTimer?.cancel();
     _pushRetryTimer = null;
     _pushRetryAttempt = 0;
@@ -578,6 +679,7 @@ class GlobalPollerService {
     if (ApiService.currentUserId == null) return;
     _checking = true;
     _ticksSinceSweep = 0;
+    _ticksSinceInbox = 0;
     var reachedServer = false;
     final wasFailing = _failedSweeps > 0;
     try {
@@ -766,6 +868,8 @@ class GlobalPollerService {
       if (!reachedServer) _failedSweeps++;
     } finally {
       _checking = false;
+      _slackTicks =
+          _failedSweeps > 0 ? failureSlackTicks(_ticksNeeded, _random) : 0;
     }
   }
 

@@ -1058,6 +1058,14 @@ class EscrowService:
         if not escrow.provider_transaction_id or escrow.status in EConfirmEscrowStatus.TERMINAL:
             return escrow
 
+        # Only the read that found this payment is open: it ends before
+        # E-Confirm is asked, rather than hold a connection through the
+        # round trip. Nothing written depends on it staying open - every
+        # Deal transition below re-reads the deal under its row lock
+        # (lock_deal_if_status). A caller already holding a lock or unsaved
+        # writes keeps its transaction (release_connection refuses).
+        from api.database import release_connection
+        await release_connection(self.db, before="econfirm.get_status")
         try:
             result = await get_escrow_provider().get_status(escrow.provider_transaction_id)
         except EConfirmError as exc:

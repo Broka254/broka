@@ -101,6 +101,11 @@ async def emit_close_outcome(
     bidder_ids = set((await db.execute(
         select(Bid.bidder_id).where(Bid.listing_id == listing_id)
     )).scalars().all())
+    # The close is committed (lifecycle.close_auction) and this was the
+    # last read: it ends before the pushes below, which the catalog's
+    # handlers send inline, one Firebase round trip each.
+    from api.database import release_connection
+    await release_connection(db, before="auction.close_outcome")
 
     if outcome == OUTCOME_WON and winner_id:
         await _safe_emit(

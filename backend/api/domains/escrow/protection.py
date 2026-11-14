@@ -77,31 +77,73 @@ def _zeno_says(db: AsyncSession, deal: Deal, to: str, text: str) -> None:
 
 async def _push(db: AsyncSession, user_id: str, title: str, body: str, deal: Deal, kind: str) -> None:
     """Best-effort push. A device without FCM still sees the Zeno message
-    the next time the app polls its threads."""
+    the next time the app polls its threads.
+
+    In the deal-timer sweep it is sent after the sweep's commit
+    (api/core/after_commit) rather than under the deal's row lock; anywhere
+    else it is sent now, once the token read has given its connection back -
+    every request path pushes after its own commit."""
     try:
         token = (await db.execute(select(User.fcm_token).where(User.id == user_id))).scalar_one_or_none()
         if not token:
             return
         from api.routers.calls import _send_fcm
-        await _send_fcm(token, title, body, {
-            "type": kind, "dealId": deal.id, "listingId": deal.listing_id,
-        })
+        from api.core.after_commit import send_after_commit
+        data = {"type": kind, "dealId": deal.id, "listingId": deal.listing_id}
+        if send_after_commit(db, f"push {kind} deal={deal.id}",
+                             lambda: _send_fcm(token, title, body, data)):
+            return
+        from api.database import release_connection
+        await release_connection(db, before=f"fcm.{kind}")
+        await _send_fcm(token, title, body, data)
     except Exception as exc:
         logger.warning("[protection] push %s failed for deal %s: %s", kind, deal.id, exc)
 
 
-async def _sms(db: AsyncSession, user_id: str, text: str, deal: Deal) -> bool:
+async def _sms(db: AsyncSession, user_id: str, text: str, deal: Deal, *,
+               on_failure=None) -> bool:
     """Best-effort transactional SMS (not a premium Zeno text: it is about
-    the user's own money). True if the provider accepted it."""
+    the user's own money). True if the provider accepted it.
+
+    In the deal-timer sweep the text waits for the sweep's commit, like a
+    push, and True means it is queued: the caller records it as sent in that
+    commit, and `on_failure` takes the record back if the provider then
+    refuses it, so the next pass sends it again."""
     try:
         phone = (await db.execute(select(User.phone).where(User.id == user_id))).scalar_one_or_none()
         if not phone:
             return False
         from api.core.sms import get_sms_provider
-        return bool(await get_sms_provider().send(phone, text))
+        from api.core.after_commit import send_after_commit
+
+        async def send() -> bool:
+            return bool(await get_sms_provider().send(phone, text))
+
+        if send_after_commit(db, f"sms deal={deal.id}", send, on_failure=on_failure):
+            return True
+        from api.database import release_connection
+        await release_connection(db, before="sms.deal_notice")
+        return await send()
     except Exception as exc:
         logger.warning("[protection] SMS failed for deal %s: %s", deal.id, exc)
         return False
+
+
+def _reminder_sms_unsent(deal_id: str, previous, recorded: int):
+    """The undo for a reminder text recorded before it went out: the deal's
+    reminder_sms_count back to what it was, if it is still this pass's
+    record - a later pass's count is not touched."""
+    async def undo() -> None:
+        from sqlalchemy import update
+        from api.database import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            await db.execute(
+                update(Deal)
+                .where(Deal.id == deal_id, Deal.reminder_sms_count == recorded)
+                .values(reminder_sms_count=previous)
+            )
+            await db.commit()
+    return undo
 
 
 async def _item_name(db: AsyncSession, deal: Deal) -> str:
@@ -272,7 +314,8 @@ async def process_delivery_claim(session: AsyncSession, deal: Deal, now: datetim
                 f"payment or report a problem. {_kes(_held_amount(deal, payments))} in escrow "
                 f"will be released to the seller in about {left_hours} hours if we don't hear "
                 f"from you.")
-        if await _sms(session, deal.buyer_id, text, deal):
+        if await _sms(session, deal.buyer_id, text, deal,
+                      on_failure=_reminder_sms_unsent(deal.id, deal.reminder_sms_count, sms_due)):
             deal.reminder_sms_count = sms_due
     deal.timer_deadline = now
     return False
@@ -514,7 +557,8 @@ async def process_refund_request(session: AsyncSession, deal: Deal, now: datetim
         text = (f"BROKA: The buyer has asked for a refund of "
                 f"{_kes(_held_amount(deal, payments))} for {item}. Open BROKA within about "
                 f"{left} hours to accept or explain, or they will be refunded automatically.")
-        if await _sms(session, deal.seller_id, text, deal):
+        if await _sms(session, deal.seller_id, text, deal,
+                      on_failure=_reminder_sms_unsent(deal.id, deal.reminder_sms_count, sms_due)):
             deal.reminder_sms_count = sms_due
     deal.timer_deadline = now
 

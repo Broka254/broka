@@ -133,7 +133,7 @@ class TestInterestNudgeSweep:
         WHY THIS EXISTS (2026-09-15): without it these tests pass or fail
         depending on what time of day CI happens to run.
 
-        `_fire_availability_nudge` calls `is_quiet_hours()` and defers the
+        `_prepare_availability_nudge` calls `is_quiet_hours()` and defers the
         SMS between 21:00 and 07:00 EAT - correct behaviour, deliberately
         designed, and nothing to do with the code under test here. But
         `test_sweep_sends_sms_when_seller_silent` asserts an SMS WAS sent,

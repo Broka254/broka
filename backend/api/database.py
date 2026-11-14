@@ -7,8 +7,11 @@ import logging
 import os
 import re
 import time
+from contextvars import ContextVar
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
+from sqlalchemy.pool import AsyncAdaptedQueuePool
+from sqlalchemy.util import queue as sqla_queue
 from sqlalchemy import (
     Column, String, Float, Integer, Boolean,
     DateTime, Date, ForeignKey, Enum, Text, UniqueConstraint, Index, inspect, text,
@@ -96,6 +99,9 @@ def _build_engine_and_factory(url: str):
         pool_kwargs = {}
     else:
         connect_args, pool_kwargs = _postgres_transport_options()
+        # The same pool, timing how long each checkout waited for a free
+        # connection (MeteredAsyncQueuePool, below).
+        pool_kwargs["poolclass"] = MeteredAsyncQueuePool
 
     eng = create_async_engine(url, echo=False, connect_args=connect_args, **pool_kwargs)
     if not is_sqlite:
@@ -173,6 +179,216 @@ def _request_id() -> str:
         return "-"
 
 
+# ─── Statement and pool-wait timing ─────────────────────────────────────────
+# DB_POOL_SATURATED and DB_CONNECTION_HELD say the pool was full or a
+# connection was kept; neither says whether a slow request spent its time
+# running SQL or queueing for a connection, and from outside the two look
+# the same. These record both, per statement and per request:
+#
+#   DB_SLOW_QUERY  one statement ran for DB_SLOW_QUERY_MS or longer, named by
+#                  a label (its verb and tables) and a fingerprint (a hash of
+#                  its shape), never its text, which can carry values;
+#   DB_POOL_WAIT   a checkout queued DB_POOL_WAIT_WARN_MS or longer for a
+#                  free connection - time no statement was running;
+#   and on every request's [http] line (api/core/observability.py): its
+#   statement count, their total time and its queueing, with the request id.
+#
+# Times and counts only. Never a statement's text, a parameter, a row, the
+# DSN or a token.
+
+SLOW_QUERY_MS = max(0.0, float(os.getenv("DB_SLOW_QUERY_MS", "500")))
+POOL_WAIT_WARN_MS = max(0.0, float(os.getenv("DB_POOL_WAIT_WARN_MS", "250")))
+_timing_stats = {"queries": 0, "slow_queries": 0, "pool_waits": 0, "slow_pool_waits": 0}
+
+
+class DbStats:
+    """One request's database work, as LatencyLogMiddleware reports it."""
+
+    __slots__ = ("queries", "query_seconds", "pool_waits", "pool_wait_seconds", "closed")
+
+    def __init__(self) -> None:
+        self.queries = 0
+        self.query_seconds = 0.0
+        self.pool_waits = 0
+        self.pool_wait_seconds = 0.0
+        # Set when the request is answered. A task the request started keeps
+        # its context (and so this object), and must not swell the request's
+        # figures after they were logged.
+        self.closed = False
+
+
+db_stats_var: "ContextVar[DbStats | None]" = ContextVar("broka_db_stats", default=None)
+
+
+def start_request_stats():
+    """Count the database work of the current context from now on: returns
+    the stats and the token end_request_stats needs."""
+    stats = DbStats()
+    return stats, db_stats_var.set(stats)
+
+
+def end_request_stats(token) -> None:
+    stats = db_stats_var.get()
+    if stats is not None:
+        stats.closed = True
+    db_stats_var.reset(token)
+
+
+def _current_stats() -> "DbStats | None":
+    stats = db_stats_var.get()
+    return None if stats is None or stats.closed else stats
+
+
+_TABLE_REF = re.compile(
+    r'\b(?:FROM|JOIN|INTO|UPDATE)\s+(?:ONLY\s+)?"?(\w+)"?(?:\."?(\w+)"?)?',
+    re.IGNORECASE,
+)
+_PLACEHOLDER = re.compile(r"\$\d+|%\(\w+\)s|%s|:\w+|\?")
+_LITERAL = re.compile(r"'(?:[^']|'')*'|\b\d+(?:\.\d+)?\b")
+_IN_LIST = re.compile(r"\(\s*\?(?:\s*,\s*\?)*\s*\)")
+_SPACE = re.compile(r"\s+")
+
+
+def statement_label(statement: str) -> str:
+    """A statement as the log may name it: its verb and the tables it reads
+    or writes - only names of BROKA's own tables, so nothing from the
+    statement but those can reach the log ("SELECT negotiation_messages,
+    thread_read_state")."""
+    words = statement.split(None, 1)
+    verb = words[0].upper() if words else "?"
+    known = Base.metadata.tables
+    tables: list[str] = []
+    for match in _TABLE_REF.finditer(statement):
+        name = match.group(2) or match.group(1)
+        if name in known and name not in tables:
+            tables.append(name)
+            if len(tables) == 4:
+                break
+    return f"{verb} {','.join(tables) or '-'}"
+
+
+def statement_fingerprint(statement: str) -> str:
+    """The same for every run of one query, whatever its values or the length
+    of its IN lists: placeholders, literals and whitespace are normalised and
+    hashed, so it groups slow runs without carrying anything from them."""
+    import hashlib
+    shape = _LITERAL.sub("?", _PLACEHOLDER.sub("?", statement))
+    shape = _IN_LIST.sub("(?+)", _SPACE.sub(" ", shape)).strip().lower()
+    return hashlib.sha1(shape.encode("utf-8")).hexdigest()[:12]
+
+
+def _record_query(seconds: float, statement, context, *, failed: bool = False) -> None:
+    _timing_stats["queries"] += 1
+    stats = _current_stats()
+    if stats is not None:
+        stats.queries += 1
+        stats.query_seconds += seconds
+    if seconds * 1000.0 < SLOW_QUERY_MS:
+        return
+    _timing_stats["slow_queries"] += 1
+    try:
+        options = getattr(context, "execution_options", None) or {}
+        label = options.get("broka_label") or statement_label(statement or "")
+        fingerprint = statement_fingerprint(statement or "")
+    except Exception:
+        label, fingerprint = "?", "-"
+    _db_logger.warning(
+        "[db] DB_SLOW_QUERY ms=%.1f label=%s fingerprint=%s failed=%s rid=%s",
+        seconds * 1000.0, label, fingerprint, failed, _request_id())
+
+
+def _record_pool_wait(seconds: float, pool) -> None:
+    if seconds < 0.001:
+        # A connection was idle: taken at once, no wait to speak of.
+        return
+    _timing_stats["pool_waits"] += 1
+    stats = _current_stats()
+    if stats is not None:
+        stats.pool_waits += 1
+        stats.pool_wait_seconds += seconds
+    if seconds * 1000.0 < POOL_WAIT_WARN_MS:
+        return
+    _timing_stats["slow_pool_waits"] += 1
+    try:
+        out, limit = pool.checkedout(), pool.size() + max(pool._max_overflow, 0)
+    except Exception:
+        out, limit = "-", "-"
+    _db_logger.warning("[db] DB_POOL_WAIT ms=%.1f checked_out=%s max=%s rid=%s",
+                       seconds * 1000.0, out, limit, _request_id())
+
+
+def _before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+    if context is not None:
+        context._broka_query_started = time.perf_counter()
+
+
+def _after_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+    started = getattr(context, "_broka_query_started", None)
+    if started is not None:
+        context._broka_query_started = None
+        _record_query(time.perf_counter() - started, statement, context)
+
+
+def _on_statement_error(exception_context) -> None:
+    # A statement that fails (a timeout, a constraint) took its time too.
+    context = exception_context.execution_context
+    started = getattr(context, "_broka_query_started", None)
+    if started is not None:
+        context._broka_query_started = None
+        _record_query(time.perf_counter() - started, exception_context.statement,
+                      context, failed=True)
+
+
+def _instrument_statements() -> None:
+    """Time every statement of every engine in the process - the API's, a
+    worker's own, the test suite's substitutes - by listening on the Engine
+    class rather than one instance, which reset_engine() replaces."""
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    for name, listener in (("before_cursor_execute", _before_cursor_execute),
+                           ("after_cursor_execute", _after_cursor_execute),
+                           ("handle_error", _on_statement_error)):
+        if not event.contains(Engine, name, listener):
+            event.listen(Engine, name, listener)
+
+
+class _TimedQueue(sqla_queue.AsyncAdaptedQueue):
+    """The pool's queue of idle connections, timing each take from it: the
+    wait for a free connection, from none (one was idle) up to
+    DB_POOL_TIMEOUT_SECONDS. Opening a new connection, a recycled one's
+    reconnect and the liveness ping happen outside it, so this is queueing
+    alone."""
+
+    def __init__(self, maxsize: int = 0, use_lifo: bool = False, pool=None):
+        super().__init__(maxsize, use_lifo=use_lifo)
+        self._broka_pool = pool
+
+    def get(self, block: bool = True, timeout=None):
+        if not block:
+            # The overflow probe: answered at once, never a wait.
+            return super().get(block, timeout)
+        started = time.perf_counter()
+        try:
+            return super().get(block, timeout)
+        finally:
+            _record_pool_wait(time.perf_counter() - started, self._broka_pool)
+
+
+class MeteredAsyncQueuePool(AsyncAdaptedQueuePool):
+    """AsyncAdaptedQueuePool whose checkouts record their queueing
+    (_TimedQueue). Same sizes, timeout and behaviour; dispose() and
+    recreate() keep the class, so the timing survives them."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Still empty - nothing has been checked out of a pool just built.
+        self._pool = _TimedQueue(self._pool.maxsize, use_lifo=self._pool.use_lifo, pool=self)
+
+
+_instrument_statements()
+
+
 def pool_status() -> dict:
     """The live pool's numbers, for the log and /ready - no secrets."""
     pool = engine.sync_engine.pool
@@ -191,7 +407,15 @@ def pool_status() -> dict:
         status["timeout_s"] = timeout
     status["slow_holds"] = _pool_stats["slow_holds"]
     status["saturations"] = _pool_stats["saturations"]
+    # Since the process started: statements run and how many were slow,
+    # and checkouts that had to queue for a connection.
+    status.update(_timing_stats)
+    status["slow_query_ms"] = SLOW_QUERY_MS
     return status
+
+
+_POOL_COUNTERS = ("checked_out", "checked_in", "overflow", "slow_holds", "saturations",
+                  *_timing_stats)
 
 
 def log_pool_config() -> None:
@@ -199,8 +423,7 @@ def log_pool_config() -> None:
     status = pool_status()
     _db_logger.info("[db] POOL_CONFIG %s",
                     " ".join(f"{k}={v}" for k, v in status.items()
-                             if k not in ("checked_out", "checked_in", "overflow",
-                                          "slow_holds", "saturations")))
+                             if k not in _POOL_COUNTERS))
 
 
 # Supavisor's and PostgreSQL's words for "no more clients", as asyncpg passes
@@ -2647,3 +2870,94 @@ async def init_db():
 async def get_db():
     async with AsyncSessionLocal() as session:
         yield session
+
+
+# ─── Giving the connection back before a slow call ──────────────────────────
+# A session checks a pooled connection out at its first statement and keeps
+# it until the transaction ends - through whatever the code awaits next. An
+# AI reply (seconds, a minute and more through the fallbacks), an SMS, a
+# push: with five connections per process, each such wait made inside a
+# transaction is a fifth of the pool gone for its length. release_connection
+# ends the transaction first. Only a READ transaction: what a request has
+# written belongs to a commit that says what it is and keeps what must land
+# together together, so a session holding unsaved writes is refused, not
+# committed along the way.
+
+_UNSAVED_WRITES = "broka_unsaved_writes"
+
+
+def _note_flush(session, flush_context) -> None:
+    session.info[_UNSAVED_WRITES] = True
+
+
+def _note_dml(orm_execute_state) -> None:
+    # update()/delete()/insert() run through the session: written without a
+    # flush, so the flush hook never sees them. A SELECT ... FOR UPDATE
+    # writes nothing but holds row locks the caller is relying on (a deal
+    # locked at its status, lock_deal_if_status): ending that transaction
+    # early would let go of them, so it counts the same.
+    if (orm_execute_state.is_insert or orm_execute_state.is_update
+            or orm_execute_state.is_delete
+            or getattr(orm_execute_state.statement, "_for_update_arg", None) is not None):
+        orm_execute_state.session.info[_UNSAVED_WRITES] = True
+
+
+def _transaction_ended(session, *args) -> None:
+    session.info.pop(_UNSAVED_WRITES, None)
+
+
+def _track_unsaved_writes() -> None:
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session
+
+    for name, listener in (("after_flush", _note_flush), ("do_orm_execute", _note_dml),
+                           ("after_commit", _transaction_ended),
+                           ("after_rollback", _transaction_ended)):
+        if not event.contains(Session, name, listener):
+            event.listen(Session, name, listener)
+
+
+_track_unsaved_writes()
+
+
+def has_unsaved_writes(db) -> bool:
+    """True when the session's transaction holds changes not yet committed -
+    pending objects, statements already flushed or executed - or row locks
+    taken with FOR UPDATE."""
+    return bool(db.new or db.dirty or db.deleted or db.info.get(_UNSAVED_WRITES))
+
+
+async def release_connection(db, *, before: str) -> bool:
+    """End `db`'s read transaction so its pooled connection goes back to the
+    pool for the slow call that follows (`before` names it, for the log).
+
+    True when the session holds no connection afterwards. Objects it loaded
+    stay readable (expire_on_commit=False); the next statement checks a
+    connection out again, for as long as that statement takes.
+
+    False, with the connection still out, when the transaction holds writes
+    not yet committed or row locks: committing would land half of something
+    - a reminder armed for a reply that then failed - or let go of a lock
+    the caller holds across the call on purpose. Those are left to the
+    commit they belong to, and the log names the call site.
+    """
+    try:
+        if not db.in_transaction():
+            return True
+        if has_unsaved_writes(db):
+            _db_logger.warning(
+                "[db] DB_RELEASE_REFUSED before=%s: uncommitted writes or row locks in the "
+                "session; the connection stays checked out rid=%s", before, _request_id())
+            return False
+        # Read-only: nothing is written, the transaction just ends.
+        await db.commit()
+        return True
+    except Exception as exc:
+        # The connection is broken if a read-only commit fails; give it up.
+        _db_logger.warning("[db] release before=%s failed: %s rid=%s",
+                           before, type(exc).__name__, _request_id())
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        return False

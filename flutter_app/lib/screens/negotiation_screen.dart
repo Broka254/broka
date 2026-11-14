@@ -53,6 +53,7 @@ import '../services/counterparty_profile_cache.dart';
 import '../services/zeno_voice_controller.dart';
 import '../core/errors/user_facing_error.dart';
 import '../core/navigation/app_route_observer.dart';
+import '../core/network/poll_pacing.dart' show jittered;
 import '../utils/backend_time.dart';
 
 // ── Message model extensions ──────────────────────────────────────────────────
@@ -1442,6 +1443,12 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     _resetOutgoingTyping();
     if (!mounted) return;
     setState(() => _wsConnected = false);
+    // The socket was what kept this thread current; until it is back the
+    // fallback poll is. Its fastest pace, and a poll now: a drop used to
+    // leave the next poll as far off as a quiet thread had stretched it -
+    // 32 seconds of nothing arriving.
+    _pollNow();
+    if (_hasThread && _appVisible) unawaited(_pollNewMessages());
     // Refused for good - no such thread (4003) or listing (4004): asking
     // again every 30 seconds changes nothing. The poll carries on.
     final code = ws.closeCode;
@@ -1451,6 +1458,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     _scheduleReconnect(renewFirst: code == 4001);
   }
 
+  // Spreads reconnects between phones (core/network/poll_pacing).
+  static final Random _reconnectRandom = Random();
+
   void _scheduleReconnect({bool renewFirst = false}) {
     // In the background the OS is likely to close it again; coming back
     // on screen reconnects (didChangeAppLifecycleState).
@@ -1458,7 +1468,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     _wsReconnectTimer?.cancel();
     final seconds = min(30, 2 << min(_wsReconnectAttempt, 4)); // 2, 4, 8, 16, 30
     _wsReconnectAttempt++;
-    _wsReconnectTimer = Timer(Duration(seconds: seconds), () async {
+    // ±20%: a server restart drops every open chat's socket at once, and
+    // the same 2, 4, 8 seconds on every phone brought them all back at once.
+    _wsReconnectTimer = Timer(jittered(Duration(seconds: seconds), _reconnectRandom), () async {
       if (!mounted) return;
       if (renewFirst) await ApiService.renewSession();
       if (mounted) _connectWebSocket();

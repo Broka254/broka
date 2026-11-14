@@ -86,6 +86,12 @@ You don't have to: CI regenerates and commits it on every push to `main`.
   `.execution_options(populate_existing=True)`, since sessions use
   `expire_on_commit=False`. After a rollback, don't touch ORM objects loaded
   before it (they expire; async code can't lazy-load) - select plain columns.
+- No transaction stays open across a network call (a model, SMS, FCM, a
+  payment provider): a process has five pooled connections. End the read
+  first with `api.database.release_connection(db, before=...)`, which
+  refuses - and logs `DB_RELEASE_REFUSED` - when the session holds unsaved
+  writes or `FOR UPDATE` locks: those belong to their own commit. A sweep
+  queues its pushes and texts for after its commit (`api/core/after_commit.py`).
 
 **Money** (`backend/api/domains/escrow/`, `backend/api/routers/mpesa.py`,
 `backend/api/core/workers.py`, `backend/api/domains/payments/`)
