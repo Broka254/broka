@@ -156,6 +156,19 @@ jobs:
               try:
                   variables = read_render(service["render_id"])
                   variables.update(service["overrides"])
+                  if service["label"] == "API":
+                      admin_origin = "https://broka-admin-development.up.railway.app"
+                      origins = [item.strip() for item in variables.get("ALLOWED_ORIGINS", "").split(",") if item.strip()]
+                      origins = [
+                          admin_origin if item in {
+                              "https://broka-admin-web.onrender.com",
+                              "https://broka-admin.onrender.com",
+                          } else item
+                          for item in origins
+                      ]
+                      if admin_origin not in origins:
+                          origins.append(admin_origin)
+                      variables["ALLOWED_ORIGINS"] = ",".join(origins)
                   missing = [key for key in service["required"] if not variables.get(key)]
                   print("\n" + service["label"] + ": " + str(len(variables)) + " variables discovered.")
                   print("Keys: " + ", ".join(sorted(variables.keys())))
