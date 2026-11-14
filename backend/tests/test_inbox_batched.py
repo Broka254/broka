@@ -265,13 +265,13 @@ async def test_zeno_counts_stay_with_their_side_and_private_words_stay_private(c
     await _say(listing_id=l2, buyer_id=buyer, role="broker", sender_id="broker", to=None,
                content="legacy shared reply", via_ai=True, minutes_ago=5)
 
-    s1, s2 = (_row(await _inbox(client, seller), listing_id=l) for l in (l1, l2))
+    s1, s2 = [_row(await _inbox(client, seller), listing_id=l) for l in (l1, l2)]
     assert (s1["zeno_unread"], s2["zeno_unread"]) == (1, 0)
     assert s1["last_message"] == "Zeno to seller"
     assert s2["last_message"] == "is it there?", "no audience, no preview"
     # The buyer's private words to Zeno are neither previewed nor counted.
     assert (s1["unread"], s2["unread"]) == (1, 1)
-    b1, b2 = (_row(await _inbox(client, buyer), listing_id=l) for l in (l1, l2))
+    b1, b2 = [_row(await _inbox(client, buyer), listing_id=l) for l in (l1, l2)]
     assert (b1["zeno_unread"], b2["zeno_unread"]) == (1, 1)
     # A row for the Zeno room is not the direct chat's preview, even to
     # its author; Zeno's reply to them is.
@@ -279,7 +279,7 @@ async def test_zeno_counts_stay_with_their_side_and_private_words_stay_private(c
 
     r = await client.post(f"/negotiate/{l1}/zeno-read", headers=_auth(buyer), json={})
     assert r.status_code == 200, r.text
-    b1, b2 = (_row(await _inbox(client, buyer), listing_id=l) for l in (l1, l2))
+    b1, b2 = [_row(await _inbox(client, buyer), listing_id=l) for l in (l1, l2)]
     assert (b1["zeno_unread"], b2["zeno_unread"]) == (0, 1), "one thread's room, one count"
 
 
@@ -307,7 +307,7 @@ async def test_a_deleted_chat_leaves_one_inbox_and_comes_back_with_only_the_new(
 @pytest.mark.asyncio
 async def test_missed_and_cancelled_calls_are_named_beside_the_last_text(client):
     seller, buyer = await _user("Sam Seller"), await _user("Bea Buyer")
-    l1, l2, l3 = (await _listing(seller, n) for n in ("Phone", "Laptop", "Bike"))
+    l1, l2, l3 = [await _listing(seller, n) for n in ("Phone", "Laptop", "Bike")]
     await _say(listing_id=l1, buyer_id=buyer, role="buyer", sender_id=buyer, content="call me?",
                minutes_ago=5)
     call = await _say(listing_id=l1, buyer_id=buyer, role="buyer", sender_id=buyer, content="missed",
@@ -317,7 +317,7 @@ async def test_missed_and_cancelled_calls_are_named_beside_the_last_text(client)
     await _say(listing_id=l3, buyer_id=buyer, role="buyer", sender_id=buyer, content="completed",
                msg_type="call", call_type="audio", minutes_ago=2)
     rows = await _inbox(client, seller)
-    one, two, three = (_row(rows, listing_id=l) for l in (l1, l2, l3))
+    one, two, three = [_row(rows, listing_id=l) for l in (l1, l2, l3)]
     assert (one["last_msg_type"], one["last_call_type"]) == ("call", "video")
     assert one["unread_message"]["content"] == "call me?"
     assert one["unread_missed_call"] == {"id": call, "call_type": "video"}
