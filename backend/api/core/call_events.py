@@ -36,11 +36,47 @@ STATE_FIELDS = ("call_state", "ws", "ice_gathering", "ice", "pc", "path", "reaso
 SERVER_EVENTS = frozenset({
     "CALL_INITIATED", "CALL_SETUP_REPLAYED", "CALL_SETUP_CANCELLED",
     "CALL_PUSH_RESULT", "CALL_RINGING", "CALL_ACCEPTED", "CALL_HANGUP", "CALL_ENDED",
+    # A ring report or an Accept for a call that was already over (410).
+    "CALL_RINGING_REJECTED", "CALL_ANSWER_REJECTED",
     "WEBSOCKET_CONNECTED", "WEBSOCKET_RECONNECTED", "WEBSOCKET_DISCONNECTED",
     "PEER_JOINED", "SDP_OFFER_RELAYED", "SDP_ANSWER_RELAYED",
+    # Signals kept for an absent phone that were not handed to it on joining.
+    "SIGNALS_DISCARDED",
     "WEBRTC_CONNECTED", "WEBRTC_DISCONNECTED", "WEBRTC_FAILED",
     "TURN_CREDENTIAL_REQUEST", "TURN_CREDENTIAL_ISSUED", "TURN_CREDENTIAL_FAILURE",
 })
+
+
+def stage_of(session) -> str:
+    """How far a call got - for one that never connected, the step it
+    stopped at. On CALL_ENDED, so one line answers "which stage prevented
+    the connection?":
+
+      connected            the WebRTC connection came up
+      unanswered           nobody answered (cancelled, declined or missed)
+      callee_never_joined  answered, and the callee's phone never joined
+      caller_never_joined  answered, and the caller's socket was not there
+      no_offer             both joined; no offer reached the callee
+      no_answer_sdp        the offer reached the callee; no answer came back
+      ice                  offer and answer crossed; the connection itself
+                           (ICE/DTLS - the phones' own events say which)
+                           never came up
+    """
+    if session is None:
+        return "unknown"
+    if session.ever_connected:
+        return "connected"
+    if not session.answered:
+        return "unanswered"
+    if not getattr(session, "callee_joined", False):
+        return "callee_never_joined"
+    if not getattr(session, "caller_joined", False):
+        return "caller_never_joined"
+    if not getattr(session, "offer_relayed", False):
+        return "no_offer"
+    if not getattr(session, "answer_relayed", False):
+        return "no_answer_sdp"
+    return "ice"
 
 # Events a phone may report (the `diag` frame and POST /calls/{room}/events).
 # An allowlist: a client can't fill the logs with names of its own choosing.
@@ -72,6 +108,9 @@ CLIENT_EXTRA_FIELDS = frozenset({
     "audio", "video", "restart", "offer_id", "standby", "held",
     "elapsed_ms", "ms", "outcome", "duration_s", "reconnects", "ice_restarts",
     "answered", "connected", "rtt_ms", "peer",
+    # On a caller's CALL_ENDED: whether the callee ever joined, and how many
+    # offers left the phone (2026-11-14).
+    "peer_joined", "offers_sent",
 })
 
 _MAX_VALUE = 160

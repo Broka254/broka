@@ -563,6 +563,10 @@ class WebRtcService {
   // Names the current offer; an answer naming another is stale.
   String? _offerId;
   int _offerSeq = 0;
+  // Offers that went out on the socket. A call the caller hangs up with
+  // none sent was one nobody joined while it rang (2026-11-14: the offer
+  // was made and its candidates gathered, and they never left the phone).
+  int _offersSent = 0;
   // A peer connection being replaced (_resetPreconnect).
   Future<void>? _resetting;
 
@@ -830,6 +834,14 @@ class WebRtcService {
   /// Start: get mic/camera → open WebSocket → create peer connection.
   /// Caller then sends an offer; callee waits for one.
   Future<void> start() async {
+    // A call that is over is never started. An Accept that lands after the
+    // call ended - the caller's hang-up reached this phone first - would
+    // otherwise open the microphone, a socket and a peer connection for
+    // nobody, after _cleanup() had already run (2026-11-14).
+    if (_state == CallState.ended || _state == CallState.failed) {
+      debugPrint('WebRTC: START_REFUSED room=$roomId state=${_state.name}');
+      return;
+    }
     if (!isCaller && _standby) {
       // Waited in the room while it rang: answered on that socket. Not
       // there yet (Accept within a second of the ring), the old way.
@@ -932,6 +944,15 @@ class WebRtcService {
       _event('CALL_ENDED', reason: 'local_hangup', terminal: true, extra: {
         'connected': _everConnected, 'standby': _standby,
         'duration_s': _everConnected ? _duration.inSeconds : null,
+        // How far it got from this phone: whether the other side ever
+        // joined, and whether an offer - and the candidates held for it -
+        // ever left. "offers_sent=0 held=4 peer_joined=false" is a caller
+        // who gave up on a call nobody joined.
+        if (isCaller) ...{
+          'peer_joined': _calleeJoined,
+          'offers_sent': _offersSent,
+          'held': _localIceBeforePeer.length,
+        },
       });
     }
     // The server closes this socket as soon as it has the hangup - inside
@@ -1758,6 +1779,7 @@ class WebRtcService {
           'type': 'offer', 'room_id': roomId, 'sdp': tuned.sdp, 'restart': true,
         }));
         _descriptionSent();
+        _offersSent++;
         _event('SDP_OFFER_SENT', extra: {'restart': true});
       }
       // If we're still in `recovering` after another grace period (the
@@ -1880,6 +1902,7 @@ class WebRtcService {
       }));
       final held = _localIceBeforePeer.length;
       _descriptionSent();
+      _offersSent++;
       _event('SDP_OFFER_SENT', extra: {
         'offer_id': _offerId, 'count': held,
         'standby': _standbyPeer != null && !_calleeJoined,
@@ -1986,6 +2009,7 @@ class WebRtcService {
       }));
       _descriptionSent();
       _resendLocalIce();
+      _offersSent++;
       _event('SDP_OFFER_SENT', extra: {'restart': true, 'reconnects': _reconnectAttempts});
     } else if (!first) {
       // Negotiated before the drop; the candidates may not have all made

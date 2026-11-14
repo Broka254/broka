@@ -3,8 +3,10 @@ BROKA - Database Layer
 SQLite for local dev; PostgreSQL for production (Render).
 """
 
+import logging
 import os
 import re
+import time
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy import (
@@ -59,13 +61,26 @@ def _postgres_transport_options() -> tuple[dict, dict]:
     # layer of defence. pool_size/max_overflow are env-configurable since
     # the right ceiling depends on Xavier's actual Postgres plan's
     # connection limit, not a number this code can know in advance.
+    #
+    # The defaults (2026-11-14) are what one process may hold of Supabase's
+    # session-mode pooler, which admits 15 clients in all - every replica,
+    # a deploy's old and new containers side by side, the migration job and
+    # anything else on the project together. They were 10 + 20: one process
+    # could ask for 30, and Railway logged "EMAXCONNSESSION: max clients
+    # reached in session mode" while calls and messages were being settled.
+    # 3 + 2 is at most 5 per process: two replicas hold 10 at the very most,
+    # 6 when idle. A request that finds all five busy waits up to
+    # DB_POOL_TIMEOUT_SECONDS and is then answered 503 (main.py) - the
+    # nothing-held-across-network-calls rule (calls._release) is what keeps
+    # that wait short.
     pool_kwargs = {
-        "pool_size":    max(1, int(os.getenv("DB_POOL_SIZE", "10"))),
-        "max_overflow": max(0, int(os.getenv("DB_MAX_OVERFLOW", "20"))),
+        "pool_size":    max(1, int(os.getenv("DB_POOL_SIZE", str(DEFAULT_POOL_SIZE)))),
+        "max_overflow": max(0, int(os.getenv("DB_MAX_OVERFLOW", str(DEFAULT_MAX_OVERFLOW)))),
         # Waiting forever for a checked-out connection hides the incident
         # and exhausts request workers. A bounded wait fails fast; the API's
         # generic error handler reports it without leaking the DSN.
-        "pool_timeout": max(1.0, float(os.getenv("DB_POOL_TIMEOUT_SECONDS", "30"))),
+        "pool_timeout": max(1.0, float(os.getenv("DB_POOL_TIMEOUT_SECONDS",
+                                                 str(DEFAULT_POOL_TIMEOUT_SECONDS)))),
         "pool_recycle": max(
             1, int(os.getenv("DB_POOL_RECYCLE_SECONDS", "300"))
         ),
@@ -83,7 +98,157 @@ def _build_engine_and_factory(url: str):
         connect_args, pool_kwargs = _postgres_transport_options()
 
     eng = create_async_engine(url, echo=False, connect_args=connect_args, **pool_kwargs)
+    if not is_sqlite:
+        _instrument_pool(eng)
     return eng, sessionmaker(eng, class_=AsyncSession, expire_on_commit=False)
+
+
+# What one process may hold of the database (see _postgres_transport_options).
+DEFAULT_POOL_SIZE = 3
+DEFAULT_MAX_OVERFLOW = 2
+DEFAULT_POOL_TIMEOUT_SECONDS = 10
+
+_db_logger = logging.getLogger("api.database")
+
+# A connection checked out for longer than this is named in the log when it
+# comes back: the pool is five connections, and one held through a network
+# call (a push, an AI reply) is a fifth of it gone for that long.
+SLOW_CONNECTION_HOLD_SECONDS = 5.0
+# At most one "the pool is full" warning per this many seconds.
+_SATURATION_LOG_EVERY_SECONDS = 10.0
+_pool_stats = {"saturated_logged_at": 0.0, "slow_holds": 0, "saturations": 0}
+
+
+def _instrument_pool(eng) -> None:
+    """Checkout/check-in diagnostics for a pooled engine - counts and times
+    only, never a statement, parameter or the DSN. Answers "did the database
+    pool affect this?" from the log: DB_POOL_SATURATED when every connection
+    is out (the next request waits, up to DB_POOL_TIMEOUT_SECONDS), and
+    DB_CONNECTION_HELD for a connection kept unusually long."""
+    from sqlalchemy import event
+
+    sync_engine = eng.sync_engine
+
+    @event.listens_for(sync_engine, "checkout")
+    def _on_checkout(dbapi_connection, connection_record, connection_proxy):  # pragma: no cover - needs a real pool
+        connection_record.info["broka_checked_out_at"] = time.monotonic()
+        pool = sync_engine.pool
+        try:
+            out, limit = pool.checkedout(), pool.size() + max(pool._max_overflow, 0)
+        except Exception:
+            return
+        if out >= limit:
+            _pool_stats["saturations"] += 1
+            now = time.monotonic()
+            if now - _pool_stats["saturated_logged_at"] >= _SATURATION_LOG_EVERY_SECONDS:
+                _pool_stats["saturated_logged_at"] = now
+                _db_logger.warning(
+                    "[db] DB_POOL_SATURATED checked_out=%d max=%d saturations=%d rid=%s",
+                    out, limit, _pool_stats["saturations"], _request_id())
+
+    @event.listens_for(sync_engine, "checkin")
+    def _on_checkin(dbapi_connection, connection_record):  # pragma: no cover - needs a real pool
+        started = connection_record.info.pop("broka_checked_out_at", None)
+        if started is None:
+            return
+        held = time.monotonic() - started
+        if held >= SLOW_CONNECTION_HOLD_SECONDS:
+            _pool_stats["slow_holds"] += 1
+            _db_logger.warning("[db] DB_CONNECTION_HELD seconds=%.1f checked_out=%s rid=%s",
+                               held, _safe_checked_out(sync_engine), _request_id())
+
+
+def _safe_checked_out(sync_engine):
+    try:
+        return sync_engine.pool.checkedout()
+    except Exception:
+        return "-"
+
+
+def _request_id() -> str:
+    try:
+        from api.core.observability import request_id_var
+        return request_id_var.get("-")
+    except Exception:
+        return "-"
+
+
+def pool_status() -> dict:
+    """The live pool's numbers, for the log and /ready - no secrets."""
+    pool = engine.sync_engine.pool
+    status = {"dialect": engine.dialect.name, "pool": type(pool).__name__}
+    for name, read in (("size", "size"), ("checked_out", "checkedout"),
+                       ("checked_in", "checkedin"), ("overflow", "overflow")):
+        try:
+            status[name] = getattr(pool, read)()
+        except Exception:
+            pass
+    max_overflow = getattr(pool, "_max_overflow", None)
+    if isinstance(status.get("size"), int) and isinstance(max_overflow, int):
+        status["max_connections"] = status["size"] + max(max_overflow, 0)
+    timeout = getattr(pool, "_timeout", None)
+    if timeout is not None:
+        status["timeout_s"] = timeout
+    status["slow_holds"] = _pool_stats["slow_holds"]
+    status["saturations"] = _pool_stats["saturations"]
+    return status
+
+
+def log_pool_config() -> None:
+    """One line at startup: what this process may hold of the database."""
+    status = pool_status()
+    _db_logger.info("[db] POOL_CONFIG %s",
+                    " ".join(f"{k}={v}" for k, v in status.items()
+                             if k not in ("checked_out", "checked_in", "overflow",
+                                          "slow_holds", "saturations")))
+
+
+# Supavisor's and PostgreSQL's words for "no more clients", as asyncpg passes
+# them on (Railway, 2026-11-14: "EMAXCONNSESSION: max clients reached in
+# session mode - max clients are limited to pool_size: 15").
+_REFUSED_PATTERN = re.compile(
+    r"EMAXCONN|max clients reached|too many (?:clients|connections)|"
+    r"remaining connection slots|TooManyConnections|connection limit",
+    re.IGNORECASE,
+)
+_CONNECTION_PATTERN = re.compile(
+    r"connection (?:was |is )?closed|connection refused|could not connect|"
+    r"server closed the connection|ConnectionDoesNotExist|CannotConnectNow|"
+    r"connection reset|terminating connection",
+    re.IGNORECASE,
+)
+
+
+def db_unavailable_kind(exc: BaseException) -> "str | None":
+    """Why `exc` means the database could not be reached, or None when it is
+    an ordinary error (a constraint, a bug):
+
+      pool_timeout  every pooled connection was in use for DB_POOL_TIMEOUT_SECONDS
+      refused       the server or its pooler admits no more clients (EMAXCONNSESSION)
+      connection    the connection failed or was dropped
+    """
+    from sqlalchemy import exc as sa_exc
+
+    seen = set()
+    current = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, sa_exc.TimeoutError):
+            return "pool_timeout"
+        text_of = f"{type(current).__name__}: {current}"
+        if _REFUSED_PATTERN.search(text_of):
+            return "refused"
+        if isinstance(current, sa_exc.DBAPIError) and (
+                current.connection_invalidated or _CONNECTION_PATTERN.search(text_of)):
+            return "connection"
+        if isinstance(current, (ConnectionError, OSError)) and isinstance(exc, sa_exc.DBAPIError):
+            return "connection"
+        current = (getattr(current, "orig", None) or current.__cause__ or current.__context__)
+    return None
+
+
+def is_db_unavailable(exc: BaseException) -> bool:
+    return db_unavailable_kind(exc) is not None
 
 
 DATABASE_URL = _build_db_url()

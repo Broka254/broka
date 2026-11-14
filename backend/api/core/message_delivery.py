@@ -442,8 +442,9 @@ async def mark_delivered(db, *, recipient_id: str, message_ids: Iterable[str], s
 
     Only `recipient_id`'s own rows are touched - an id that is someone
     else's message, or not a message at all, is "unknown" and changes
-    nothing. Idempotent: a repeated or late acknowledgement leaves a
-    DELIVERED or READ row as it is.
+    nothing (one MESSAGE_DELIVERY_ACK_UNTRACKED line says why each was,
+    _log_untracked_acks). Idempotent: a repeated or late acknowledgement
+    leaves a DELIVERED or READ row as it is.
 
     Returns {"delivered": [...], "already": [...], "unknown": [...],
     "threads": {(listing_id, store_id, buyer_id, role): newest created_at}},
@@ -485,12 +486,11 @@ async def mark_delivered(db, *, recipient_id: str, message_ids: Iterable[str], s
             newest = result["threads"].get(key)
             if newest is None or s["message_created_at"] > newest:
                 result["threads"][key] = s["message_created_at"]
+    by_message = {s["message_id"]: s for s in snapshot}
     for mid in ids:
-        s = next((x for x in snapshot if x["message_id"] == mid), None)
+        s = by_message.get(mid)
         if s is None:
             result["unknown"].append(mid)
-            log_event("MESSAGE_DELIVERY_ACK_RECEIVED", message_id=mid, recipient_id=recipient_id,
-                      delivery_status="-", source=source, sync_id=sync_id, result="unknown")
             continue
         if mid in changed:
             result["delivered"].append(mid)
@@ -504,7 +504,85 @@ async def mark_delivered(db, *, recipient_id: str, message_ids: Iterable[str], s
             since = int((now - s["message_created_at"]).total_seconds() * 1000)
             log_event("MESSAGE_DELIVERED", **_row_fields(s, status=DELIVERED),
                       delivered_via=source, since_saved_ms=since)
+    if result["unknown"]:
+        await _log_untracked_acks(db, recipient_id, result["unknown"], source=source,
+                                  sync_id=sync_id)
     return result
+
+
+# Why an acknowledged id has no delivery row of the acknowledger's. Only the
+# last two are a fault; the rest are the app acknowledging, along with its
+# messages, what was never tracked for delivery.
+UNTRACKED_REASONS = ("call_card", "own_message", "zeno", "untracked",
+                     "not_found", "not_recipient")
+
+
+async def _log_untracked_acks(db, recipient_id: str, ids: list, *, source: str,
+                              sync_id: Optional[str]) -> dict:
+    """One line for the ids of an acknowledgement that matched no delivery
+    row of the recipient's, by why - instead of a line per id, every one of
+    them "result=unknown".
+
+    Railway's log carried dozens of `MESSAGE_DELIVERY_ACK_RECEIVED
+    result=unknown source=chat` lines: the open chat acknowledges every
+    message from the other side it shows, and that includes call cards
+    (never tracked: a call sends its own missed-call push), messages written
+    before delivery tracking existed or past RETENTION_DAYS, and Zeno's
+    legacy shared replies. None of those is a delivery failure, and none is
+    made "delivered" here - nothing is written. What is not one of them is
+    logged on its own, at WARNING: an id that is no message at all, or a
+    message in a conversation the acknowledger is not part of.
+    """
+    from api.models.store import Store
+
+    counts = {reason: 0 for reason in UNTRACKED_REASONS}
+    reasons: dict = {}
+    try:
+        M = NegotiationMessage
+        rows = (await db.execute(
+            # visibility-ok: ids and thread keys only - nothing about a message leaves this function
+            select(M.id, M.sender_id, M.role, M.msg_type, M.buyer_id,
+                   Listing.seller_id, Store.owner_id)
+            .outerjoin(Listing, Listing.id == M.listing_id)
+            .outerjoin(Store, Store.id == M.store_id)
+            .where(M.id.in_(ids))
+        )).all()
+    except Exception as exc:
+        logger.warning("MESSAGE_DELIVERY_ACK_UNTRACKED recipient_id=%s source=%s count=%d "
+                       "classified=false error=%s", recipient_id, source, len(ids),
+                       type(exc).__name__)
+        return {}
+    found = {r[0]: r for r in rows}
+    for mid in ids:
+        row = found.get(mid)
+        if row is None:
+            reason = "not_found"
+        else:
+            _, sender_id, role, msg_type, buyer_id, seller_id, owner_id = row
+            party = recipient_id in (buyer_id, seller_id, owner_id)
+            if not party:
+                reason = "not_recipient"
+            elif sender_id == recipient_id:
+                reason = "own_message"
+            elif (msg_type or "text") == "call":
+                reason = "call_card"
+            elif role == "broker":
+                reason = "zeno"
+            else:
+                # The recipient's own conversation, from the other side, and
+                # no row: written before tracking, pruned, or its tracking
+                # failed (MESSAGE_TRACKING_FAILED at the time).
+                reason = "untracked"
+        counts[reason] += 1
+        reasons[mid] = reason
+    log_event("MESSAGE_DELIVERY_ACK_UNTRACKED", recipient_id=recipient_id, source=source,
+              sync_id=sync_id, count=len(ids),
+              **{reason: n for reason, n in counts.items() if n})
+    for mid, reason in reasons.items():
+        if reason in ("not_found", "not_recipient"):
+            logger.warning("MESSAGE_DELIVERY_ACK_REJECTED message_id=%s recipient_id=%s "
+                           "source=%s reason=%s", mid, recipient_id, source, reason)
+    return reasons
 
 
 async def mark_read_in_thread(db, *, listing_id: Optional[str], store_id: Optional[str],

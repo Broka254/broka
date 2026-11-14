@@ -14,6 +14,13 @@ is subscribed. ICE trickle after that can still race a reconnect, hence
 the buffer: a signal whose recipient is absent at publish time is kept
 (120s, capped) and drained on join. Live signals go via Pub/Sub and are
 never replayed from the buffer, so no duplicates.
+
+What the buffer never hands out (2026-11-14): a hang-up (not kept at all -
+the call's terminal state says it, and a socket joining a call that is over
+is refused), anything once the call is over (clear_buffers, and calls.py
+checks again at the join), and a signal from a socket of the sender's that
+has gone or been replaced since - its offer belongs to a connection the
+sender has dropped, and the sender resends its current one on `ready`.
 """
 from __future__ import annotations
 
@@ -31,6 +38,8 @@ logger = logging.getLogger(__name__)
 PRESENCE_TTL_SECONDS = 45
 BUFFER_TTL_SECONDS = 120
 BUFFER_MAX = 50
+# Never kept for a participant who is not in the room (publish_signal).
+UNBUFFERED_SIGNALS = frozenset({"hangup"})
 
 INSTANCE_ID = os.getenv("BROKA_INSTANCE_ID") or os.getenv("HOSTNAME") or f"inst-{uuid.uuid4().hex[:8]}"
 
@@ -284,6 +293,16 @@ class CallSignalingHub:
         if recipient_id:
             peers = await self.distributed_peers(room_id)
             if recipient_id not in peers:
+                if msg_type in UNBUFFERED_SIGNALS:
+                    # A hang-up is recorded on the call itself (calls.py
+                    # makes it terminal), and a phone joining a call that is
+                    # over is refused. Kept for later, it was handed to the
+                    # callee's ringing phone 40 seconds on, for a call that
+                    # should never have reached it (2026-11-14).
+                    envelope["buffered"] = False
+                    envelope["dropped"] = "recipient_absent"
+                    logger.info("[signaling] SIGNAL_NOT_BUFFERED instance=%s room=%s sender=%s event=%s target=%s reason=recipient_absent", self.instance_id, room_id, sender_id, msg_type, recipient_id)
+                    return envelope
                 await self._buffer(room_id, recipient_id, envelope)
                 # Told to the caller of this (calls.py's relay log): the
                 # other phone is not in the room at all.
@@ -319,8 +338,13 @@ class CallSignalingHub:
         if self._use_redis:
             client = await self._get_client()
             key = _buffer_key(room_id, user_id)
-            raw = await client.lrange(key, 0, -1)
-            await client.delete(key)
+            # Read and delete in one step: two sockets of the same user
+            # joining at once (a reconnect racing its ghost) must not both
+            # replay what was kept.
+            pipe = client.pipeline(transaction=True)
+            pipe.lrange(key, 0, -1)
+            pipe.delete(key)
+            raw, _ = await pipe.execute()
             out = []
             for item in raw or []:
                 try:
@@ -329,6 +353,28 @@ class CallSignalingHub:
                     continue
             return out
         return await self._mem.buffer_drain(room_id, user_id)
+
+    async def clear_buffers(self, room_id, user_ids) -> int:
+        """Forget every signal kept for these participants of a call that is
+        over: nothing of it may be handed to a socket later. Returns how
+        many were dropped."""
+        dropped = 0
+        for user_id in user_ids:
+            if not user_id:
+                continue
+            if self._use_redis:
+                client = await self._get_client()
+                key = _buffer_key(room_id, user_id)
+                pipe = client.pipeline(transaction=True)
+                pipe.llen(key)
+                pipe.delete(key)
+                count, _ = await pipe.execute()
+                dropped += int(count or 0)
+            else:
+                dropped += len(await self._mem.buffer_drain(room_id, user_id))
+        if dropped:
+            logger.info("[signaling] SIGNAL_BUFFER_CLEARED instance=%s room=%s dropped=%d reason=call_over", self.instance_id, room_id, dropped)
+        return dropped
 
     async def _publish(self, room_id, envelope):
         if self._use_redis:
