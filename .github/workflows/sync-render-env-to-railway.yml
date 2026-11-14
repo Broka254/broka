@@ -11,6 +11,14 @@ on:
         options:
           - preview
           - apply
+      railway_token_type:
+        description: "Prefer a project-scoped token for this Railway development environment"
+        required: true
+        type: choice
+        default: project
+        options:
+          - project
+          - workspace
 
 permissions:
   contents: read
@@ -43,6 +51,7 @@ jobs:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
           SYNC_MODE: ${{ inputs.mode }}
+          RAILWAY_TOKEN_TYPE: ${{ inputs.railway_token_type }}
         run: |
           set -euo pipefail
           python3 <<'PY'
@@ -121,7 +130,7 @@ jobs:
                   for item in page:
                       var = item.get("envVar") or {}
                       key, value = var.get("key"), var.get("value")
-                      if not key or value is None or value == "":
+                      if not key or value is None:
                           continue
                       if key == "PORT" or key == "RENDER" or key.startswith("RENDER_"):
                           continue
@@ -134,22 +143,35 @@ jobs:
                   raise RuntimeError("Render pagination exceeded 30 pages.")
               return result
 
-          def verify_railway_workspace_access():
-              query = """
-              query workspace($workspaceId: String!) {
-                workspace(workspaceId: $workspaceId) { id name }
-              }
-              """
-              payload = {
-                  "query": query,
-                  "variables": {"workspaceId": "81303711-28a4-4d87-ae51-0ad89e43c616"},
-              }
-              headers = {
-                  "Authorization": "Bearer " + os.environ["RAILWAY_API_TOKEN"],
-                  "Content-Type": "application/json",
-                  "Accept": "application/json",
-              }
-              result = http_json(RAILWAY_API, headers, payload)
+          def railway_headers():
+              headers = {"Content-Type": "application/json", "Accept": "application/json"}
+              if os.environ.get("RAILWAY_TOKEN_TYPE") == "project":
+                  headers["Project-Access-Token"] = os.environ["RAILWAY_API_TOKEN"]
+              else:
+                  headers["Authorization"] = "Bearer " + os.environ["RAILWAY_API_TOKEN"]
+              return headers
+
+          def verify_railway_access():
+              if os.environ.get("RAILWAY_TOKEN_TYPE") == "project":
+                  query = """
+                  query {
+                    projectToken { projectId environmentId }
+                  }
+                  """
+                  expected = {"projectId": PROJECT_ID, "environmentId": ENVIRONMENT_ID}
+                  field = "projectToken"
+                  payload = {"query": query}
+              else:
+                  query = """
+                  query workspace($workspaceId: String!) {
+                    workspace(workspaceId: $workspaceId) { id name }
+                  }
+                  """
+                  expected = {"id": "81303711-28a4-4d87-ae51-0ad89e43c616"}
+                  field = "workspace"
+                  payload = {"query": query, "variables": {"workspaceId": expected["id"]}}
+
+              result = http_json(RAILWAY_API, railway_headers(), payload)
               if result.get("errors"):
                   entry = result["errors"][0]
                   extensions = entry.get("extensions") or {}
@@ -158,10 +180,13 @@ jobs:
                       detail += " [" + str(extensions["code"]) + "]"
                   if extensions.get("traceId"):
                       detail += " traceId=" + str(extensions["traceId"])
-                  raise RuntimeError("Railway workspace access check failed: " + detail)
-              workspace = (result.get("data") or {}).get("workspace")
-              if not workspace or workspace.get("id") != "81303711-28a4-4d87-ae51-0ad89e43c616":
-                  raise RuntimeError("Railway token cannot access the Broka Developers workspace. Create a new workspace-scoped token for that workspace and update the GitHub secret.")
+                  raise RuntimeError("Railway access check failed: " + detail)
+              actual = (result.get("data") or {}).get(field)
+              if not actual:
+                  raise RuntimeError("Railway token cannot read the expected " + field + ". Verify its type and scope.")
+              for key, expected_value in expected.items():
+                  if actual.get(key) != expected_value:
+                      raise RuntimeError("Railway token is scoped to a different " + key + ". Create a project token for Broka-Development / development.")
 
           def write_railway(service_id, variables):
               query = """
@@ -180,12 +205,7 @@ jobs:
                       "replace": True,
                   }},
               }
-              headers = {
-                  "Authorization": "Bearer " + os.environ["RAILWAY_API_TOKEN"],
-                  "Content-Type": "application/json",
-                  "Accept": "application/json",
-              }
-              response = http_json(RAILWAY_API, headers, payload)
+              response = http_json(RAILWAY_API, railway_headers(), payload)
               if response.get("errors"):
                   messages = [str(item.get("message", "GraphQL error")) for item in response["errors"]]
                   raise RuntimeError("Railway rejected update: " + "; ".join(messages))
@@ -199,8 +219,9 @@ jobs:
           print("RENDER_* and PORT are excluded. Railway user-defined variables will be replaced with exactly the Render service-level key set.")
           print("Automatic Railway deployments are disabled for this sync. Railway-generated RAILWAY_* system variables are platform-managed.")
 
-          verify_railway_workspace_access()
-          print("Railway token can access the Broka Developers workspace.")
+          print("Railway token type: " + os.environ.get("RAILWAY_TOKEN_TYPE", "project"))
+          verify_railway_access()
+          print("Railway token can access the Broka development target.")
 
           total = 0
           failures = []
