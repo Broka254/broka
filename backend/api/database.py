@@ -1801,6 +1801,7 @@ async def _init_db_impl():
         ("api.models.push_device", ("PushDevice",)),
         ("api.models.message_delivery", ("MessageDelivery",)),
         ("api.models.sold_out_report", ("SoldOutReport",)),
+        ("api.models.thread_clear", ("ThreadClear",)),
         ("api.models.zeno_session", ("ZenoSession",)),
         ("api.models.payment_callback", ("PaymentCallback",)),
         ("api.models.legal", ("LegalAcceptance",)),

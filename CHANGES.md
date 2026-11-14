@@ -1,3 +1,50 @@
+# Chats keep the latest message above the keyboard, calls minimise and look like the rest of the app, a reported listing stays on its seller's dashboard, and chats can be deleted (2026-11-13)
+
+Asked for, from phone screenshots: the keyboard hid the newest messages;
+the call screen didn't look like the app and couldn't be left during a
+call (WhatsApp's has a minimise button at its top left); a seller texted
+"revoke it on your dashboard" found the listing gone from it; and old
+conversations piled up in the inbox with no way to delete them.
+
+- **Keyboard.** Opening it shrank the chat's message list without moving
+  it, so the last messages slid under the composer. `KeepLatestInView`
+  (`widgets/keep_latest_in_view.dart`) follows the bottom while the list
+  shrinks, for a reader who was at the latest messages. Direct chat and
+  Zeno's room.
+- **Minimise a call.** The call screen owned the call: leaving it, Back
+  included, hung up.
+  - A minimise button at the top left, and Back, hand the call (its
+    State, with a GlobalKey) to `CallDockHost` above the navigator. It
+    shows as a draggable pill over every screen: who, the timer, mute and
+    end, or decline and accept for a call still ringing.
+  - Tapping the pill opens the call screen with the same call in it.
+  - A call button pressed while a call is minimised brings that call
+    back instead of placing a second one.
+- **Call screen.** Depth in the background (brand violet and blue, a
+  vignette), an orbit with two lights round the face, the name lit in the
+  brand's lavender, glass controls on a deck edged in the chat's gradient
+  and lit in the call's state colour. Labels, keys and states unchanged.
+- **Reported listings on the dashboard.** `GET /listings/?seller_id=` read
+  the same live lists buyers do, so a listing a buyer marked unavailable
+  vanished from its seller's catalogue the moment the text telling them to
+  revoke it there went out. Signed in as that seller, the list now keeps
+  it, first and flagged (`reported_sold_out`, `reported_at`); everyone
+  else's view is unchanged. The card says buyers can't see it and has
+  Still available. App builds without that card still list it, and its
+  listing page offers Still available.
+- **Delete chats.** Press and hold a chat (or a listing's card, for all its
+  chats), pick more, Delete.
+  - `POST /negotiate/{listing_id}/clear` and
+    `/negotiate/store/{store_id}/clear` record a per-person watermark
+    (`thread_clears`). The inbox, history, the chat sockets' replay and
+    the unread counts leave out what came before it. The chat comes back,
+    with only the new messages, when either side writes again. The other
+    person's copy and the record a dispute relies on are untouched.
+  - What was still waiting for that phone is settled as delivered, so the
+    sync can't hand the deleted chat back.
+  - The phone forgets its own copy of the chat (messages, receipts,
+    outbox).
+
 # No message lost to an offline recipient: delivery tracked per message, pushes retried, the app syncs what it missed, and the log says what happened to each message (2026-11-12)
 
 Asked for: a message sent while its recipient is offline, has the app

@@ -9,6 +9,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../main.dart';
 import '../features/categories/domain/category_visual.dart';
 import '../features/stores/presentation/widgets/broka_default_logo.dart';
@@ -20,6 +21,7 @@ import '../widgets/gradient_button.dart';
 import '../models/listing.dart';
 import '../services/api_service.dart';
 import '../widgets/broka_image.dart';
+import '../services/chat_deletion.dart';
 import '../services/chat_screen_memory.dart';
 import '../services/last_screen_tracker.dart';
 import '../services/global_poller_service.dart';
@@ -65,6 +67,13 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
   // and at the top every time.
   String? _expanded;
   late final ScrollController _scroll;
+
+  // Chats picked for deleting (ChatDeletion.keyOf). A long press on a chat
+  // - or on a listing's card, for all of its chats - starts picking; while
+  // any is picked a tap picks or drops instead of opening.
+  final Set<String> _selected = {};
+  bool _deleting = false;
+  bool get _selecting => _selected.isNotEmpty;
 
   // Per-account inbox cache. Shared with GlobalPollerService, which keeps
   // this warm in the background - see LocalChatStore.inboxListScopeFor.
@@ -167,6 +176,11 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
   }
 
   void _applyThreads(List<Map<String, dynamic>> data) {
+    // An answer that left the server before a delete must not bring the
+    // deleted chat back.
+    data = ChatDeletion.visible(data);
+    final keys = {for (final t in data) ChatDeletion.keyOf(t)};
+    _selected.removeWhere((k) => !keys.contains(k));
     final Map<String, List<Map<String, dynamic>>> grouped = {};
     for (final t in data) {
       // Store-general threads have no listing: group by store instead of
@@ -264,6 +278,120 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
   int get _totalUnread =>
       _threads.fold(0, (s, t) => s + ((t['unread'] as int?) ?? 0));
 
+  // ── Picking and deleting chats ───────────────────────────────────────────
+
+  void _toggle(Map<String, dynamic> t) {
+    final key = ChatDeletion.keyOf(t);
+    if (key == null) return;
+    HapticFeedback.selectionClick();
+    setState(() {
+      if (!_selected.remove(key)) _selected.add(key);
+    });
+  }
+
+  /// A listing's card: all of its chats, or none if all were picked.
+  void _toggleGroup(List<Map<String, dynamic>> threads) {
+    final keys = [for (final t in threads) ChatDeletion.keyOf(t)].whereType<String>().toList();
+    if (keys.isEmpty) return;
+    HapticFeedback.selectionClick();
+    setState(() {
+      if (keys.every(_selected.contains)) {
+        _selected.removeAll(keys);
+      } else {
+        _selected.addAll(keys);
+      }
+    });
+  }
+
+  void _cancelSelection() => setState(_selected.clear);
+
+  Future<void> _deleteSelected() async {
+    if (_deleting || _selected.isEmpty) return;
+    final picked = [
+      for (final t in _threads)
+        if (_selected.contains(ChatDeletion.keyOf(t))) t,
+    ];
+    if (picked.isEmpty) return;
+    final n = picked.length;
+    final who = n == 1 ? _otherNameOf(picked.first) : null;
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: BrokaColors.bgCard,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: BorderSide(color: BrokaColors.danger.withOpacity(0.45))),
+        title: Text(n == 1 ? 'Delete this chat?' : 'Delete $n chats?',
+            style: const TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.w800, fontSize: 17)),
+        content: Text(
+          '${n == 1 ? 'The messages and calls' : 'Their messages and calls'} will be removed '
+          'from your inbox, Zeno\'s notes included. '
+          '${who != null ? '$who keeps' : 'The other person keeps'} their copy, and if '
+          '${who != null ? 'they write' : 'someone writes'} again the chat comes back '
+          'with just the new messages.',
+          style: const TextStyle(color: BrokaColors.textMid, fontSize: 13, height: 1.45),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: BrokaColors.textMid)),
+          ),
+          TextButton(
+            key: const Key('inbox-confirm-delete'),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete',
+                style: TextStyle(color: BrokaColors.danger, fontWeight: FontWeight.w800)),
+          ),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return;
+    setState(() => _deleting = true);
+    final results = await Future.wait(picked.map((t) async {
+      try {
+        await ChatDeletion.delete(t);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }));
+    if (!mounted) return;
+    final gone = {
+      for (var i = 0; i < picked.length; i++)
+        if (results[i]) ChatDeletion.keyOf(picked[i]),
+    };
+    final failed = results.where((ok) => !ok).length;
+    setState(() {
+      _deleting = false;
+      _selected.removeAll(gone);
+      if (failed == 0) _selected.clear();
+      _applyThreads([for (final t in _threads) if (!gone.contains(ChatDeletion.keyOf(t))) t]);
+    });
+    unawaited(LocalChatStore.save(
+        _inboxScope, _threads.length > 300 ? _threads.sublist(0, 300) : _threads));
+    final done = gone.length;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      behavior: SnackBarBehavior.floating,
+      backgroundColor: failed > 0 ? BrokaColors.danger : null,
+      content: Text(failed == 0
+          ? (done == 1 ? 'Chat deleted' : '$done chats deleted')
+          : "Couldn't delete $failed chat${failed == 1 ? '' : 's'} - "
+              'check your connection and try again.'),
+    ));
+  }
+
+  /// The name a chat's row shows for the other person.
+  static String _otherNameOf(Map<String, dynamic> t) {
+    final myRole = t['my_role'] as String?;
+    final buyer = t['buyer_name'] as String?;
+    final seller = t['seller_name'] as String?;
+    if (t['thread_type'] == 'store') {
+      return (t['counterpart_name'] as String?) ??
+          (myRole == 'seller' ? (buyer ?? 'The buyer') : (seller ?? 'The store'));
+    }
+    return myRole == 'seller' ? (buyer ?? 'The buyer') : (seller ?? 'The seller');
+  }
+
   /// Opens the thread on the screen the user was last on for it - Zeno's
   /// room or the direct chat - unless only the other one has something new
   /// (ChatScreenMemory.choose). It always opened Zeno's room, so someone
@@ -311,8 +439,28 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
     final unread = _totalUnread;
-    return Scaffold(
+    // Back while picking chats puts the picks down, as in any messenger.
+    return PopScope(
+      canPop: !_selecting,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _selecting) _cancelSelection();
+      },
+      child: Scaffold(
       backgroundColor: BrokaColors.bg,
+      bottomNavigationBar: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 220),
+        transitionBuilder: (child, a) => SizeTransition(
+            sizeFactor: a, axisAlignment: -1, child: FadeTransition(opacity: a, child: child)),
+        child: _selecting
+            ? _SelectionBar(
+                key: const Key('inbox-selection-bar'),
+                count: _selected.length,
+                busy: _deleting,
+                onCancel: _cancelSelection,
+                onDelete: _deleteSelected,
+              )
+            : const SizedBox.shrink(),
+      ),
       body: ConstellationBackground(
         animate: widget.animateBackground,
         child: SafeArea(
@@ -359,6 +507,7 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
             ),
           ),
         ),
+      ),
       ),
     );
   }
@@ -427,7 +576,7 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
       if (_isOffline || _refreshFailed)
         SliverToBoxAdapter(child: _buildOfflineBanner()),
       SliverPadding(
-        padding: EdgeInsets.fromLTRB(16, 4, 16, 24 + media.padding.bottom),
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
         sliver: SliverList(
           delegate: SliverChildBuilderDelegate(
             (_, i) {
@@ -451,13 +600,47 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
                 unreadCount: unread,
                 threadCount: threads.length,
                 isExpanded:  isExpanded,
-                onToggle: () => setState(() =>
-                    _expanded = isExpanded ? null : lid),
+                // While picking, a card's tap picks all of its chats; the
+                // arrow still opens it, to pick some of them.
+                onToggle: _selecting
+                    ? () => _toggleGroup(threads)
+                    : () => setState(() => _expanded = isExpanded ? null : lid),
+                onExpand: () => setState(() => _expanded = isExpanded ? null : lid),
+                onLongPress: () => _toggleGroup(threads),
                 threads:     threads,
-                onThreadTap: _openThread,
+                onThreadTap: (t) {
+                  if (_selecting) {
+                    _toggle(t);
+                  } else {
+                    unawaited(_openThread(t));
+                  }
+                },
+                onThreadLongPress: _toggle,
+                selecting:   _selecting,
+                isSelected:  (t) => _selected.contains(ChatDeletion.keyOf(t)),
               );
             },
             childCount: listingIds.length,
+          ),
+        ),
+      ),
+      // How to clear old chats out, said once at the foot of the list.
+      SliverToBoxAdapter(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(24, 6, 24, 24 + media.padding.bottom),
+          child: AnimatedOpacity(
+            duration: const Duration(milliseconds: 200),
+            opacity: _selecting ? 0 : 1,
+            child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Icon(Icons.touch_app_outlined, size: 13, color: BrokaColors.textMid),
+              SizedBox(width: 6),
+              Flexible(
+                child: Text('Press and hold a chat to delete it',
+                    key: Key('inbox-delete-hint'),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
+              ),
+            ]),
           ),
         ),
       ),
@@ -579,8 +762,13 @@ class _ListingGroup extends StatelessWidget {
   final int     threadCount;
   final bool    isExpanded;
   final VoidCallback onToggle;
+  final VoidCallback? onExpand;
+  final VoidCallback? onLongPress;
   final List<Map<String, dynamic>> threads;
   final void Function(Map<String, dynamic>) onThreadTap;
+  final void Function(Map<String, dynamic>)? onThreadLongPress;
+  final bool selecting;
+  final bool Function(Map<String, dynamic>)? isSelected;
 
   const _ListingGroup({
     required this.listingId, required this.listingName,
@@ -589,7 +777,11 @@ class _ListingGroup extends StatelessWidget {
     required this.unreadCount, required this.threadCount,
     required this.isExpanded,  required this.onToggle,
     required this.threads,     required this.onThreadTap,
+    this.onExpand, this.onLongPress, this.onThreadLongPress,
+    this.selecting = false, this.isSelected,
   });
+
+  int get _picked => isSelected == null ? 0 : threads.where(isSelected!).length;
 
   // Category-alignment pass (2026-09-18): this four-case switch only
   // knew Vehicles/Property/Electronics/Livestock, so eleven of the
@@ -603,30 +795,45 @@ class _ListingGroup extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // A card like Home's over the constellation; one with unread messages
-    // lit with the brand glow.
-    return Container(
+    // lit with the brand glow, one with chats picked for deleting in red.
+    final picked = _picked;
+    return AnimatedContainer(
+      key: Key('inbox-group-$listingId'),
+      duration: const Duration(milliseconds: 180),
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: BrokaColors.bgCard.withOpacity(0.92),
+        color: picked > 0
+            ? Color.alphaBlend(BrokaColors.danger.withOpacity(0.07), BrokaColors.bgCard)
+            : BrokaColors.bgCard.withOpacity(0.92),
         borderRadius: BorderRadius.circular(18),
         border: Border.all(
-          color: unreadCount > 0
-              ? BrokaColors.neonBlue.withOpacity(0.55)
-              : BrokaColors.border,
-          width: unreadCount > 0 ? 1.4 : 1,
+          color: picked > 0
+              ? BrokaColors.danger.withOpacity(0.6)
+              : unreadCount > 0
+                  ? BrokaColors.neonBlue.withOpacity(0.55)
+                  : BrokaColors.border,
+          width: picked > 0 || unreadCount > 0 ? 1.4 : 1,
         ),
-        boxShadow: unreadCount > 0
+        boxShadow: unreadCount > 0 && picked == 0
             ? [BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.14), blurRadius: 16)]
             : null,
       ),
       clipBehavior: Clip.antiAlias,
       child: Column(children: [
-        // ── Group header (tap to expand/collapse) ──
+        // ── Group header (tap to expand/collapse; long press picks all) ──
         InkWell(
           onTap: onToggle,
+          onLongPress: onLongPress,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
             child: Row(children: [
+              if (selecting) ...[
+                _PickMark(
+                  picked: picked == threads.length && picked > 0,
+                  partial: picked > 0 && picked < threads.length,
+                ),
+                const SizedBox(width: 10),
+              ],
               // The listing's own photo, in the same 46dp circle the
               // category icon used to fill - same size, same shape. The
               // category emoji is only the fallback for a listing with
@@ -696,11 +903,17 @@ class _ListingGroup extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
               ],
-              AnimatedRotation(
-                turns: isExpanded ? 0.5 : 0,
-                duration: const Duration(milliseconds: 200),
-                child: const Icon(Icons.keyboard_arrow_down_rounded,
-                    color: BrokaColors.textMid, size: 22),
+              GestureDetector(
+                // While picking the card's tap picks its chats, so the
+                // arrow is what still opens it.
+                onTap: selecting ? onExpand : null,
+                behavior: HitTestBehavior.opaque,
+                child: AnimatedRotation(
+                  turns: isExpanded ? 0.5 : 0,
+                  duration: const Duration(milliseconds: 200),
+                  child: const Icon(Icons.keyboard_arrow_down_rounded,
+                      color: BrokaColors.textMid, size: 22),
+                ),
               ),
             ]),
           ),
@@ -715,6 +928,9 @@ class _ListingGroup extends StatelessWidget {
                   ...threads.map((t) => _ThreadRow(
                     thread: t,
                     onTap: () => onThreadTap(t),
+                    onLongPress: onThreadLongPress == null ? null : () => onThreadLongPress!(t),
+                    selecting: selecting,
+                    selected: isSelected?.call(t) ?? false,
                   )),
                 ])
               : const SizedBox.shrink(),
@@ -729,7 +945,16 @@ class _ListingGroup extends StatelessWidget {
 class _ThreadRow extends StatelessWidget {
   final Map<String, dynamic> thread;
   final VoidCallback onTap;
-  const _ThreadRow({required this.thread, required this.onTap});
+  final VoidCallback? onLongPress;
+  final bool selecting;
+  final bool selected;
+  const _ThreadRow({
+    required this.thread,
+    required this.onTap,
+    this.onLongPress,
+    this.selecting = false,
+    this.selected = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -790,11 +1015,22 @@ class _ThreadRow extends StatelessWidget {
                 ? Icons.call_made_rounded
                 : Icons.call_received_rounded);
 
-    return InkWell(
+    final key = ChatDeletion.keyOf(thread);
+    return Semantics(
+      selected: selecting ? selected : null,
+      child: InkWell(
+      key: key == null ? null : Key('inbox-thread-$key'),
       onTap: onTap,
-      child: Padding(
+      onLongPress: onLongPress,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        color: selected ? BrokaColors.danger.withOpacity(0.10) : Colors.transparent,
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
         child: Row(children: [
+          if (selecting) ...[
+            _PickMark(picked: selected),
+            const SizedBox(width: 10),
+          ],
           // Avatar with online dot
           Stack(children: [
             Container(
@@ -893,12 +1129,116 @@ class _ThreadRow extends StatelessWidget {
             ]),
           ])),
           const SizedBox(width: 6),
-          const Icon(Icons.chevron_right_rounded,
-              color: BrokaColors.textLow, size: 18),
+          if (!selecting)
+            const Icon(Icons.chevron_right_rounded,
+                color: BrokaColors.textLow, size: 18),
         ]),
+      ),
       ),
     );
   }
+}
+
+/// The round tick a picked chat (or a fully picked card) wears.
+class _PickMark extends StatelessWidget {
+  const _PickMark({required this.picked, this.partial = false});
+  final bool picked;
+  final bool partial;
+
+  @override
+  Widget build(BuildContext context) => AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        width: 22,
+        height: 22,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: picked
+              ? const LinearGradient(colors: [BrokaColors.danger, BrokaColors.neonPink])
+              : null,
+          color: picked ? null : Colors.transparent,
+          border: Border.all(
+            color: picked || partial ? BrokaColors.danger : BrokaColors.textMid,
+            width: 1.6,
+          ),
+          boxShadow: picked
+              ? [BoxShadow(color: BrokaColors.danger.withOpacity(0.35), blurRadius: 8)]
+              : null,
+        ),
+        child: picked
+            ? const Icon(Icons.check_rounded, size: 14, color: Colors.white)
+            : partial
+                ? const Icon(Icons.remove_rounded, size: 14, color: BrokaColors.danger)
+                : null,
+      );
+}
+
+/// The bar along the bottom while chats are picked: how many, put them
+/// down, or delete them.
+class _SelectionBar extends StatelessWidget {
+  const _SelectionBar({
+    super.key,
+    required this.count,
+    required this.busy,
+    required this.onCancel,
+    required this.onDelete,
+  });
+
+  final int count;
+  final bool busy;
+  final VoidCallback onCancel;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+        top: false,
+        child: Container(
+          margin: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
+          decoration: BoxDecoration(
+            color: BrokaColors.bgCard.withOpacity(0.96),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: BrokaColors.danger.withOpacity(0.45)),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withOpacity(0.45), blurRadius: 24, offset: const Offset(0, 8)),
+              BoxShadow(color: BrokaColors.danger.withOpacity(0.12), blurRadius: 18),
+            ],
+          ),
+          child: Row(children: [
+            IconButton(
+              key: const Key('inbox-selection-cancel'),
+              tooltip: 'Cancel',
+              onPressed: busy ? null : onCancel,
+              icon: const Icon(Icons.close_rounded, color: BrokaColors.textHigh),
+            ),
+            Expanded(
+              child: Text(
+                count == 1 ? '1 chat selected' : '$count chats selected',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    color: BrokaColors.textHigh, fontSize: 14, fontWeight: FontWeight.w800),
+              ),
+            ),
+            FilledButton.icon(
+              key: const Key('inbox-delete-selected'),
+              onPressed: busy ? null : onDelete,
+              style: FilledButton.styleFrom(
+                backgroundColor: BrokaColors.danger,
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: BrokaColors.danger.withOpacity(0.4),
+                minimumSize: const Size(0, 42),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              ),
+              icon: busy
+                  ? const SizedBox(width: 16, height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Icon(Icons.delete_outline_rounded, size: 18),
+              label: const Text('Delete', style: TextStyle(fontWeight: FontWeight.w800)),
+            ),
+          ]),
+        ),
+      );
 }
 
 /// Which group was open and how far down the Inbox was, per account, for

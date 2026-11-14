@@ -246,9 +246,9 @@ class TestTellingTheSeller:
         listing = await _named_listing(client, seller)
         await client.post(f"/listings/{listing['id']}/sold-out", headers=buyer)
 
-        # The seller's own catalogue reads the same live lists: it is not there.
-        mine = (await client.get("/listings/", params={"seller_id": seller_id})).json()
-        assert listing["id"] not in [i["id"] for i in mine]
+        # Anyone else reading this seller's listings doesn't see it.
+        theirs = (await client.get("/listings/", params={"seller_id": seller_id})).json()
+        assert listing["id"] not in [i["id"] for i in theirs]
         reported = (await client.get("/listings/reported-unavailable", headers=seller)).json()
         assert [r["id"] for r in reported] == [listing["id"]]
         assert reported[0]["reported_sold_out"] is True and reported[0]["open_reports"] == 1
@@ -263,6 +263,62 @@ class TestTellingTheSeller:
         _, other = await _user()
         await client.post(f"/listings/{listing['id']}/sold-out", headers=other)
         assert len([m for m in sms.sent if '"Oraimo Spacebuds"' in m[1]]) >= 2
+
+    @pytest.mark.asyncio
+    async def test_the_sellers_own_catalogue_keeps_it_flagged_and_first(self, client, sms):
+        # The text says "Revoke it on your BROKA dashboard", and the
+        # dashboard's catalogue is GET /listings/?seller_id=<them>. It read
+        # the same live lists buyers do, so the listing vanished from it the
+        # moment it was reported and the seller found nothing to revoke.
+        seller_id, seller, _phone = await _seller()
+        _, buyer = await _user()
+        older = await _named_listing(client, seller)
+        newer = await _named_listing(client, seller)
+        await client.post(f"/listings/{older['id']}/sold-out", headers=buyer)
+
+        mine = (await client.get("/listings/", headers=seller,
+                                 params={"seller_id": seller_id, "limit": 1})).json()
+        assert [i["id"] for i in mine] == [older["id"]], "reported first, on page one"
+        assert mine[0]["reported_sold_out"] is True and mine[0]["sold_out"] is True
+        assert mine[0]["reported_at"]
+        everything = (await client.get("/listings/", headers=seller,
+                                       params={"seller_id": seller_id})).json()
+        by_id = {i["id"]: i for i in everything}
+        assert set(by_id) == {older["id"], newer["id"]}
+        assert "reported_sold_out" not in by_id[newer["id"]]
+
+        # Buyers - signed in or not - and the feed still don't see it.
+        for h in (buyer, {}):
+            seen = (await client.get("/listings/", headers=h, params={"seller_id": seller_id})).json()
+            assert [i["id"] for i in seen] == [newer["id"]]
+        assert not await _in_feed(client, older["id"])
+
+        # Revoked from the dashboard: back on sale, no longer flagged.
+        assert (await client.delete(f"/listings/{older['id']}/sold-out", headers=seller)).status_code == 200
+        mine = (await client.get("/listings/", headers=seller, params={"seller_id": seller_id})).json()
+        assert all("reported_sold_out" not in i for i in mine)
+        assert await _in_feed(client, older["id"])
+
+    @pytest.mark.asyncio
+    async def test_an_expired_session_reads_the_list_as_a_guest(self, client):
+        # The route took no token before; asking who is reading must not
+        # turn an old session's feed into a 401.
+        from datetime import datetime, timedelta, timezone
+
+        from jose import jwt
+
+        from api.security import ALGORITHM, SECRET_KEY
+
+        seller_id, seller = await _user()
+        await _listing(client, seller)
+        stale = jwt.encode({"sub": seller_id, "type": "access",
+                            "exp": datetime.now(timezone.utc) - timedelta(minutes=5)},
+                           SECRET_KEY, algorithm=ALGORITHM)
+        r = await client.get("/listings/", headers={"Authorization": f"Bearer {stale}"},
+                             params={"seller_id": seller_id})
+        assert r.status_code == 200 and len(r.json()) == 1
+        bad = await client.get("/listings/", headers={"Authorization": "Bearer not-a-token"})
+        assert bad.status_code == 200
 
     def test_a_long_listing_name_gives_way_before_the_text_runs_to_two_parts(self):
         from api.domains.listings.sold_out import unavailable_sms

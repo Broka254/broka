@@ -23,6 +23,7 @@ import '../widgets/aspect_image.dart';
 import '../widgets/broka_image.dart';
 import '../main.dart';
 import '../services/api_service.dart';
+import '../services/call_dock.dart';
 import '../features/escrow/presentation/escrow_actions.dart';
 import '../features/safe_payment/escrow_callout.dart';
 import '../features/safe_payment/payments_shown.dart';
@@ -34,6 +35,7 @@ import '../services/chat_gallery.dart';
 import '../services/chat_screen_memory.dart';
 import '../services/notification_service.dart';
 import '../services/photo_capture.dart';
+import '../widgets/keep_latest_in_view.dart';
 import '../widgets/message_receipt.dart';
 import '../widgets/chat_parts.dart';
 import '../widgets/collapsing_screen_header.dart';
@@ -3452,6 +3454,10 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   // ── Audio/Video call ───────────────────────────────────────────────────────
 
   Future<void> _initiateCall(String callType) async {
+    // A call is minimised (the call screen's top-left button, or Back):
+    // the call buttons take the user back to it rather than placing a
+    // second call over it.
+    if (CallDock.instance.expand()) return;
     if (!_hasThread) return;
     final listing = _listing;
     final threadName = _isStoreThread ? _storeName : (listing?.name ?? '');
@@ -3905,8 +3911,10 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   /// Chronological, top-oriented thread: a new or short conversation starts
   /// near the top of the message area instead of parking one bubble at the
   /// bottom of a tall empty viewport. Restores land on the latest message
-  /// (see _scrollToLatestAfterLayout); the keyboard never covers it because
-  /// new arrivals keep scrolling the bottom into view.
+  /// (see _scrollToLatestAfterLayout); new arrivals scroll the bottom into
+  /// view, and KeepLatestInView keeps it there while the keyboard opens -
+  /// which shrinks this viewport without moving its scroll offset, and used
+  /// to slide the latest messages under the composer.
   Widget _buildMessages() {
     if (_messages.isEmpty) {
       // Aligned to the top, not centred: the empty state must not invent a
@@ -3997,7 +4005,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
           for (final m in row)
             if (m.id.isNotEmpty && row.first.id.isNotEmpty) m.id: row.first.id,
       });
-    return ListView.builder(
+    return KeepLatestInView(
+      controller: _scrollCtrl,
+      child: ListView.builder(
       controller: _scrollCtrl,
       reverse: false,
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
@@ -4032,6 +4042,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         counterpartLastDelivered: _counterpartLastDelivered,
       );
       },
+      ),
     );
   }
 

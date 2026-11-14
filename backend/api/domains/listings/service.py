@@ -833,6 +833,9 @@ class ListingService:
         outside_categories: Optional[List[str]] = None,
         # Leaner cards for app builds that ask (GET /listings/?lean=true).
         lean: bool = False,
+        # Who is asking, when the router could tell (None for a guest).
+        # Only used to recognise a seller reading their own catalogue.
+        viewer_id: Optional[str] = None,
     ):
         """Phase 3 (broka_mockup_actualization_spec.md §7): "Filters must
         affect actual backend results. Do not implement fake UI-only
@@ -850,7 +853,17 @@ class ListingService:
         callers (CategoryZoneScreen, TraderProfileScreen) are unaffected
         unless they ask for the new shape.
         """
-        q = select(Listing).where(Listing.status == ListingStatus.active, live_clause())
+        # The seller's own catalogue (the Seller Dashboard reads this route
+        # with seller_id = themselves) keeps the listings a buyer marked
+        # unavailable, flagged, first. Without them the dashboard lost the
+        # listing the moment it was reported, while the text sent about it
+        # told the seller to revoke it there (sold_out.py) - and an app
+        # build without the "marked unavailable" panel had nothing at all.
+        # Opening the card's listing offers "Still available" in every
+        # build. Everyone else's view of the same seller is unchanged.
+        owner_view = bool(seller_id) and viewer_id is not None and viewer_id == seller_id
+        q = select(Listing).where(Listing.status == ListingStatus.active,
+                                  live_clause(include_reported=owner_view))
         if category:
             # FIX (buying-agent bug-hunt, 2026-09-17): case-insensitive
             # equality, not `Listing.category == category`.
@@ -926,6 +939,11 @@ class ListingService:
             # location changed nothing. Free-text match against
             # location_name, wildcards escaped like search above.
             q = q.where(term_matches(location.strip().lower(), (Listing.location_name,)))
+
+        if owner_view:
+            # Reported ones lead, so they are on the first page whatever the
+            # catalogue's size. order_by appends: the sort below follows.
+            q = q.order_by(desc(case((Listing.sold_out_reported_at.is_not(None), 1), else_=0)))
 
         if sort == "recent":
             q = q.order_by(desc(Listing.created_at))
@@ -1060,6 +1078,14 @@ class ListingService:
                 if dist is not None:
                     d["distance_km"] = dist
                     d["distance_label"] = format_distance_km(dist)
+            if owner_view and listing.sold_out_reported_at is not None:
+                # The same fields GET /listings/reported-unavailable sends,
+                # so the card can say why buyers can't see it.
+                d.update({
+                    "sold_out": True,
+                    "reported_sold_out": True,
+                    "reported_at": listing.sold_out_reported_at.isoformat(),
+                })
             # Auto-expire featured
             if listing.is_featured and listing.featured_until and listing.featured_until < now:
                 listing.is_featured = False

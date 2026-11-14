@@ -9,12 +9,14 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../services/broka_tts.dart';
 import '../services/zeno_voice_controller.dart';
+import '../widgets/keep_latest_in_view.dart';
 import '../widgets/zeno_voice_card.dart';
 import '../main.dart';
 import '../widgets/chat_parts.dart';
 import '../widgets/collapsing_screen_header.dart';
 import '../widgets/constellation_background.dart';
 import '../services/api_service.dart';
+import '../services/call_dock.dart';
 import '../services/chat_screen_memory.dart';
 import '../services/global_poller_service.dart';
 import '../services/photo_capture.dart';
@@ -1653,7 +1655,11 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     );
   }
 
-  Widget _buildChat() => ListView.builder(
+  // KeepLatestInView: the keyboard shrinks this list without moving it, and
+  // the latest messages slid under the composer (as in the direct chat).
+  Widget _buildChat() => KeepLatestInView(
+    controller: _scrollCtrl,
+    child: ListView.builder(
     controller: _scrollCtrl,
     keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
     padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
@@ -1671,6 +1677,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
           onStreamed: () => _fresh.remove(msg),
           onGrow: _followStream);
     },
+    ),
   );
 
   // "Make Offer" and "Escrow" are gone - typing a number is already picked
@@ -1707,6 +1714,8 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
   /// screen. Zeno decides whether to OFFER a call; it never sets one up,
   /// so there stays exactly one code path in the app that can ring a phone.
   Future<void> _initiateCall(String callType) async {
+    // A call is minimised: back to it, not a second call over it.
+    if (CallDock.instance.expand()) return;
     final listing = _listing;
     if (listing == null) return;
     final isSeller = _role == 'seller';

@@ -349,6 +349,59 @@ void main() {
     });
   });
 
+  // A buyer marked it unavailable, and the text the seller got says to
+  // revoke that on the dashboard - where the listing had already gone,
+  // with nothing to revoke. The seller's own catalogue now keeps it
+  // (backend ListingService.list_listings), flagged, with Still available.
+  testWidgets('a listing a buyer marked unavailable stays in Products, with Still available',
+      (tester) async {
+    var reported = true;
+    setFakeRoute((uri) {
+      if (uri.path == '/auth/user/seller-1') return {'id': 'seller-1', 'name': 'Grace Akinyi'};
+      if (uri.path == '/listings/') {
+        return [
+          {
+            'id': 'listing-9', 'name': 'Oraimo Spacebuds', 'category': 'Electronics',
+            'price': 1500, 'listing_type': 'direct', 'status': 'active',
+            'seller_id': 'seller-1', 'views': 3,
+            if (reported) ...{
+              'sold_out': true, 'reported_sold_out': true,
+              'reported_at': '2026-11-13T09:00:00',
+            },
+          },
+          {
+            'id': 'listing-8', 'name': 'JBL Flip 6', 'category': 'Electronics',
+            'price': 15000, 'listing_type': 'direct', 'status': 'active',
+            'seller_id': 'seller-1', 'views': 1,
+          },
+        ];
+      }
+      if (uri.path == '/listings/listing-9/sold-out') {
+        reported = false;
+        return {'listing_id': 'listing-9', 'reported_sold_out': false, 'reported_at': null};
+      }
+      if (uri.path == '/stores/mine') return const FakeResponse(null);
+      return null;
+    });
+    clearFakeRequests();
+    await tester.pumpWidget(const MaterialApp(home: SellerDashboardScreen(animateBackground: false)));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('dashboard-tab-1')));
+    await _settle(tester);
+
+    expect(find.text('Oraimo Spacebuds'), findsOneWidget);
+    expect(find.byKey(const Key('product-reported-listing-9')), findsOneWidget);
+    expect(find.byKey(const Key('product-reported-listing-8')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('product-card-still-available-listing-9')));
+    await _settle(tester);
+    expect(fakeRequests.where((r) => r.method == 'DELETE').map((r) => r.uri.path),
+        ['/listings/listing-9/sold-out']);
+    expect(find.textContaining('back on sale'), findsOneWidget);
+    expect(find.byKey(const Key('product-reported-listing-9')), findsNothing);
+    expect(find.text('Oraimo Spacebuds'), findsOneWidget);
+  });
+
   testWidgets('nothing overflows on a 320dp phone at a large text size', (tester) async {
     tester.view.physicalSize = const Size(320 * 2, 640 * 2);
     tester.view.devicePixelRatio = 2.0;

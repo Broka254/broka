@@ -175,6 +175,18 @@ class ListingStoreIn(BaseModel):
     store_id: str
 
 
+def _viewer_if_signed_in(token: Optional[str] = Depends(_oauth2_scheme_optional)) -> Optional[dict]:
+    """The signed-in caller, or None - and None, not 401, for a token that
+    has expired. The listings are public: an old session must still open
+    them, it just reads them as a guest does."""
+    if not token:
+        return None
+    try:
+        return get_current_user(token)
+    except HTTPException:
+        return None
+
+
 @router.get("/stats")
 async def get_stats(db: AsyncSession = Depends(get_db)):
     svc = ListingService(db)
@@ -240,6 +252,11 @@ async def list_listings(
     limit: int = Query(20, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
+    # Lenient, like the single-listing read: an expired token is a guest,
+    # never a 401 on the public feed. Only a seller asking for their own
+    # catalogue reads anything different (the listings a buyer marked
+    # unavailable, flagged - ListingService.list_listings).
+    viewer: Optional[dict] = Depends(_viewer_if_signed_in),
 ):
     svc = ListingService(db)
     parsed_attributes = None
@@ -269,6 +286,7 @@ async def list_listings(
         limit=limit,
         offset=offset,
         lean=lean,
+        viewer_id=viewer["id"] if viewer else None,
     )
 
 
@@ -1068,18 +1086,6 @@ async def get_own_listing(
     """
     svc = ListingService(db)
     return await svc.get_own_listing(listing_id, current_user["id"])
-
-
-def _viewer_if_signed_in(token: Optional[str] = Depends(_oauth2_scheme_optional)) -> Optional[dict]:
-    """The signed-in caller, or None - and None, not 401, for a token that
-    has expired. The listing is public: an old session must still open it,
-    it just counts as a view."""
-    if not token:
-        return None
-    try:
-        return get_current_user(token)
-    except HTTPException:
-        return None
 
 
 @router.get("/{listing_id}")

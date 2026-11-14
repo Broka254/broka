@@ -48,6 +48,7 @@ import '../features/listings/presentation/replace_photos.dart';
 import '../features/stores/presentation/store_entry.dart';
 import '../features/stores/presentation/widgets/menu_store_section.dart';
 import '../features/seller_dashboard/data/seller_dashboard_repository.dart';
+import '../features/seller_dashboard/data/reported_listings_repository.dart';
 import '../features/seller_dashboard/presentation/reported_unavailable_panel.dart';
 import '../widgets/stale_data_banner.dart';
 
@@ -523,7 +524,8 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   int    get _totalViews   => _summaryInt('total_views') ?? _listings.fold(0, (s, l) => s + l.views);
   bool   get _isVerified   => _profile?['is_verified'] as bool? ?? false;
   int    get _activeCount  =>
-      _summaryInt('active_listings') ?? _listings.where((l) => l.status.toLowerCase() == 'active').length;
+      _summaryInt('active_listings') ??
+      _listings.where((l) => l.status.toLowerCase() == 'active' && !l.reportedSoldOut).length;
   int    get _featuredCount =>
       _summaryInt('featured_listings') ?? _listings.where((l) => l.isFeatured).length;
 
@@ -2385,12 +2387,9 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
             return FadeSlideIn(
               index: 0,
               child: Column(children: [
-                // Out of the catalogue below, so they are listed above it.
-                ReportedUnavailablePanel(
-                  reloadSignal: _feeReload,
-                  onChanged: _refresh,
-                  margin: const EdgeInsets.only(bottom: 14),
-                ),
+                // A listing a buyer marked unavailable is in the catalogue
+                // below now (first, flagged, with Still available on its
+                // card), so it is not listed a second time above it.
                 _buildProductsHeader(),
                 if (_offers != null)
                   LaunchOffersCard(
@@ -2501,10 +2500,12 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
               begin: Alignment.topLeft, end: Alignment.bottomRight),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: featured
-                ? BrokaColors.neonCyan.withOpacity(0.38 + 0.14 * _glow.value)
-                : BrokaColors.border,
-            width: featured ? 1.5 : 1),
+            color: l.reportedSoldOut
+                ? BrokaColors.danger.withOpacity(0.55)
+                : featured
+                    ? BrokaColors.neonCyan.withOpacity(0.38 + 0.14 * _glow.value)
+                    : BrokaColors.border,
+            width: featured || l.reportedSoldOut ? 1.5 : 1),
           boxShadow: featured ? [BoxShadow(
               color: BrokaColors.neonCyan.withOpacity(0.06 + 0.04 * _glow.value),
               blurRadius: 20)] : null),
@@ -2596,6 +2597,10 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
                   style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
             ]),
           ),
+          // ── Marked unavailable by a buyer ───────────────────────────────────
+          // Hidden from every buyer until the seller answers; the text they
+          // were sent says to revoke it here.
+          if (l.reportedSoldOut) _buildReportedBanner(l),
           // ── Time left before it goes offline ───────────────────────────────
           // Always shown (including "No expiry"), on the collapsed card:
           // a seller scanning their products must see each deadline
@@ -2728,6 +2733,74 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         ]),
       ),
     );
+  }
+
+  /// Listings whose "Still available" is on its way to the server.
+  final Set<String> _revoking = {};
+
+  Widget _buildReportedBanner(Listing l) {
+    final busy = _revoking.contains(l.id);
+    return Container(
+      key: Key('product-reported-${l.id}'),
+      margin: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+      padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+      decoration: BoxDecoration(
+        color: BrokaColors.danger.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: BrokaColors.danger.withOpacity(0.35)),
+      ),
+      child: Row(children: [
+        const Icon(Icons.visibility_off_rounded, size: 16, color: BrokaColors.danger),
+        const SizedBox(width: 8),
+        const Expanded(
+          child: Text(
+            'A buyer marked this unavailable - buyers can\'t see it. Still have it?',
+            style: TextStyle(color: BrokaColors.textHigh, fontSize: 11.5, height: 1.35),
+          ),
+        ),
+        const SizedBox(width: 8),
+        FilledButton(
+          key: Key('product-card-still-available-${l.id}'),
+          onPressed: busy ? null : () => _stillAvailable(l),
+          style: FilledButton.styleFrom(
+            backgroundColor: BrokaColors.neonGreen.withOpacity(0.18),
+            foregroundColor: BrokaColors.neonGreen,
+            minimumSize: const Size(0, 34),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+          child: busy
+              ? const SizedBox(width: 14, height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: BrokaColors.neonGreen))
+              : const Text('Still available',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+        ),
+      ]),
+    );
+  }
+
+  /// Revokes every open report: the listing is back in front of buyers.
+  Future<void> _stillAvailable(Listing l) async {
+    HapticFeedback.selectionClick();
+    setState(() => _revoking.add(l.id));
+    final r = await reportedListingsRepository.stillAvailable(l.id);
+    if (!mounted) return;
+    setState(() => _revoking.remove(l.id));
+    final messenger = ScaffoldMessenger.of(context);
+    switch (r) {
+      case Success():
+        messenger.showSnackBar(SnackBar(
+          content: Text('"${l.name}" is back on sale - buyers can see it again.'),
+          behavior: SnackBarBehavior.floating,
+        ));
+        await _refresh();
+      case Failure(:final message):
+        messenger.showSnackBar(SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: BrokaColors.danger,
+        ));
+    }
   }
 
   /// Swaps the photos buyers see. New ones are taken with the camera - a
