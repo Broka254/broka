@@ -43,6 +43,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
+import '../core/network/poll_pacing.dart' show jittered;
 import 'api_service.dart';
 import 'local_chat_store.dart';
 
@@ -373,8 +374,11 @@ class MessageSyncService {
 
   Duration? _scheduleRetry(String trigger) {
     if (!_running || !_appInForeground || _failures <= 0) return null;
-    final delay =
-        retryDelays[min(_failures - 1, retryDelays.length - 1)];
+    // Spread ±20% (core/network/poll_pacing): a server back from a restart
+    // had every phone whose sync failed retry it on the same schedule, at
+    // the same second.
+    final delay = jittered(
+        retryDelays[min(_failures - 1, retryDelays.length - 1)], _random);
     _retryTimer?.cancel();
     _retryTimer = Timer(delay, () {
       _retryTimer = null;
