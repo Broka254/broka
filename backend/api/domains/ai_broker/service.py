@@ -417,6 +417,11 @@ class AIBrokerService:
             f'{{"min_price":0,"max_price":0,"recommended_price":0,"reasoning":"..."}}'
         )
         messages = [{"role": "user", "content": prompt}]
+        if db is not None:
+            # The comparable-deal figures are read; nothing is written. The
+            # read ends before the model's round trip.
+            from api.database import release_connection
+            await release_connection(db, before="ai.price_recommend")
         raw = await self._call_ai(messages, cache_key=_cache_key("price", messages))
         try:
             start = raw.index("{")
