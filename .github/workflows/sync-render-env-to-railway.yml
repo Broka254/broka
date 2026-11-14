@@ -83,7 +83,27 @@ jobs:
                   with urllib.request.urlopen(request, timeout=45) as response:
                       return json.loads(response.read().decode())
               except urllib.error.HTTPError as error:
-                  raise RuntimeError("HTTP " + str(error.code) + " from " + urllib.parse.urlparse(url).netloc + urllib.parse.urlparse(url).path) from None
+                  safe_detail = ""
+                  try:
+                      body = json.loads(error.read().decode("utf-8", errors="replace"))
+                      entries = body.get("errors", []) if isinstance(body, dict) else []
+                      if entries:
+                          entry = entries[0]
+                          extensions = entry.get("extensions") or {}
+                          safe_detail = str(entry.get("message", "API error"))
+                          code = extensions.get("code")
+                          trace = extensions.get("traceId")
+                          if code:
+                              safe_detail += " [" + str(code) + "]"
+                          if trace:
+                              safe_detail += " traceId=" + str(trace)
+                      elif isinstance(body, dict) and body.get("message"):
+                          safe_detail = str(body["message"])
+                  except Exception:
+                      pass
+                  endpoint = urllib.parse.urlparse(url)
+                  suffix = ("; " + safe_detail) if safe_detail else ""
+                  raise RuntimeError("HTTP " + str(error.code) + " from " + endpoint.netloc + endpoint.path + suffix) from None
               except urllib.error.URLError as error:
                   raise RuntimeError("Network error calling " + urllib.parse.urlparse(url).netloc) from None
 
@@ -113,6 +133,35 @@ jobs:
               else:
                   raise RuntimeError("Render pagination exceeded 30 pages.")
               return result
+
+          def verify_railway_workspace_access():
+              query = """
+              query workspace($workspaceId: String!) {
+                workspace(workspaceId: $workspaceId) { id name }
+              }
+              """
+              payload = {
+                  "query": query,
+                  "variables": {"workspaceId": "81303711-28a4-4d87-ae51-0ad89e43c616"},
+              }
+              headers = {
+                  "Authorization": "Bearer " + os.environ["RAILWAY_API_TOKEN"],
+                  "Content-Type": "application/json",
+                  "Accept": "application/json",
+              }
+              result = http_json(RAILWAY_API, headers, payload)
+              if result.get("errors"):
+                  entry = result["errors"][0]
+                  extensions = entry.get("extensions") or {}
+                  detail = str(entry.get("message", "GraphQL authorization error"))
+                  if extensions.get("code"):
+                      detail += " [" + str(extensions["code"]) + "]"
+                  if extensions.get("traceId"):
+                      detail += " traceId=" + str(extensions["traceId"])
+                  raise RuntimeError("Railway workspace access check failed: " + detail)
+              workspace = (result.get("data") or {}).get("workspace")
+              if not workspace or workspace.get("id") != "81303711-28a4-4d87-ae51-0ad89e43c616":
+                  raise RuntimeError("Railway token cannot access the Broka Developers workspace. Create a new workspace-scoped token for that workspace and update the GitHub secret.")
 
           def write_railway(service_id, variables):
               query = """
@@ -149,6 +198,9 @@ jobs:
           print("Only service-level Render variables are available from this endpoint; linked Render Environment Groups are not included.")
           print("RENDER_* and PORT are excluded. Existing Railway variables are merged, not removed.")
           print("Automatic Railway deployments are disabled for this sync.")
+
+          verify_railway_workspace_access()
+          print("Railway token can access the Broka Developers workspace.")
 
           total = 0
           failures = []
