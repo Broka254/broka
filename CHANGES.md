@@ -1,3 +1,26 @@
+# The app and the web storefront default to the Railway API instead of Render (2026-11-14)
+
+Asked for: point the frontends at `https://broka-api-development.up.railway.app`.
+Only the compiled-in / fallback hostname changed; no path, header, token or
+request shape did.
+
+- **App.** `API_URL` (ApiService, ApiClient) and `API_WS_URL` (DealWsClient,
+  AuctionWsClient) now default to `https://` / `wss://` on the Railway host.
+  Negotiation chat and call signalling derive their sockets from
+  `ApiService.baseUrl`, so they follow it with their paths and
+  `?token=` / `call_token` parameters untouched. `api_endpoints_test.dart` now
+  pins the Railway host.
+- **Web storefront.** `BROKA_API_URL`'s fallback in `server-config.ts`, its
+  test and `web/.env.example` name the Railway host. A `BROKA_API_URL` already
+  set in the Vercel project still wins over the fallback and must be changed
+  there.
+- **Not changed.** `render.yaml` and the Render-to-Railway sync workflow (Render
+  service config); backend code and CORS (the app is a native client and the
+  storefront calls the API from its server, so neither sends a browser Origin;
+  the sync workflow already adds the Railway admin origin to `ALLOWED_ORIGINS`).
+- **Installed apps keep their compiled-in host.** Only builds made from this
+  change use Railway.
+
 # Chats keep the latest message above the keyboard, calls minimise and look like the rest of the app, a reported listing stays on its seller's dashboard, and chats can be deleted (2026-11-13)
 
 Asked for, from phone screenshots: the keyboard hid the newest messages;
