@@ -20,8 +20,9 @@ import 'last_screen_tracker.dart';
 import 'sell_draft_store.dart';
 
 class ApiService {
-  // The Render service (broka-a6vh.onrender.com), which replaced the
-  // Railway one. The compiled-in address stays on installed phones for good,
+  // The Railway service (broka-api-development.up.railway.app), which
+  // replaced the Render one (broka-a6vh.onrender.com). The compiled-in
+  // address stays on installed phones for good,
   // so moving hosts again means a new build, not a DNS change.
   // Point a build elsewhere with --dart-define=API_URL=... and
   // API_WS_URL=... together. The WebSocket
@@ -30,7 +31,7 @@ class ApiService {
   // and auction updates to the other (test/api_endpoints_test.dart).
   static const String baseUrl = String.fromEnvironment(
     'API_URL',
-    defaultValue: 'https://broka-a6vh.onrender.com',
+    defaultValue: 'https://broka-api-development.up.railway.app',
   );
 
   static String? _token;

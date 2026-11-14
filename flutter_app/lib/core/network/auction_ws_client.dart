@@ -29,7 +29,7 @@ class AuctionWsClient {
   // did) fails silently at the WebSocket layer, not at compile time.
   static const String _baseWsUrl = String.fromEnvironment(
     'API_WS_URL',
-    defaultValue: 'wss://broka-a6vh.onrender.com',
+    defaultValue: 'wss://broka-api-development.up.railway.app',
   );
 
   /// Tests point the client at a local server, and shrink the backoff's
