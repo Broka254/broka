@@ -162,6 +162,46 @@ void main() {
     await tester.pump(const Duration(seconds: 5));
     await _settle(tester);
   });
+
+  testWidgets('a call card is not acknowledged as a delivered message', (tester) async {
+    // Calls are not tracked for delivery (the call sends its own missed-call
+    // push): acknowledging their cards only filled Railway's log with
+    // "MESSAGE_DELIVERY_ACK_RECEIVED result=unknown source=chat".
+    final at = DateTime.now().subtract(const Duration(minutes: 5));
+    setFakeRoute((uri) {
+      final p = uri.path;
+      if (p == '/negotiate/listing-1/history') {
+        return [
+          {'role': 'seller', 'content': 'missed', 'id': 'call-1', 'msg_type': 'call',
+           'call_type': 'audio', 'created_at': _iso(at)},
+          {'role': 'seller', 'content': 'Call me back?', 'id': 'm8',
+           'created_at': _iso(at.add(const Duration(seconds: 30)))},
+        ];
+      }
+      if (p == '/negotiate/sync') {
+        return {'messages': [], 'has_more': false, 'next_cursor': null};
+      }
+      if (p == '/negotiate/sync/ack') return {'status': 'ok', 'delivered': ['m8']};
+      if (p.endsWith('/read-status')) return <String, dynamic>{};
+      return null;
+    });
+
+    await tester.pumpWidget(chat());
+    await _settle(tester);
+    clearFakeRequests();
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump();
+    final dynamic state = tester.state(find.byType(NegotiationScreen));
+    await state.debugSyncReadState();
+    await _settle(tester);
+
+    expect(acked(), ['m8'], reason: 'the message, not the call card');
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump(const Duration(seconds: 5));
+    await _settle(tester);
+  });
 }
 
 /// pumpAndSettle never returns (the constellation and typing dots animate).

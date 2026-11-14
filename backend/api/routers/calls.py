@@ -51,7 +51,7 @@ from api.core.timeutil import parse_iso_to_naive_utc
 from api.core.config import settings
 from api.core import cloudflare_turn_client, call_state, push_devices, call_events
 from api.core.call_events import role_of
-from api.core.call_signaling import hub as signaling_hub, INSTANCE_ID
+from api.core.call_signaling import hub as signaling_hub, INSTANCE_ID, UNBUFFERED_SIGNALS
 from api.core.cloudflare_turn_client import CloudflareTurnError
 from api.core.call_state import CallState
 from api.core.rate_limit import (
@@ -224,6 +224,63 @@ async def _broadcast_room(room_id: str, message: dict, exclude_user: Optional[st
 
 def _peer_recipient(session, uid: str) -> str:
     return session.callee_id if uid == session.caller_id else session.caller_id
+
+
+async def _replay_buffered(websocket, room_id: str, uid: str, role: str) -> int:
+    """Signals kept for this participant while it was away (call_signaling's
+    buffer), delivered to the socket that just joined - only the ones still
+    meant for this call. Returns how many went.
+
+    Never a hang-up: a call that was hung up is over, and a socket joining
+    it is refused before it gets here. Kept, the caller's hang-up was handed
+    to the callee's ringing phone 40 seconds later (2026-11-14). And nothing
+    from a socket of the sender's that has gone or been replaced since: its
+    offer and candidates belong to a connection the sender has moved on
+    from, and the sender sends its current ones again on `ready`.
+    """
+    envelopes = await signaling_hub.drain_buffer(room_id, uid)
+    if not envelopes:
+        return 0
+    try:
+        peers = await signaling_hub.distributed_peers(room_id)
+    except Exception:
+        peers = {}
+    sent, dropped = 0, {}
+    for envelope in envelopes:
+        kind = envelope.get("msg_type")
+        sender_conn = (peers.get(envelope.get("sender")) or {}).get("conn")
+        if kind in UNBUFFERED_SIGNALS:
+            why = "hangup"
+        elif not sender_conn or sender_conn != envelope.get("origin_conn"):
+            why = "sender_socket_gone"
+        else:
+            why = None
+        if why:
+            dropped[why] = dropped.get(why, 0) + 1
+            logger.info("[calls] SIGNAL_REPLAY_DISCARDED instance=%s room=%s user=%s event=%s reason=%s",
+                        INSTANCE_ID, room_id, uid, kind, why)
+            continue
+        try:
+            await websocket.send_text(envelope.get("raw") or "")
+            sent += 1
+            logger.info("[calls] SIGNAL_REPLAYED instance=%s room=%s user=%s event=%s", INSTANCE_ID, room_id, uid, kind)
+        except Exception:
+            pass
+    if dropped:
+        call_events.emit("SIGNALS_DISCARDED", room=room_id, role=role, user=uid, ws="open",
+                         replayed=sent, **{f"dropped_{k}": v for k, v in dropped.items()})
+    return sent
+
+
+async def _discard_signals(room_id: str, session) -> None:
+    """The call is over: forget what was kept for either phone (best effort -
+    a join checks again anyway)."""
+    if session is None:
+        return
+    try:
+        await signaling_hub.clear_buffers(room_id, (session.caller_id, session.callee_id))
+    except Exception as exc:
+        logger.warning("[calls] could not clear signals room=%s: %s", room_id, type(exc).__name__)
 
 def _owns_room(room_id: str, room: Dict[str, WebSocket]) -> bool:
     """True when `room` is still the dict registered under `room_id`.
@@ -1101,6 +1158,10 @@ async def initiate_call(
             # app whose access token has long expired.
             "callToken":   create_call_token(callee.id, room_id),
         }
+    # Everything the call needs from the database has been read: the
+    # connection goes back before waiting on Firebase (up to
+    # CALL_PUSH_WAIT_SECONDS), not after.
+    await _release(db)
     is_video = payload.call_type == "video"
     ring = _RingJob(
         room_id=room_id, caller_id=current["id"], callee_id=callee.id,
@@ -1307,17 +1368,21 @@ async def call_alerted(room_id: str, payload: CallAlertedRequest):
         raise HTTPException(status_code=404, detail="Call not found or no longer active")
     if claims.get("sub") != session.callee_id:
         raise HTTPException(status_code=403, detail="Only the person called can report ringing")
-    if call_state.is_terminal(session.state) or session.state not in (
-        CallState.initiating, CallState.ringing,
-    ):
+    # Decided by the write itself, not by the read above: the read can be
+    # of a call that a hang-up ends a moment later (2026-11-14).
+    alert = await call_state.mark_callee_alerted(room_id)
+    if alert.session is None:
+        raise HTTPException(status_code=404, detail="Call not found or no longer active")
+    if not alert.ringing:
         # Answered (on this phone or another), declined, missed or ended.
+        call_events.emit("CALL_RINGING_REJECTED", room=room_id, role="callee",
+                         user=session.callee_id, call_state=alert.session.state.value,
+                         reason="not_ringing")
         raise HTTPException(status_code=410, detail="This call is no longer ringing")
-    first = not session.callee_alerted
-    await call_state.mark_callee_alerted(room_id)
-    if first:
+    if alert.first:
         logger.info("[calls] CALLEE_ALERTED room=%s", room_id)
         call_events.emit("CALL_RINGING", room=room_id, role="callee", user=session.callee_id,
-                         call_state=session.state.value)
+                         call_state=alert.session.state.value)
         await _tell_caller_ringing(room_id, session.caller_id)
     return {"status": "ringing"}
 
@@ -1355,29 +1420,43 @@ async def call_answered(room_id: str, payload: CallAlertedRequest):
         raise HTTPException(status_code=404, detail="Call not found or no longer active")
     if claims.get("sub") != session.callee_id:
         raise HTTPException(status_code=403, detail="Only the person called can answer")
-    if session.state in (CallState.initiating, CallState.ringing):
-        # Remembered as answered, and the callee gets the whole join window
-        # from now (call_state._answer).
-        await call_state.mark_answered(room_id)
-        logger.info("[calls] CALL_ANSWERED instance=%s room=%s", INSTANCE_ID, room_id)
-        # Whether the caller is in the room yet says, at a glance, whether
-        # the call that follows can connect (2026-11-13: it was not).
-        try:
-            caller_present = session.caller_id in await signaling_hub.distributed_peers(room_id)
-        except Exception:
-            caller_present = None
-        call_events.emit("CALL_ACCEPTED", room=room_id, role="callee", user=session.callee_id,
-                         call_state="accepted", via="answer", caller_in_room=caller_present)
-        # The caller stops waiting for an answer now. Their screen hung up
-        # after 45 seconds unless the callee's socket had joined - and a
-        # callee answering from a closed app needs that long and more to
-        # start BROKA and open the call, so the call they had just accepted
-        # ended as it appeared on their screen.
-        await _tell_caller(room_id, session.caller_id, {"type": "callee_answered"})
-        _spawn(_push_ring_over(session))
-        return {"status": "answered"}
-    if call_state.is_terminal(session.state):
+    # Remembered as answered, and the callee gets the whole join window from
+    # now (call_state._answer) - or refused, when the call ended first. That
+    # is the write's decision, not the read above's: on 2026-11-14 an Accept
+    # for a call its caller had hung up on 40 seconds before was answered
+    # 200, its caller was sent `callee_answered`, and the callee's phone sat
+    # on "Connecting…" for nobody.
+    answer = await call_state.mark_answered(room_id)
+    if answer.session is None:
+        raise HTTPException(status_code=404, detail="Call not found or no longer active")
+    if not answer.accepted:
+        logger.info("[calls] CALL_ANSWER_REJECTED instance=%s room=%s state=%s",
+                    INSTANCE_ID, room_id, answer.session.state.value)
+        call_events.emit("CALL_ANSWER_REJECTED", room=room_id, role="callee",
+                         user=session.callee_id, call_state=answer.session.state.value,
+                         reason="call_over")
         raise HTTPException(status_code=410, detail="This call has already ended")
+    if not answer.first:
+        # The same Accept again (a retry, a second tap, the notification and
+        # the screen both), or answered on another phone: nothing more to tell.
+        return {"status": "answered"}
+    logger.info("[calls] CALL_ANSWERED instance=%s room=%s", INSTANCE_ID, room_id)
+    # Whether the caller is in the room yet says, at a glance, whether
+    # the call that follows can connect (2026-11-13: it was not).
+    try:
+        caller_present = session.caller_id in await signaling_hub.distributed_peers(room_id)
+    except Exception:
+        caller_present = None
+    call_events.emit("CALL_ACCEPTED", room=room_id, role="callee", user=session.callee_id,
+                     call_state=answer.session.state.value, via="answer",
+                     caller_in_room=caller_present)
+    # The caller stops waiting for an answer now. Their screen hung up
+    # after 45 seconds unless the callee's socket had joined - and a
+    # callee answering from a closed app needs that long and more to
+    # start BROKA and open the call, so the call they had just accepted
+    # ended as it appeared on their screen.
+    await _tell_caller(room_id, session.caller_id, {"type": "callee_answered"})
+    _spawn(_push_ring_over(session))
     return {"status": "answered"}
 
 
@@ -1414,26 +1493,39 @@ async def cancel_call_setup(
     if call_state.is_terminal(session.state):
         return {"status": "over", "room_id": room_id}
 
+    found_state = session.state.value
+    outcome = None
     if session.state in _UNANSWERED_STATES:
-        await _settle_unanswered(session, by=current["id"])
-        await _hang_up_room(room_id, reason="cancelled")
-        outcome = "cancelled"
-    else:
+        settled = await _settle_unanswered(session, by=current["id"])
+        if settled == _SETTLED_CANCELLED:
+            await _hang_up_room(room_id, reason="cancelled")
+            outcome = "cancelled"
+        elif settled == _SETTLED_OVER:
+            return {"status": "over", "room_id": room_id}
+        # _SETTLED_ANSWERED: an Accept crossed the cancel - it ends as an
+        # answered call that never connected, below.
+    if outcome is None:
         outcome = "failed_to_connect"
         recorded = False
         if await call_state.mark_result_logged(room_id):
-            listing, store = await _thread_of(db, session)
-            if listing is not None or store is not None:
-                # Tells the callee, too (hangup "failed").
-                await _record_outcome(db, session, listing, outcome, logged_by=current["id"],
-                                      store=store, reason=reason)
-                recorded = True
+            # Over first, and the callee told (hangup "failed"); the card
+            # after, however the database fares.
+            session, outcome, _ = await _conclude(session, outcome, logged_by=current["id"],
+                                                  reason=reason)
+            recorded = True
+            try:
+                listing, store = await _thread_of(db, session)
+                if listing is not None or store is not None:
+                    await _write_call_card(db, session, listing, outcome,
+                                           logged_by=current["id"], store=store)
+            except Exception as exc:
+                _card_later(session, outcome, exc, logged_by=current["id"])
         if not recorded:
-            await call_state.update_state(room_id, CallState.failed)
+            await call_state.end_call(room_id, CallState.failed)
             # The callee, waiting in the room for a caller who isn't coming.
             await _hang_up_room(room_id, reason="failed")
     call_events.emit("CALL_SETUP_CANCELLED", room=room_id, role="caller", user=current["id"],
-                     call_state=session.state.value, reason=reason, outcome=outcome,
+                     call_state=found_state, reason=reason, outcome=outcome,
                      client_call_id=client_call_id, found=True)
     return {"status": "cancelled", "room_id": room_id, "outcome": outcome}
 
@@ -1688,35 +1780,54 @@ async def _incoming_view(db: AsyncSession, session, user_id: str) -> dict:
     }
 
 
-async def _settle_unanswered(session, *, by: str) -> None:
+# What _settle_unanswered did.
+_SETTLED_CANCELLED = "cancelled"  # this ended the call, unanswered
+_SETTLED_ANSWERED = "answered"    # an Accept landed first: not unanswered any more
+_SETTLED_OVER = "over"            # it was already over (or is gone)
+
+
+async def _settle_unanswered(session, *, by: str) -> str:
     """The caller hung up, or their app vanished, while the call was still
     ringing: record it now as "cancelled" - the card, and the missed call
     that takes the ring down on the callee's phones. It used to be marked
     ended and nothing else, so (unless the caller's app also reported it)
     the callee's phone rang on for its full 45 seconds and the call left no
-    trace; the no-answer watchdog skips calls that are already over."""
+    trace; the no-answer watchdog skips calls that are already over.
+
+    The call is over first, in one atomic step, before anything touches the
+    database. It used to be the other way round: the result was claimed,
+    the listing read, and only then the call ended - so on 2026-11-14, with
+    Supabase refusing new clients (EMAXCONNSESSION), a claimed result whose
+    database read failed left the call "ringing" with nobody able to end it
+    (log-result answered 409, the watchdog skipped it), and the callee's
+    phone rang, joined and answered a call its caller had left.
+
+    Returns _SETTLED_CANCELLED, _SETTLED_ANSWERED (an Accept crossed the
+    hang-up: the caller's leaving ends it as an answered call - the caller
+    of this does that) or _SETTLED_OVER.
+    """
     try:
-        if not await call_state.mark_result_logged(session.room_id):
-            return
-        async with AsyncSessionLocal() as db:
-            listing = None
-            store = None
-            if getattr(session, "store_id", None):
-                from api.models.store import Store
-                store = (await db.execute(
-                    select(Store).where(Store.id == session.store_id)
-                )).scalar_one_or_none()
-            else:
-                listing = (await db.execute(
-                    select(Listing).where(Listing.id == session.listing_id)
-                )).scalar_one_or_none()
-            if listing is None and store is None:
-                await call_state.update_state(session.room_id, CallState.missed)
-                return
-            await _record_outcome(
-                db, session, listing, "cancelled", logged_by=by, store=store)
+        moved = await call_state.transition(session.room_id, CallState.missed,
+                                            only_from=_UNANSWERED_STATES)
     except Exception as exc:
-        logger.warning("[calls] could not settle unanswered room=%s: %s", session.room_id, exc)
+        logger.warning("[calls] CALL_SETTLE_FAILED room=%s stage=state err=%s",
+                       session.room_id, type(exc).__name__)
+        return _SETTLED_OVER
+    if moved.session is None:
+        return _SETTLED_OVER
+    if not moved.applied:
+        return _SETTLED_OVER if call_state.is_terminal(moved.session.state) else _SETTLED_ANSWERED
+    await _discard_signals(session.room_id, moved.session)
+    try:
+        claimed = await call_state.mark_result_logged(session.room_id)
+    except Exception as exc:
+        logger.warning("[calls] CALL_SETTLE_FAILED room=%s stage=claim err=%s",
+                       session.room_id, type(exc).__name__)
+        return _SETTLED_CANCELLED
+    if claimed:
+        # The card and the missed-call push - the call is over already.
+        await _conclude_and_record(moved.session, "cancelled", logged_by=by)
+    return _SETTLED_CANCELLED
 
 
 async def _photo_of(db: Optional[AsyncSession], user_id: str) -> Optional[str]:
@@ -1789,27 +1900,29 @@ async def log_call_result(
     if not await call_state.mark_result_logged(payload.room_id):
         raise HTTPException(status_code=409, detail="This call's result has already been recorded")
 
-    listing = None
-    store = None
+    # The call is over before anything here touches the database: claimed
+    # and then failing on a pool with nothing to give, it used to stay
+    # "ringing" (or "accepted") with nobody able to end it (2026-11-14).
+    session, recorded, duration_secs = await _conclude(
+        session, payload.outcome, logged_by=current["id"],
+        duration_secs=payload.duration_secs, reason=payload.reason)
+    try:
+        listing, store = await _thread_of(db, session)
+    except Exception as exc:
+        _card_later(session, recorded, exc, logged_by=current["id"], duration_secs=duration_secs)
+        return {"status": "logged", "outcome": recorded, "card": "pending"}
     if getattr(session, "store_id", None):
-        from api.models.store import Store
-        store = (await db.execute(
-            select(Store).where(Store.id == session.store_id)
-        )).scalar_one_or_none()
         if not store:
             raise HTTPException(status_code=404, detail="Store not found")
-    else:
-        listing = (await db.execute(
-            select(Listing).where(Listing.id == session.listing_id)
-        )).scalar_one_or_none()
-        if not listing:
-            raise HTTPException(status_code=404, detail="Listing not found")
-
-    recorded = await _record_outcome(
-        db, session, listing, payload.outcome,
-        logged_by=current["id"], duration_secs=payload.duration_secs,
-        store=store, reason=payload.reason,
-    )
+    elif not listing:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    try:
+        await _write_call_card(db, session, listing, recorded, logged_by=current["id"],
+                               duration_secs=duration_secs, store=store)
+    except Exception as exc:
+        # The outcome stands (the call is over); its card follows.
+        _card_later(session, recorded, exc, logged_by=current["id"], duration_secs=duration_secs)
+        return {"status": "logged", "outcome": recorded, "card": "pending"}
     return {"status": "logged", "outcome": recorded}
 
 
@@ -1864,15 +1977,43 @@ async def _record_outcome(
     `logged_by` is the participant who reported it, or None when the
     no-answer watchdog decided it (ring_watchdog_tick).
     """
+    session, outcome, duration_secs = await _conclude(
+        session, outcome, logged_by=logged_by, duration_secs=duration_secs, reason=reason)
+    await _write_call_card(db, session, listing, outcome, logged_by=logged_by,
+                           duration_secs=duration_secs, store=store)
+    return outcome
+
+
+async def _conclude(session, outcome: str, *, logged_by: Optional[str],
+                    duration_secs: Optional[int] = None, reason: Optional[str] = None):
+    """The first half of _record_outcome, and the half that must not wait on
+    the database: the call is over - one atomic step on the session as it is
+    now (call_state.end_call), so a crossing Accept or hang-up can neither be
+    lost nor undo it - and whoever is still waiting on it is told.
+
+    Returns (session, outcome, duration_secs): the session as it ended, the
+    outcome as recorded (_normalized_outcome, from that session - not from
+    a copy read before an Accept landed), and the duration if it stands.
+    """
     reported = outcome
-    # Derived, not trusted - whichever of caller/callee ISN'T the thread's
-    # seller is the buyer for chat-thread-scoping purposes, regardless of
-    # which direction this particular call went (Section 13 symmetry).
-    seller_id   = store.owner_id if store is not None else listing.seller_id
-    buyer_id    = session.callee_id if session.caller_id == seller_id else session.caller_id
-    caller_role = "seller" if session.caller_id == seller_id else "buyer"
-    reporter    = logged_by or session.caller_id
-    reporter_is_seller = reporter == seller_id
+
+    def _state_for(latest) -> CallState:
+        return _OUTCOME_TO_STATE[_normalized_outcome(latest, reported, duration_secs)]
+
+    try:
+        # And the call is over, whatever state it had reached. `accepted`
+        # can't become `missed`, so an answered call that never connected
+        # used to stay `accepted` - "on a call" (_call_in_progress) - and
+        # calling the person back was refused with "You're already on a
+        # call". end_call moves it to `ended` where the outcome's own state
+        # can't be reached.
+        ended = await call_state.end_call(session.room_id, _state_for)
+        if ended.session is not None:
+            session = ended.session
+        if ended.applied:
+            await _discard_signals(session.room_id, session)
+    except Exception as exc:
+        logger.warning("[calls] CALL_END_FAILED room=%s err=%s", session.room_id, type(exc).__name__)
 
     # Answered is never "missed". A callee who pressed Accept on a closed
     # app's notification, and whose phone then couldn't join in time, had
@@ -1880,19 +2021,10 @@ async def _record_outcome(
     # caller's giving up - and got a "Missed call" push for the call they
     # had answered. Nor is answered-and-never-connected "completed" - see
     # _normalized_outcome.
-    outcome = _normalized_outcome(session, outcome, duration_secs)
+    outcome = _normalized_outcome(session, reported, duration_secs)
     if outcome != reported:
         # A duration came with a report that was not true of the call.
         duration_secs = None
-
-    if not call_state.is_terminal(session.state):
-        updated = await call_state.update_state(session.room_id, _OUTCOME_TO_STATE[outcome])
-        # And the call is over, whatever state it had reached. `accepted`
-        # can't become `missed`, so an answered call that never connected
-        # stayed `accepted` - "on a call" (_call_in_progress) - and calling
-        # the person back was refused with "You're already on a call".
-        if updated is not None and not call_state.is_terminal(updated.state):
-            await call_state.update_state(session.room_id, CallState.ended)
 
     hangup_reason = {"declined": "declined"}.get(outcome)
     if logged_by is None and outcome == "missed":
@@ -1912,6 +2044,58 @@ async def _record_outcome(
         other = session.callee_id if logged_by == session.caller_id else session.caller_id
         await _send_to_user(session.room_id, other, {"type": "hangup", "reason": "failed"})
 
+    # The one record of how the call ended, with the definitions the call
+    # history uses - so the logs and the history count the same calls -
+    # and how far it got (call_events.stage_of).
+    call_events.emit(
+        "CALL_ENDED", room=session.room_id,
+        role=role_of(session, logged_by) if logged_by else "server", user=logged_by,
+        level=logging.WARNING if outcome == "failed_to_connect" else logging.INFO,
+        call_state=session.state.value, reason=reason,
+        outcome=outcome, reported=reported if reported != outcome else None,
+        answered=session.answered, connected=session.ever_connected,
+        duration_s=duration_secs, call_type=session.call_type,
+        stage=call_events.stage_of(session),
+        caller_joined=getattr(session, "caller_joined", None),
+        callee_joined=getattr(session, "callee_joined", None),
+        offer_relayed=getattr(session, "offer_relayed", None),
+        answer_relayed=getattr(session, "answer_relayed", None),
+    )
+    return session, outcome, duration_secs
+
+
+async def _release(db: AsyncSession) -> None:
+    """Give the session's pooled connection back before a slow network call
+    (FCM): the reads since the last commit opened a transaction that would
+    otherwise hold it, idle, for the whole round trip. Supabase allows the
+    whole app 15 connections in session mode (2026-11-14)."""
+    try:
+        if db.in_transaction():
+            await db.commit()
+    except Exception:
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
+
+async def _write_call_card(db: AsyncSession, session, listing, outcome: str, *,
+                           logged_by: Optional[str], duration_secs: Optional[int] = None,
+                           store=None) -> None:
+    """The second half of _record_outcome: the call card in the thread and
+    the callee's notifications. Raises only when the card was not written -
+    so a caller may try again (_card_later) without writing it twice.
+    Holds the database connection for the writes only, never through a push.
+    """
+    # Derived, not trusted - whichever of caller/callee ISN'T the thread's
+    # seller is the buyer for chat-thread-scoping purposes, regardless of
+    # which direction this particular call went (Section 13 symmetry).
+    seller_id   = store.owner_id if store is not None else listing.seller_id
+    buyer_id    = session.callee_id if session.caller_id == seller_id else session.caller_id
+    caller_role = "seller" if session.caller_id == seller_id else "buyer"
+    reporter    = logged_by or session.caller_id
+    reporter_is_seller = reporter == seller_id
+
     # Taxonomy alignment (Section 33) - "missed" is what a client-side ring
     # timeout (VoipCallScreen's 45s timer / WebRtcService's own 30s
     # connect timeout) actually reports back as, so it's logged under the
@@ -1923,17 +2107,6 @@ async def _record_outcome(
                 _event.get(outcome, "CALL_RESULT"), session.room_id,
                 session.store_id or session.listing_id, buyer_id, outcome,
                 logged_by or "server")
-    # The one record of how the call ended, with the definitions the call
-    # history uses - so the logs and the history count the same calls.
-    call_events.emit(
-        "CALL_ENDED", room=session.room_id,
-        role=role_of(session, logged_by) if logged_by else "server", user=logged_by,
-        level=logging.WARNING if outcome == "failed_to_connect" else logging.INFO,
-        call_state=_OUTCOME_TO_STATE[outcome].value, reason=reason,
-        outcome=outcome, reported=reported if reported != outcome else None,
-        answered=session.answered, connected=session.ever_connected,
-        duration_s=duration_secs, call_type=session.call_type,
-    )
 
     call_msg = NegotiationMessage(
         listing_id=session.listing_id if store is None else None,
@@ -1950,7 +2123,14 @@ async def _record_outcome(
     )
     db.add(call_msg)
     await db.commit()
-    await db.refresh(call_msg)
+    # The card is in. Nothing below may fail the record - a second try
+    # would write the card twice - or keep this connection through a push.
+    try:
+        await db.refresh(call_msg)
+    except Exception as exc:
+        logger.warning("[calls] call card refresh failed room=%s: %s",
+                       session.room_id, type(exc).__name__)
+    await _release(db)
 
     # Broadcast so the other party sees it instantly if they're online.
     try:
@@ -1980,6 +2160,66 @@ async def _record_outcome(
     elif outcome == "declined":
         # Declined on one phone: the callee's other phones are still ringing.
         await _push_ring_over(session)
+
+
+async def _write_card_with_own_session(session, outcome: str, *, logged_by: Optional[str],
+                                       duration_secs: Optional[int] = None) -> None:
+    async with AsyncSessionLocal() as db:
+        listing, store = await _thread_of(db, session)
+        if listing is None and store is None:
+            logger.info("[calls] CALL_CARD_SKIPPED room=%s outcome=%s reason=thread_gone",
+                        session.room_id, outcome)
+            return
+        await _write_call_card(db, session, listing, outcome, logged_by=logged_by,
+                               duration_secs=duration_secs, store=store)
+
+
+# When a call card could not be written (the database had no connection to
+# give), it is tried again after these waits; the call itself is over already.
+CALL_CARD_RETRY_DELAYS_SECONDS = (2.0, 8.0, 30.0)
+
+
+def _card_later(session, outcome: str, exc: BaseException, *, logged_by: Optional[str],
+                duration_secs: Optional[int] = None) -> None:
+    """The call card could not be written now: say why, and try again in the
+    background - the result is claimed, so nobody else will write it."""
+    from api.database import is_db_unavailable
+    logger.warning("[calls] CALL_CARD_DEFERRED room=%s outcome=%s err=%s db_unavailable=%s",
+                   session.room_id, outcome, type(exc).__name__, is_db_unavailable(exc))
+
+    async def _retry() -> None:
+        last = exc
+        for delay in CALL_CARD_RETRY_DELAYS_SECONDS:
+            await asyncio.sleep(delay)
+            try:
+                await _write_card_with_own_session(session, outcome, logged_by=logged_by,
+                                                   duration_secs=duration_secs)
+                logger.info("[calls] CALL_CARD_WRITTEN room=%s outcome=%s late=true",
+                            session.room_id, outcome)
+                return
+            except Exception as again:
+                last = again
+        logger.error("[calls] CALL_CARD_LOST room=%s outcome=%s err=%s db_unavailable=%s",
+                     session.room_id, outcome, type(last).__name__, is_db_unavailable(last))
+
+    _spawn(_retry())
+
+
+async def _conclude_and_record(session, outcome: str, *, logged_by: Optional[str],
+                               duration_secs: Optional[int] = None,
+                               reason: Optional[str] = None) -> str:
+    """_record_outcome for the paths with no request of their own - the
+    caller's socket leaving, the no-answer watchdog: the call ends and
+    whoever waits is told first; the card follows in a short database
+    session of its own, and is tried again in the background when the
+    database can't take it now. The result must already be claimed."""
+    session, outcome, duration_secs = await _conclude(
+        session, outcome, logged_by=logged_by, duration_secs=duration_secs, reason=reason)
+    try:
+        await _write_card_with_own_session(session, outcome, logged_by=logged_by,
+                                           duration_secs=duration_secs)
+    except Exception as exc:
+        _card_later(session, outcome, exc, logged_by=logged_by, duration_secs=duration_secs)
     return outcome
 
 
@@ -2032,8 +2272,13 @@ async def _push_missed_call(
         f"store:{store.id}" if store is not None else session.listing_id)
     callee_role = "seller" if session.callee_id == seller_id else "buyer"
     who = (session.caller_name or "").strip() or "Someone"
+    # What the push needs from the database, then the connection back to the
+    # pool before Firebase's round trip.
+    photo = await _photo_of(db, session.caller_id) or ""
+    tokens = await push_devices.tokens_for(db, session.callee_id)
+    await _release(db)
     await push_devices.push_user(
-        session.callee_id, db=db,
+        session.callee_id, tokens=tokens,
         title=f"Missed {'video ' if is_video else ''}call from {who}",
         body=f"About: {thread_name}",
         data={
@@ -2048,7 +2293,7 @@ async def _push_missed_call(
             "myRole":    callee_role,
             "callType":  session.call_type,
             "callerName": who,
-            "callerPhoto": await _photo_of(db, session.caller_id) or "",
+            "callerPhoto": photo,
             "listingName": thread_name,
             # The call card in the chat: the app records it as announced,
             # so its inbox sweep does not announce the same missed call.
@@ -2335,6 +2580,14 @@ async def _signaling(
         # way. Close it best-effort and take over its slot, rather than
         # this new, legitimate connection getting rejected as "room full"
         # by a stale entry that hasn't been cleaned up yet.
+        #
+        # The slot is taken BEFORE the close is awaited: the close wakes the
+        # stale socket's handler, and its teardown decides whether it was
+        # the call's last socket by whether the slot is still its own.
+        # Found still its own - this handler not yet past the awaits below -
+        # it took the reconnect for everyone leaving and ended the call
+        # (cancelled it, while it rang) under the phone reconnecting to it.
+        room[uid] = websocket
         try:
             await stale.close(code=4009, reason="Replaced by a newer connection")
         except Exception:
@@ -2367,10 +2620,65 @@ async def _signaling(
     _connection_ids[id(websocket)] = connection_id
     if standby:
         _standby_sockets.add(id(websocket))
+
+    async def _refuse_joined(code: int, reason: str, state: Optional[CallState]) -> None:
+        """Out of the room again: the call stopped being one this socket may
+        be in between the checks above and now - a hang-up landed while it
+        was being let in (2026-11-14). Nothing of the call reaches it."""
+        _standby_sockets.discard(id(websocket))
+        _connection_ids.pop(id(websocket), None)
+        if room.get(uid) is websocket:
+            del room[uid]
+        if not room and _owns_room(room_id, room):
+            _rooms.pop(room_id, None)
+        try:
+            await signaling_hub.unregister(room_id, uid, connection_id)
+        except Exception:
+            pass
+        call_events.emit("WEBSOCKET_DISCONNECTED", room=room_id, role=role, user=uid,
+                         call_state=state.value if state else "gone", ws="refused",
+                         code=code, reason=reason, conn=connection_id, standby=standby,
+                         ringing=ringing)
+        try:
+            await websocket.close(code=code, reason="Call already ended" if code == 4004
+                                  else "This call is no longer ringing")
+        except Exception:
+            pass
+
     # Register distributed presence BEFORE any ready decision, and only
     # after the signaling subscription is live (ensure_subscribed inside).
     await signaling_hub.register(room_id, uid, connection_id, standby=standby, peer=peer_id)
-    await call_state.set_participant_connected(room_id, uid, True)
+    # The call as it is now that this socket is in its room - the write's
+    # own answer, not the read before the handshake.
+    latest = await call_state.set_participant_connected(room_id, uid, True, joined=not standby)
+    if latest is None or call_state.is_terminal(latest.state):
+        await _refuse_joined(4004, "call_over", latest.state if latest else None)
+        return
+    if standby and latest.state not in _UNANSWERED_STATES:
+        await _refuse_joined(4010, "answered", latest.state)
+        return
+    answered_here = False
+    if uid == session.callee_id and not standby:
+        # The callee's joining is its answer. Refused, not applied, when the
+        # call ended first: the caller hung up while this phone was opening
+        # the call.
+        answer = await call_state.mark_answered(room_id)
+        if not answer.accepted:
+            state = answer.session.state if answer.session else None
+            await _refuse_joined(4004, "call_over", state)
+            return
+        answered_here = answer.first
+        _cur = answer.session
+        # Never regress connected->accepted/connecting on a ghost/rejoin.
+        if _cur.state == CallState.connected:
+            logger.info("[calls] CALL_ACCEPTED room=%s user=%s conn=%s (already connected, no regression)", room_id, uid, connection_id)
+        else:
+            if _cur.state != CallState.accepted:
+                await call_state.update_state(room_id, CallState.accepted)
+            logger.info("[calls] CALL_ACCEPTED instance=%s room=%s user=%s conn=%s", INSTANCE_ID, room_id, uid, connection_id)
+            if answered_here:
+                call_events.emit("CALL_ACCEPTED", room=room_id, role=role, user=uid,
+                                 call_state="accepted", ws="open", via="join")
     # Server-authored: the phone knows at once that its socket is up end to
     # end. A callee alone in the room otherwise heard nothing until the
     # first heartbeat ping, 15 seconds on - its reconnect budget and its
@@ -2379,25 +2687,9 @@ async def _signaling(
         await websocket.send_json({"type": "joined", "room_id": room_id})
     except Exception:
         pass
-    # Replay signals buffered while this participant was absent.
-    for _env in await signaling_hub.drain_buffer(room_id, uid):
-        try:
-            await websocket.send_text(_env.get("raw") or "")
-            logger.info("[calls] SIGNAL_REPLAYED instance=%s room=%s user=%s event=%s", INSTANCE_ID, room_id, uid, _env.get("msg_type"))
-        except Exception:
-            pass
-    if uid == session.callee_id and not standby:
-        _cur = await call_state.get_session(room_id)
-        # Never regress connected->accepted/connecting on a ghost/rejoin.
-        if _cur is not None and _cur.state == CallState.connected:
-            logger.info("[calls] CALL_ACCEPTED room=%s user=%s conn=%s (already connected, no regression)", room_id, uid, connection_id)
-        else:
-            await call_state.mark_answered(room_id)
-            await call_state.update_state(room_id, CallState.accepted)
-            logger.info("[calls] CALL_ACCEPTED instance=%s room=%s user=%s conn=%s", INSTANCE_ID, room_id, uid, connection_id)
-            if _cur is None or not _cur.answered:
-                call_events.emit("CALL_ACCEPTED", room=room_id, role=role, user=uid,
-                                 call_state="accepted", ws="open", via="join")
+    # Replay signals buffered while this participant was absent - those
+    # still meant for this call (_replay_buffered).
+    await _replay_buffered(websocket, room_id, uid, role)
     try:
         _dist_peers = await signaling_hub.distributed_peers(room_id)
     except Exception:
@@ -2450,7 +2742,7 @@ async def _signaling(
                                            "peer": callee_entry.get("peer")})
             except Exception:
                 pass
-    elif session.state in (CallState.initiating, CallState.ringing):
+    elif answered_here:
         # Answered here: the callee's other phones stop ringing. Off the
         # join path - the call must not wait on FCM.
         _spawn(_push_ring_over(session))
@@ -2468,9 +2760,16 @@ async def _signaling(
             _cur2 = await call_state.get_session(room_id)
             if _cur2 is not None and _cur2.state == CallState.connected:
                 logger.info("[calls] ROOM_READY instance=%s room=%s user=%s conn=%s local=%d distributed=%d (already connected)", INSTANCE_ID, room_id, uid, connection_id, len(room), len(_ready_peers))
-            else:
-                await call_state.update_state(room_id, CallState.connecting)
+            elif _cur2 is not None and not call_state.is_terminal(_cur2.state):
+                _cur2 = await call_state.update_state(room_id, CallState.connecting)
                 logger.info("[calls] WEBRTC_CONNECTING instance=%s room=%s user=%s conn=%s local=%d distributed=%d", INSTANCE_ID, room_id, uid, connection_id, len(room), len(_ready_peers))
+            if _cur2 is None or call_state.is_terminal(_cur2.state):
+                # Over while this socket was joining: no `ready` - the
+                # phones would offer and answer into a call nobody is on.
+                logger.info("[calls] READY_WITHHELD instance=%s room=%s user=%s conn=%s state=%s", INSTANCE_ID, room_id, uid, connection_id, _cur2.state.value if _cur2 else "gone")
+                await _refuse_joined(4004, "call_over_before_ready",
+                                     _cur2.state if _cur2 else None)
+                return
             if rejoining_live_call:
                 await _broadcast_room(room_id, {"type": "peer_state", "state": "reconnected"}, exclude_user=uid)
                 # also deliver locally-excluded handling: broadcast excludes sender remotely, local loop in helper sends to all; ensure joiner not spammed is fine
@@ -2487,6 +2786,8 @@ async def _signaling(
     # How this socket ended, for its WEBSOCKET_DISCONNECTED event.
     ending: dict = {"code": None, "reason": None}
     counts: dict = {"diag": 0, "ice": 0, "offer": 0, "answer": 0}
+    # The call milestones this socket has recorded (call_state.note).
+    noted: set = set()
     joined_at = asyncio.get_running_loop().time()
 
     # ── Heartbeat ─────────────────────────────────────────────────────────────
@@ -2678,7 +2979,9 @@ async def _signaling(
             if _local_delivered == 0:
                 try:
                     envelope = await signaling_hub.publish_signal(room_id, uid, connection_id, raw, str(msg_type), _recipient)
-                    published = "buffered" if (envelope or {}).get("buffered") else "published"
+                    envelope = envelope or {}
+                    published = ("dropped" if envelope.get("dropped")
+                                 else "buffered" if envelope.get("buffered") else "published")
                 except Exception as exc:
                     published = "failed"
                     logger.warning("[calls] SIGNAL_PUBLISH_FAILED instance=%s room=%s event=%s err=%s", INSTANCE_ID, room_id, msg_type, type(exc).__name__)
@@ -2694,6 +2997,11 @@ async def _signaling(
                     restart=bool(msg.get("restart")), offer_id=msg.get("offer_id"),
                     standby=standby,
                 )
+                milestone = "offer_relayed" if msg_type == "offer" else "answer_relayed"
+                if milestone not in noted and (_local_delivered or published == "published"):
+                    # Once per socket: the record of how far the call got.
+                    noted.add(milestone)
+                    await call_state.note(room_id, **{milestone: True})
 
             if msg_type == "hangup":
                 # An explicit hangup is final. Mark the session terminal
@@ -2707,14 +3015,20 @@ async def _signaling(
                 # "failed": the phone gave up on a connection that never came
                 # (or could not recover) - not someone choosing to end it.
                 hangup_reason = call_events.clean(msg.get("reason")) or "hangup"
+                settled = None
                 if (current and current.state in _UNANSWERED_STATES
                         and uid == current.caller_id):
                     # Hung up before anyone answered: the callee's phones
                     # are still ringing and must hear about it.
-                    await _settle_unanswered(current, by=uid)
-                elif current and not call_state.is_terminal(current.state):
-                    await call_state.update_state(
+                    settled = await _settle_unanswered(current, by=uid)
+                if current is not None and settled in (None, _SETTLED_ANSWERED):
+                    # Answered - perhaps a moment ago, the Accept crossing
+                    # this hang-up: it ends as an answered call. One atomic
+                    # step, a no-op on a call that is over.
+                    ended = await call_state.end_call(
                         room_id, CallState.failed if hangup_reason == "failed" else CallState.ended)
+                    if ended.applied:
+                        await _discard_signals(room_id, ended.session)
                 call_events.emit(
                     "CALL_HANGUP", room=room_id, role=role, user=uid,
                     level=logging.WARNING if hangup_reason == "failed" else logging.INFO,
@@ -2889,13 +3203,20 @@ async def _nobody_left(room_id: str, uid: str) -> None:
     phone of the callee's ringing in the room is told at once, rather
     than ringing on until the missed-call push reaches it."""
     current_session = await call_state.get_session(room_id)
-    if (current_session and current_session.state in _UNANSWERED_STATES
-            and uid == current_session.caller_id):
+    if current_session is None or call_state.is_terminal(current_session.state):
+        return
+    if current_session.state in _UNANSWERED_STATES and uid == current_session.caller_id:
         # The caller's app went away while the call still rang.
-        await _settle_unanswered(current_session, by=uid)
-        await _hang_up_room(room_id, reason="cancelled")
-    elif current_session and not call_state.is_terminal(current_session.state):
-        await call_state.update_state(room_id, CallState.ended)
+        settled = await _settle_unanswered(current_session, by=uid)
+        if settled == _SETTLED_CANCELLED:
+            await _hang_up_room(room_id, reason="cancelled")
+            return
+        if settled == _SETTLED_OVER:
+            return
+        # Answered as the caller left: over all the same, as an answered call.
+    ended = await call_state.end_call(room_id, CallState.ended)
+    if ended.applied:
+        await _discard_signals(room_id, ended.session)
 
 
 async def _leave_accepted(room_id: str) -> None:
@@ -2920,15 +3241,22 @@ async def _standby_accepted(room_id: str, uid: str, connection_id: str,
     current = await call_state.get_session(room_id)
     if current is None or call_state.is_terminal(current.state):
         return False
-    await signaling_hub.register(room_id, uid, connection_id, standby=False, peer=peer)
     if current.state != CallState.connected:
-        await call_state.mark_answered(room_id)
+        # Decided by the write: an Accept pressed as the caller hung up is
+        # refused, never turned into a call (2026-11-14).
+        answer = await call_state.mark_answered(room_id)
+        if not answer.accepted:
+            logger.info("[calls] CALL_ANSWER_REJECTED instance=%s room=%s user=%s conn=%s via=ringing_socket state=%s",
+                        INSTANCE_ID, room_id, uid, connection_id,
+                        answer.session.state.value if answer.session else "gone")
+            return False
         logger.info("[calls] CALL_ACCEPTED instance=%s room=%s user=%s conn=%s (on the socket it rang on)", INSTANCE_ID, room_id, uid, connection_id)
-        if not current.answered:
+        if answer.first:
             call_events.emit("CALL_ACCEPTED", room=room_id, role="callee", user=uid,
                              call_state="accepted", ws="open", via="ringing_socket")
-        if current.state in _UNANSWERED_STATES:
             _spawn(_push_ring_over(current))
+    await call_state.note(room_id, callee_joined=True)
+    await signaling_hub.register(room_id, uid, connection_id, standby=False, peer=peer)
     try:
         joined = _joined(await signaling_hub.distributed_peers(room_id), current)
     except Exception:
@@ -2936,7 +3264,10 @@ async def _standby_accepted(room_id: str, uid: str, connection_id: str,
     if len(joined) == 2:
         latest = await call_state.get_session(room_id)
         if latest is not None and latest.state != CallState.connected:
-            await call_state.update_state(room_id, CallState.connecting)
+            latest = await call_state.update_state(room_id, CallState.connecting)
+        if latest is None or call_state.is_terminal(latest.state):
+            logger.info("[calls] READY_WITHHELD instance=%s room=%s user=%s conn=%s state=%s", INSTANCE_ID, room_id, uid, connection_id, latest.state.value if latest else "gone")
+            return False
         logger.info("[calls] WEBRTC_CONNECTING instance=%s room=%s user=%s conn=%s (negotiated while it rang)", INSTANCE_ID, room_id, uid, connection_id)
         await _broadcast_room(room_id, _ready_message(room_id, peer))
     return True
@@ -2979,24 +3310,19 @@ async def ring_watchdog_tick(now: Optional[float] = None) -> int:
             # its TTL still ringing - unanswered all the same.
             if session.state not in (CallState.initiating, CallState.ringing, CallState.expired):
                 continue
+            if session.state != CallState.expired:
+                # Missed now, in one step - and only if it still rings: an
+                # Accept or a hang-up landing this instant is never
+                # overwritten, and settles the call its own way.
+                moved = await call_state.transition(room_id, CallState.missed,
+                                                    only_from=_UNANSWERED_STATES)
+                if not moved.applied:
+                    continue
+                session = moved.session
+                await _discard_signals(room_id, session)
             if not await call_state.mark_result_logged(room_id):
                 continue
-            async with AsyncSessionLocal() as db:
-                listing = None
-                store = None
-                if getattr(session, "store_id", None):
-                    from api.models.store import Store
-                    store = (await db.execute(
-                        select(Store).where(Store.id == session.store_id)
-                    )).scalar_one_or_none()
-                else:
-                    listing = (await db.execute(
-                        select(Listing).where(Listing.id == session.listing_id)
-                    )).scalar_one_or_none()
-                if listing is None and store is None:
-                    continue
-                await _record_outcome(
-                    db, session, listing, "missed", logged_by=None, store=store)
+            await _conclude_and_record(session, "missed", logged_by=None)
             settled += 1
         except Exception as exc:
             logger.warning("[calls] ring watchdog failed room=%s: %s", room_id, exc)

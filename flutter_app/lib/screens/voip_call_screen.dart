@@ -666,8 +666,10 @@ class _CallSessionState extends State<_CallSession>
     // WebRtcService.start() has no internal guard of its own against being
     // invoked twice, so this check is what actually prevents a rapid
     // double-tap from requesting the camera/mic and opening the
-    // WebSocket/peer connection twice for the same call.
-    if (_accepted || _endingCall || !mounted) return;
+    // WebSocket/peer connection twice for the same call. Nor is a call that
+    // is over answered: the notification's Accept can land in the two
+    // seconds the screen stays up after the caller hung up (2026-11-14).
+    if (_accepted || _endingCall || _isOver || !mounted) return;
     final roomId = _svc.roomId;
     RingtoneService.instance.stopFor(roomId);
     NotificationService.instance.takeDownCallNotification(roomId);

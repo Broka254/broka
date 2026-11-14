@@ -1904,9 +1904,14 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   /// screen last fetched. Against a server without per-message receipts,
   /// the thread's delivered receipt as before.
   Future<void> _acknowledgeInbound() async {
+    // Only what the server tracks for delivery: the other person's own
+    // messages. A call card is not one - the call sends its own missed-call
+    // push - and acknowledging it only filled the server's log with
+    // "result=unknown" (2026-11-14).
     final pending = [
       for (final m in _messages)
-        if (!m.isPending && !m.isBroker && m.role != _role &&
+        if (!m.isPending && !m.isBroker && m.msgType != 'call' &&
+            (m.role == 'buyer' || m.role == 'seller') && m.role != _role &&
             !_acknowledgedIds.contains(m.id))
           m.id,
     ];

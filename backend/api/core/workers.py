@@ -147,17 +147,119 @@ BUYER_FOLLOWUP_MINUTES = 45
 # a set is sufficient for local development and the test suite.
 _local_scheduler_leases: set[str] = set()
 
+# With Redis, a scheduler pass holds its lease there (2026-11-14), not on a
+# database connection: three loops each pinned one of the pool's connections
+# for the whole of every pass on the replica that led - with the pool cut to
+# 5 so the app stays inside Supabase's 15 session-mode clients, that was
+# most of a replica's database. The lease lapses this long after a crashed
+# process stopped renewing it; a live pass renews it every third of that.
+SCHEDULER_LEASE_TTL_SECONDS = 60
+_SCHEDULER_LEASE_RENEW_SECONDS = SCHEDULER_LEASE_TTL_SECONDS / 3
+# Only the holder's token releases or renews a lease - a pass that outlived
+# its lease (the process stalled) must not drop another replica's.
+_LEASE_RELEASE_SCRIPT = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
+_LEASE_RENEW_SCRIPT = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('PEXPIRE', KEYS[1], ARGV[2])
+end
+return 0
+"""
+_lease_redis = {"client": None, "loop": None}
+
+
+async def _lease_client():
+    loop = asyncio.get_running_loop()
+    if _lease_redis["client"] is None or _lease_redis["loop"] is not loop:
+        import redis.asyncio as aioredis
+        from api.core.config import settings
+        _lease_redis["client"] = aioredis.from_url(
+            settings.redis_url, encoding="utf-8", decode_responses=True,
+            socket_connect_timeout=2, socket_timeout=5,
+        )
+        _lease_redis["loop"] = loop
+    return _lease_redis["client"]
+
+
+async def _redis_lease(name: str):
+    """(client, token) when this replica now holds `name`'s lease, False when
+    another does, None when there is no Redis to decide it (not configured,
+    or unreachable - the database lease decides instead)."""
+    from api.core.config import settings
+    if not settings.redis_enabled:
+        return None
+    import secrets
+    try:
+        client = await _lease_client()
+        token = secrets.token_hex(12)
+        won = await client.set(f"{name}:lease", token, nx=True,
+                               px=int(SCHEDULER_LEASE_TTL_SECONDS * 1000))
+    except Exception as exc:
+        logger.warning("[scheduler] Redis lease unavailable name=%s err=%s - using the database lease",
+                       name, type(exc).__name__)
+        return None
+    return (client, token) if won else False
+
+
+async def _keep_redis_lease(client, name: str, token: str, done: asyncio.Event) -> None:
+    # wait_for, not sleep: a pass's tests replace asyncio.sleep.
+    while True:
+        try:
+            await asyncio.wait_for(done.wait(), timeout=_SCHEDULER_LEASE_RENEW_SECONDS)
+            return
+        except asyncio.TimeoutError:
+            pass
+        try:
+            kept = await client.eval(_LEASE_RENEW_SCRIPT, 1, f"{name}:lease", token,
+                                     int(SCHEDULER_LEASE_TTL_SECONDS * 1000))
+            if not kept:
+                logger.warning("[scheduler] lease lost name=%s - the pass carries on", name)
+                return
+        except Exception as exc:
+            logger.warning("[scheduler] lease renewal failed name=%s err=%s", name, type(exc).__name__)
+
 
 @asynccontextmanager
 async def scheduler_lease(name: str):
     """Run one scheduler pass across replicas, or skip this pass.
 
-    Session-level PostgreSQL advisory locks are released automatically when
-    the connection closes, including after a crashed process. Holding the
-    lock on a dedicated connection means every task in the pass runs under
-    one lease without pinning a transaction open across network calls.
+    With Redis: a lease key there (SET NX, renewed while the pass runs,
+    released by its holder only) - no database connection held for it.
+    Without Redis, or when it can't be reached: session-level PostgreSQL
+    advisory locks, released automatically when the connection closes,
+    including after a crashed process. Holding the lock on a dedicated
+    connection means every task in the pass runs under one lease without
+    pinning a transaction open across network calls.
     """
     from api import database
+
+    held = await _redis_lease(name)
+    if held is False:
+        yield False
+        return
+    if held is not None:
+        client, token = held
+        done = asyncio.Event()
+        keeper = asyncio.create_task(_keep_redis_lease(client, name, token, done))
+        try:
+            yield True
+        finally:
+            done.set()
+            try:
+                await keeper
+            except Exception:
+                pass
+            try:
+                await client.eval(_LEASE_RELEASE_SCRIPT, 1, f"{name}:lease", token)
+            except Exception as exc:
+                # It lapses by itself in SCHEDULER_LEASE_TTL_SECONDS.
+                logger.warning("[scheduler] lease release failed name=%s err=%s",
+                               name, type(exc).__name__)
+        return
 
     if database.engine.dialect.name != "postgresql":
         if name in _local_scheduler_leases:
@@ -602,16 +704,38 @@ class WorkerSettings:
 
 # ── Task definitions ──────────────────────────────────────────────────────────
 
-async def task_recompute_trust_score(ctx: dict, user_id: str, db_url: str) -> None:
-    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+def _task_engine(db_url: str):
+    """(engine, Session) for a task handed a database URL, as ARQ hands them.
+
+    This process's own database is the shared pool: a fresh engine per call
+    kept connections outside it - SQLAlchemy's default 5 + 10 - against
+    Supabase's 15 session-mode clients, and the M-Pesa reconciliation built
+    one in the API process on every five-minute sweep. Any other URL gets an
+    engine of its own without a pool (NullPool): nothing left open once its
+    session closes, even when the task fails before disposing of it.
+    """
+    from api import database
+    if db_url == database.DATABASE_URL:
+        return None, database.AsyncSessionLocal
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from sqlalchemy.orm import sessionmaker
-    engine  = create_async_engine(db_url, echo=False)
-    Session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    from sqlalchemy.pool import NullPool
+    engine = create_async_engine(db_url, echo=False, poolclass=NullPool)
+    return engine, sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+async def _dispose_task_engine(engine) -> None:
+    if engine is not None:
+        await engine.dispose()
+
+
+async def task_recompute_trust_score(ctx: dict, user_id: str, db_url: str) -> None:
+    engine, Session = _task_engine(db_url)
     async with Session() as session:
         from api.core.fraud import compute_trust_score
         await compute_trust_score(user_id, session)
         await session.commit()
-    await engine.dispose()
+    await _dispose_task_engine(engine)
 
 
 async def _service_communications_loop(interval_seconds: int) -> None:
@@ -665,12 +789,9 @@ async def task_send_fcm_notification(ctx: dict, fcm_token: str, title: str, body
 
 
 async def task_expire_featured_listings(ctx: dict, db_url: str) -> None:
-    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-    from sqlalchemy.orm import sessionmaker
     from sqlalchemy import select
     from datetime import datetime
-    engine  = create_async_engine(db_url, echo=False)
-    Session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    engine, Session = _task_engine(db_url)
     async with Session() as session:
         from api.database import Listing
         now    = datetime.utcnow()
@@ -682,7 +803,7 @@ async def task_expire_featured_listings(ctx: dict, db_url: str) -> None:
             listing.is_featured = False
         if expired:
             await session.commit()
-    await engine.dispose()
+    await _dispose_task_engine(engine)
 
 
 async def task_check_call_expiry() -> None:
@@ -2161,12 +2282,9 @@ async def task_ai_summary(ctx: dict, deal_id: str, buyer_claim: str, seller_clai
 
 
 async def task_fraud_sweep(ctx: dict, db_url: str) -> None:
-    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-    from sqlalchemy.orm import sessionmaker
     from sqlalchemy import select
     from datetime import datetime, timedelta
-    engine  = create_async_engine(db_url, echo=False)
-    Session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    engine, Session = _task_engine(db_url)
     async with Session() as session:
         from api.database import FraudEvent
         cutoff = datetime.utcnow() - timedelta(hours=24)
@@ -2180,7 +2298,7 @@ async def task_fraud_sweep(ctx: dict, db_url: str) -> None:
         if user_ids:
             await session.commit()
             logger.info("[worker:fraud_sweep] rescored %d users", len(user_ids))
-    await engine.dispose()
+    await _dispose_task_engine(engine)
 
 
 async def task_reconcile_mpesa(ctx: dict, db_url: str) -> None:
@@ -2193,14 +2311,11 @@ async def task_reconcile_mpesa(ctx: dict, db_url: str) -> None:
     terminal states, an ambiguous answer stays pending, and a truly
     unreferenced initiation raises a reconciliation alert for a person.
     """
-    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-    from sqlalchemy.orm import sessionmaker
     from sqlalchemy import select
     from datetime import datetime, timedelta
     from api.core import mpesa_stk
 
-    engine  = create_async_engine(db_url, echo=False)
-    Session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    engine, Session = _task_engine(db_url)
     async with Session() as session:
         from api.database import MpesaTransaction, MpesaStatus
         from api.models.payment_callback import PaymentCallback, PaymentCallbackStatus
@@ -2285,7 +2400,7 @@ async def task_reconcile_mpesa(ctx: dict, db_url: str) -> None:
 
         # Explicitly release the read transaction before the engine closes.
         await session.commit()
-    await engine.dispose()
+    await _dispose_task_engine(engine)
 
 
 # ── Auction lifecycle sweeps ──────────────────────────────────────────────────

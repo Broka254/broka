@@ -238,7 +238,9 @@ async def test_answering_gives_the_callee_the_whole_join_window():
                                     listing_id="l", call_type="audio", caller_name="A",
                                     ttl_seconds=10)
     await call_state.update_state(room, CallState.ringing)
-    session = await call_state.mark_answered(room)
+    answer = await call_state.mark_answered(room)
+    assert answer.accepted and answer.first
+    session = answer.session
     assert session.state == CallState.accepted and session.answered
     assert session.expires_at >= time.time() + call_state.ESTABLISHMENT_SESSION_TTL_SECONDS - 2
 

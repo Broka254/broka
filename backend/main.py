@@ -136,6 +136,12 @@ async def lifespan(app: FastAPI):
     validate_secret_key()   # fail fast if SECRET_KEY == default in production
     validate_startup()      # SQLite-in-prod guard + warn about missing Redis/Sentry
     await init_db()
+    try:
+        # What this process may hold of the database, in the log once.
+        from api.database import log_pool_config
+        log_pool_config()
+    except Exception:
+        pass
     await worker.start()
     _init_event_counter()   # Prometheus event counter (no-op if prom not installed)
     from api.core.workers import start_periodic_sweep, stop_periodic_sweep
@@ -227,10 +233,59 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
+# ── The database could not be reached ────────────────────────────────────────
+
+def _db_unavailable_response(request: Request, exc: Exception):
+    """503 for a request the database could not take - every pooled
+    connection busy past DB_POOL_TIMEOUT_SECONDS, or Supabase's pooler
+    refusing new clients (EMAXCONNSESSION) - instead of a 500 with a
+    traceback. Nothing is lost by it: a message is only reported sent once
+    it is committed, and a call's state lives in Redis (api/core/call_state)."""
+    from api.database import db_unavailable_kind, pool_status
+    kind = db_unavailable_kind(exc)
+    if kind is None:
+        return None
+    from api.core.observability import request_id_var, safe_log_path
+    try:
+        status = pool_status()
+    except Exception:
+        status = {}
+    logging.getLogger("api.database").warning(
+        "[db] DB_UNAVAILABLE kind=%s method=%s path=%s checked_out=%s max=%s rid=%s err=%s",
+        kind, request.method, safe_log_path(request.url.path), status.get("checked_out", "-"),
+        status.get("max_connections", "-"), request_id_var.get("-"), type(exc).__name__,
+    )
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "The service is busy right now. Please try again in a moment.",
+                 "code": "DB_UNAVAILABLE"},
+        headers={"Retry-After": "2"},
+    )
+
+
+from sqlalchemy.exc import DBAPIError as _DBAPIError, TimeoutError as _PoolTimeoutError  # noqa: E402
+
+
+@app.exception_handler(_PoolTimeoutError)
+@app.exception_handler(_DBAPIError)
+async def db_unavailable_handler(request: Request, exc: Exception):
+    response = _db_unavailable_response(request, exc)
+    if response is None:
+        # An ordinary database error (a constraint, a bug): the generic
+        # handler below, as before.
+        raise exc
+    return response
+
+
 # ── Global exception handler ──────────────────────────────────────────────────
 
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
+    # A pool timeout or a refused connection wrapped in something else (an
+    # ExceptionGroup from a task group, a re-raise) is still that.
+    response = _db_unavailable_response(request, exc)
+    if response is not None:
+        return response
     logging.getLogger(__name__).error("Unhandled exception: %s", exc, exc_info=True)
     return JSONResponse(
         status_code=500,
@@ -616,8 +671,19 @@ async def ready():
             # "rust" when the broka_native extension is in use, else "python"
             # (api/core/native.py) - how to confirm a deploy carries it.
             "native":           native.BACKEND,
+            # What this process may hold of the database and holds now -
+            # counts only (api/database.py pool_status).
+            "db_pool":          _pool_numbers(),
         },
     )
+
+
+def _pool_numbers() -> dict:
+    try:
+        from api.database import pool_status
+        return pool_status()
+    except Exception:
+        return {}
 
 
 @app.get("/live", tags=["Health"])
