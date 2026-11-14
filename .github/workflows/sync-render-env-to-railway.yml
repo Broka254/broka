@@ -177,7 +177,7 @@ jobs:
                       "serviceId": service_id,
                       "variables": variables,
                       "skipDeploys": True,
-                      "replace": False,
+                      "replace": True,
                   }},
               }
               headers = {
@@ -196,8 +196,8 @@ jobs:
           print("Mode: " + ("APPLY" if apply else "PREVIEW ONLY"))
           print("Destination: Broka-Development / development")
           print("Only service-level Render variables are available from this endpoint; linked Render Environment Groups are not included.")
-          print("RENDER_* and PORT are excluded. Existing Railway variables are merged, not removed.")
-          print("Automatic Railway deployments are disabled for this sync.")
+          print("RENDER_* and PORT are excluded. Railway user-defined variables will be replaced with exactly the Render service-level key set.")
+          print("Automatic Railway deployments are disabled for this sync. Railway-generated RAILWAY_* system variables are platform-managed.")
 
           verify_railway_workspace_access()
           print("Railway token can access the Broka Developers workspace.")
@@ -207,10 +207,14 @@ jobs:
           for service in SERVICES:
               try:
                   variables = read_render(service["render_id"])
-                  variables.update(service["overrides"])
-                  if service["label"] == "API":
+                  # Development-specific values may override a key only when
+                  # that key already exists on the corresponding Render service.
+                  for key, value in service["overrides"].items():
+                      if key in variables:
+                          variables[key] = value
+                  if service["label"] == "API" and "ALLOWED_ORIGINS" in variables:
                       admin_origin = "https://broka-admin-development.up.railway.app"
-                      origins = [item.strip() for item in variables.get("ALLOWED_ORIGINS", "").split(",") if item.strip()]
+                      origins = [item.strip() for item in variables["ALLOWED_ORIGINS"].split(",") if item.strip()]
                       origins = [
                           admin_origin if item in {
                               "https://broka-admin-web.onrender.com",
