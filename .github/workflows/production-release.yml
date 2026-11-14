@@ -76,16 +76,16 @@ jobs:
           echo "Workflow/documentation-only change; production migration and Render deploy are skipped."
           echo "should_release=false" >> "$GITHUB_OUTPUT"
 
-      - name:
-        if: steps.release_scope.outputs.should_release == 'true' Set up Python 3.11
+      - name: Set up Python 3.11
+        if: steps.release_scope.outputs.should_release == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: backend/requirements.txt
 
-      - name:
-        if: steps.release_scope.outputs.should_release == 'true' Reject stale CI runs
+      - name: Reject stale CI runs
+        if: steps.release_scope.outputs.should_release == 'true'
         id: guard
         shell: bash
         run: |
@@ -109,8 +109,8 @@ jobs:
           echo "The tested application commit is current: $tested_sha"
           echo "RELEASE_COMMIT=$tested_sha" >> "$GITHUB_ENV"
 
-      - name:
-        if: steps.release_scope.outputs.should_release == 'true' Validate production secrets and Render target
+      - name: Validate production secrets and Render target
+        if: steps.release_scope.outputs.should_release == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -137,15 +137,15 @@ jobs:
           print("Supabase target validated.")
           PY
 
-      - name:
-        if: steps.release_scope.outputs.should_release == 'true' Install backend dependencies
+      - name: Install backend dependencies
+        if: steps.release_scope.outputs.should_release == 'true'
         working-directory: backend
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name:
-        if: steps.release_scope.outputs.should_release == 'true' Apply the schema required by this exact commit
+      - name: Apply the schema required by this exact commit
+        if: steps.release_scope.outputs.should_release == 'true'
         working-directory: backend
         run: |
           python -u -m api.migrate
@@ -166,8 +166,8 @@ jobs:
           asyncio.run(main())
           PY
 
-      - name:
-        if: steps.release_scope.outputs.should_release == 'true' Trigger Render deployment for the tested commit
+      - name: Trigger Render deployment for the tested commit
+        if: steps.release_scope.outputs.should_release == 'true'
         id: render
         shell: bash
         run: |
@@ -187,8 +187,8 @@ jobs:
           echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
           echo "Render deployment queued: $deploy_id"
 
-      - name:
-        if: steps.release_scope.outputs.should_release == 'true' Wait for Render to become live
+      - name: Wait for Render to become live
+        if: steps.release_scope.outputs.should_release == 'true'
         env:
           DEPLOY_ID: ${{ steps.render.outputs.deploy_id }}
         shell: bash
