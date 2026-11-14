@@ -2627,16 +2627,20 @@ async def _init_db_impl():
 async def init_db():
     """Prepare the database for this process.
 
-    Tests and local development apply migrations in-process so each isolated
-    test database is reproducible. A production deployment must run
-    ``python -m api.migrate`` as an explicit release step; API replicas then
-    only validate the resulting version. That keeps two processes from both
-    trying to repair the same schema during a rolling deploy.
+    Local development and isolated tests may initialize their own database
+    in-process. Every Railway environment (including a service labelled
+    "development") shares a remote database across deployments and must not
+    run schema DDL from the API startup path. Railway runs the explicit
+    ``python -m api.migrate`` release command before starting the new app;
+    each API process then performs only the read-only schema validation.
+    AUTO_MIGRATE_SCHEMA remains an explicit escape hatch for isolated test
+    or recovery environments, never a default for a Railway API process.
     """
     from api.core.config import settings
 
-    auto_migrate = os.getenv("AUTO_MIGRATE_SCHEMA", "").lower() in ("1", "true", "yes")
-    if settings.is_production and not auto_migrate:
+    auto_migrate = os.getenv("AUTO_MIGRATE_SCHEMA", "").strip().lower() in ("1", "true", "yes")
+    running_on_railway = bool(os.getenv("RAILWAY_ENVIRONMENT", "").strip())
+    if (settings.is_production or running_on_railway) and not auto_migrate:
         await require_current_schema()
         return
 
