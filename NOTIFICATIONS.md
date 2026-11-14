@@ -812,7 +812,9 @@ is still delivered by the sync.
   goes back to the sweep's own receipts and asks again 10 minutes later.
 - **A chat open but not looked at** (the app behind the home screen)
   acknowledges the other side's messages by id (`source=chat`). It used to
-  post "delivered up to now".
+  post "delivered up to now". Since 2026-11-14 it leaves out call cards:
+  they are not tracked for delivery, and each came back as
+  `result=unknown`.
 - **Connectivity events.** `ConnectivityMonitor` gets them from
   `ConnectivityBridge.kt` (ConnectivityManager's default-network callback,
   `ACCESS_NETWORK_STATE`). It is a plain channel because connectivity_plus
@@ -840,7 +842,9 @@ failures add `error`.
 | `MESSAGE_PUSH_SKIPPED` | Nothing left to announce (`reason=NOTHING_UNREAD`): read already. |
 | `OFFLINE_SYNC_STARTED` | A phone began a sync: `trigger`, `attempt`, `sync_id`. |
 | `MESSAGE_SYNCED_TO_CLIENT` | The sync handed it out (`page`). Not delivery. |
-| `MESSAGE_DELIVERY_ACK_RECEIVED` | The app acknowledged it: `source=sync\|chat\|push_receipt`, `result=delivered\|already_delivered\|already_read\|unknown`. |
+| `MESSAGE_DELIVERY_ACK_RECEIVED` | The app acknowledged it: `source=sync\|chat\|push_receipt`, `result=delivered\|already_delivered\|already_read`. |
+| `MESSAGE_DELIVERY_ACK_UNTRACKED` | One line per acknowledgement, for the ids it named that have no delivery row of the acknowledger's: `count`, and how many of each `call_card`, `own_message`, `zeno`, `untracked` (written before tracking, pruned, or its tracking failed), `not_found`, `not_recipient`. Nothing is written for them: an untracked id is never made `DELIVERED`. |
+| `MESSAGE_DELIVERY_ACK_REJECTED` | WARNING, one per id: `reason=not_found` (no such message) or `reason=not_recipient` (a conversation the acknowledger is not part of). |
 | `MESSAGE_DELIVERED` | Now `DELIVERED`: `delivered_via`, `since_saved_ms`. A message read before any receipt logs this with `delivered_via=read` just before `MESSAGE_READ`. |
 | `MESSAGE_READ` | Now `READ`: `source=chat_open\|zeno_room\|notification_mark_read\|notification_reply`. |
 | `OFFLINE_SYNC_COMPLETED` | The last page was acknowledged (`final=true`), or there was nothing to send. |
@@ -860,6 +864,12 @@ MESSAGE_DELIVERY_ACK_RECEIVED message_id=33e1… … source=sync result=delivere
 MESSAGE_DELIVERED message_id=33e1… … delivery_status=DELIVERED delivered_via=sync since_saved_ms=57
 OFFLINE_SYNC_COMPLETED recipient_id=7e4e… acknowledged=1 delivered=1 already_delivered=0 unknown=0
 ```
+
+Until 2026-11-14 every acknowledged id without a row was its own
+`MESSAGE_DELIVERY_ACK_RECEIVED result=unknown` line, and Railway's log
+filled with them from open chats acknowledging call cards. They are now
+counted on one `MESSAGE_DELIVERY_ACK_UNTRACKED` line. Only
+`MESSAGE_DELIVERY_ACK_REJECTED` points at a fault.
 
 To follow one message, search for `message_id=<id>`; for one phone's
 syncs, `recipient_id=<id>` with `OFFLINE_SYNC_`. A message whose last line

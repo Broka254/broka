@@ -1277,3 +1277,203 @@ pairing; Accept from the notification with the app in the background and
 closed; airplane mode for 5 s during "Connecting…"; a network change mid-call;
 a call longer than five minutes that loses signalling (the token renewal);
 and in Render, that one room's `[call-event]` lines tell each call's story.
+
+
+# A call that is over stays over (2026-11-14)
+
+Reported from Railway, room `HfedVQp_gK_0pLMgzro5eg` (times EAT). The
+caller hung up a call nobody had answered. Forty seconds later the callee's
+phone rang for it, joined it, and was answered 200 by `/answer`, for a
+caller who was gone.
+
+| Time | What happened |
+|---|---|
+| 15:04:50 | `/calls/initiate`. The callee had no FCM token, so nothing rang. |
+| 15:04:55 | The caller's socket joined. 15:04:56: its offer was created. |
+| 15:05:14 | The caller hung up. |
+| 15:05:16 | The call was recorded as cancelled. |
+| 15:05:38 | The callee's in-app sweep found the call; `/alerted` answered 200. |
+| 15:05:52 | The callee's ringing (standby) socket joined the room. |
+| 15:05:53 | The server handed it the caller's buffered hang-up. |
+| 15:05:54 | The callee's Accept: `/answer` answered 200. |
+
+Supabase was refusing new clients in the minutes before
+(`EMAXCONNSESSION`, see "The database pool" below).
+
+## Why it came back
+
+- **The result was claimed before the call was ended.** `_settle_unanswered`
+  claimed the call's result (`mark_result_logged`) and then needed the
+  database before it moved the session to `cancelled` or `missed`. When
+  Supabase refused the connection, the error was swallowed and the session
+  stayed `ringing`. Everything else that ends a call then saw the claim and
+  stood down: `log-result` answered 409, `_nobody_left` did nothing, and the
+  ring watchdog skipped the room. Nothing could end the call.
+- **Every Redis write put back the whole session.** A change read the
+  session JSON, changed a field and wrote all of it back. A socket's
+  teardown, a heartbeat, an Accept or a ring acknowledgement that read the
+  call while it rang wrote `ringing` back over a cancellation that landed
+  in between.
+- **`/answer` trusted its own read.** `call_answered` decided on the session
+  it had read and ignored what `mark_answered` returned. `/alerted` did the
+  same.
+- **The hang-up waited for the callee.** The caller's hang-up was buffered
+  for the absent callee and replayed into its socket 39 s later. Offers and
+  candidates from a socket that had since gone could be replayed the same
+  way.
+
+The WebRTC stack did not fail in this call, and TURN was not involved. The
+callee never joined while the caller was in the room, so the caller's
+offer, made at 15:04:56, was never sent: the caller sends it on `ready` or
+`ringing_ready`, once the callee is there. The server's log for the room
+has no relayed offer or candidate.
+
+## What changed
+
+**Every change is a compare-and-set.** The state machine stays in Python
+(`call_state._transition_change`, `_ending_change`, `_presence_change`,
+`_answer`, `_alert_change`, `_renewal_change`, `_note_change`). Each change
+is a function of the session as stored. The Redis store writes its result
+only if the stored JSON is still the one it was decided on (`_CAS_SCRIPT`,
+one Lua script); otherwise it decides again on the fresh session, up to 12
+times (`CAS_CONFLICT` when it never lands). A Redis that refuses scripts
+gets the same thing with WATCH/MULTI/EXEC (`CAS_SCRIPT_UNAVAILABLE`, once
+per process). The in-memory store runs the same functions under one lock.
+
+**A call that is over cannot be reopened.** No change moves a terminal
+session anywhere else, and a renewal, a presence update or a note on one
+is refused (`CALL_RESURRECTION_BLOCKED`). A call that ends also gets the key
+`broka:call:over:{room}`, which no write removes, so a blind write from an
+older build during a rolling deploy cannot reopen it either.
+
+**The call ends first; the card follows.** `_settle_unanswered`, `log-result`,
+`cancel-setup` and the ring watchdog make the session terminal before they
+touch the database (`_conclude`). The call card is written after. When the
+database refuses, the card is retried in the background after 2, 8 and 30 s
+(`CALL_CARD_DEFERRED`, then `CALL_CARD_WRITTEN late=true` or
+`CALL_CARD_LOST`). The result claim is kept, so a card is never written
+twice. `CALL_SETTLE_FAILED` and `CALL_END_FAILED` name a Redis failure.
+
+**The write decides, not the read.**
+
+- `mark_answered` returns an `AnswerResult` (`accepted`, `first`).
+  `/answer` answers 410 for a call that ended before it was answered, and
+  200 with no side effects for a repeat (a second tap, a retry, another
+  phone).
+- `mark_callee_alerted` returns an `AlertResult` (`ringing`, `first`).
+  `/alerted` answers 410 for a call that no longer rings.
+- Both log `CALL_ANSWER_REJECTED` / `CALL_RINGING_REJECTED`. The app already
+  treats 404 and 410 alike: the ring stops and the call screen closes.
+
+**A socket for a call that is over is refused at every step.** The state is
+checked before the socket is accepted, again after it joins, before
+anything kept for it is replayed, and before `ready` is sent
+(`READY_WITHHELD`). A socket refused because the call is over is closed
+with 4004. A ringing (standby) socket for a call that has been answered is
+closed with 4010.
+
+**Nothing old is replayed.** A hang-up is never buffered for an absent
+participant (`SIGNAL_NOT_BUFFERED`): the call's state already says it is
+over. A buffered offer or candidate is dropped when the socket that sent it
+is no longer the sender's current one (`SIGNAL_REPLAY_DISCARDED`; the
+call event `SIGNALS_DISCARDED` counts them). Both phones' buffers are
+cleared when the call ends (`SIGNAL_BUFFER_CLEARED`).
+
+**A replaced socket cannot end the call.** A reconnect now takes the room
+slot before the old socket is closed with 4009. The old socket's teardown
+used to find the slot still its own, take the reconnect for the last
+participant leaving, and end the call (cancel it, while it rang) under the
+phone that was reconnecting.
+
+**The phone does not answer a call that is over.** `WebRtcService.start()`
+refuses a call already `ended` or `failed`, and the call screen's Accept
+does nothing once the screen shows the call is over. An Accept from the
+notification could land in the two seconds the screen stays up after the
+caller hangs up, and open the microphone, a socket and a peer connection
+for nobody.
+
+**Diagnostics.** The server's `CALL_ENDED` carries `stage`, how far a call
+that never connected got, and the milestones behind it (`caller_joined`,
+`callee_joined`, `offer_relayed`, `answer_relayed`, all sticky):
+
+| `stage` | Meaning |
+|---|---|
+| `connected` | The WebRTC connection came up. |
+| `unanswered` | Nobody answered (cancelled, declined or missed). |
+| `callee_never_joined` | Answered; the callee's phone never joined. |
+| `caller_never_joined` | Answered; the caller's socket was not there. |
+| `no_offer` | Both joined; no offer reached the callee. |
+| `no_answer_sdp` | The offer reached the callee; no answer came back. |
+| `ice` | Offer and answer crossed; ICE/DTLS never came up (the phones' events say which). |
+
+The caller's own `CALL_ENDED` (`reason=local_hangup`) adds `peer_joined`,
+`offers_sent` and `held` (candidates still held for an offer).
+`offers_sent=0 held=4 peer_joined=false` is a caller who gave up on a call
+nobody joined.
+
+## The database pool
+
+Supabase's session-mode pooler admits 15 clients for the whole project
+(`EMAXCONNSESSION: max clients reached in session mode`). Each API process
+allowed itself 30 (`DB_POOL_SIZE=10`, `DB_MAX_OVERFLOW=20`; Railway sets
+neither, so the code defaults applied). On top of that:
+
+- the M-Pesa reconcile task built a private engine (SQLAlchemy's default
+  pool, 5 + 10) every 300 s;
+- three scheduler loops each held a pooled connection for their advisory
+  lock for the whole of every pass;
+- the incoming-call and missed-call pushes waited on FCM with the request's
+  connection still checked out.
+
+Now:
+
+- **3 + 2 per process** (`DB_POOL_SIZE`, `DB_MAX_OVERFLOW`; env vars still
+  override). Two replicas hold at most 10 of the 15, which leaves room for a
+  deploy's old and new containers and a migration. A request that waits
+  `DB_POOL_TIMEOUT_SECONDS` (now 10) for a connection, or that Supabase
+  refuses, is answered 503 with `code: DB_UNAVAILABLE` and `Retry-After: 2`
+  (`[db] DB_UNAVAILABLE kind=…`) instead of a 500 with a traceback.
+- **Scheduler leases live in Redis** (`SET NX`, 60 s, renewed while the pass
+  runs). The advisory lock remains the fallback without Redis.
+- **Background tasks share the process's pool** for its own `DATABASE_URL`
+  (`workers._task_engine`); any other URL gets a `NullPool` engine.
+- **Call pushes give the connection back first** (`calls._release`).
+- **The log says what the pool is doing.** `[db] POOL_CONFIG` at startup,
+  `[db] DB_POOL_SATURATED` when every connection is out (at most every
+  10 s), `[db] DB_CONNECTION_HELD` for a connection held over 5 s, and
+  `/ready` reports `db_pool` (counts only).
+
+Still holding a connection across a slow call: `POST /negotiate/message`
+across the AI reply, and the M-Pesa reconcile across Safaricom's API.
+
+## Verification
+
+Backend, against Redis in CI (`REDIS_URL`):
+
+- `tests/test_call_state_atomic.py` holds one change between its read and
+  its write while another lands (`tests/call_races.py`), for both the Lua
+  script and WATCH/MULTI/EXEC. Against the store before this change the
+  race tests end with the earlier state written back.
+- `tests/test_call_over_stays_over.py`: cancel then answer → 410; cancel
+  then `/alerted` → 410; a heartbeat or `set_participant_connected` cannot
+  reopen a call; a stale socket replays no old hang-up or offer; answer and
+  cancel at once → exactly one outcome; the watchdog and a cancel → one
+  card, one notification; the database failing never leaves a call alive.
+- `tests/test_message_ack_untracked.py` (NOTIFICATIONS.md, "The log").
+
+App: `test/call_over_stays_over_test.dart` (fake socket and peer
+connection).
+
+Simulated only. The two-phone harness (`scripts/call_e2e`) was not run for
+this change, and no real phone was used. On two Android phones, check:
+
+- Wi-Fi to Wi-Fi, mobile data to mobile data, and Wi-Fi to mobile data;
+- Accept from the notification, with the app in the background and closed;
+- a push that arrives after the caller hung up: the ring stops and nothing
+  connects;
+- the caller hanging up during "Connecting…";
+- signalling lost for 5 s mid-call (airplane mode).
+
+In the log, one room's `[call-event]` lines should end with one `CALL_ENDED`
+whose `stage` matches what happened, and no `/answer` 200 after a
+`CALL_ENDED`.

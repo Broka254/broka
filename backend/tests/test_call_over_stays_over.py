@@ -38,7 +38,7 @@ from sqlalchemy.exc import OperationalError
 from starlette.datastructures import Headers
 
 from api import database
-from api.core import call_state, message_push, push_devices
+from api.core import call_state, message_push
 from api.core.call_signaling import CallSignalingHub, _MemoryBackend
 from api.core.call_state import CallState
 from api.database import AsyncSessionLocal, Listing, NegotiationMessage, User, init_db, reset_engine
@@ -736,6 +736,25 @@ async def test_the_end_of_a_call_says_how_far_it_got(client, fcm, caplog):
 
 # ── Database connections are not held through a push ─────────────────────────
 
+def _request_sessions(monkeypatch) -> list:
+    """The database sessions handed to requests (get_db), as they are handed.
+
+    Only the requests': the message pushes and the re-push a registering
+    phone sets off run on short sessions of their own, concurrently, and one
+    caught mid-query is not a connection held through Firebase (CI, Backend
+    Tests Python 3.11: a spy on every tokens_for() session found one)."""
+    from api.database import get_db
+    handed = []
+
+    async def recording_get_db():
+        async with AsyncSessionLocal() as session:
+            handed.append(session)
+            yield session
+
+    monkeypatch.setitem(app.dependency_overrides, get_db, recording_get_db)
+    return handed
+
+
 @pytest.mark.asyncio
 async def test_recording_a_missed_call_gives_its_connection_back_before_the_push(
         client, fcm, monkeypatch):
@@ -744,24 +763,20 @@ async def test_recording_a_missed_call_gives_its_connection_back_before_the_push
     listing_id, seller, buyer = await _people()
     await _register(client, seller)
     room = await _initiate(client, buyer, listing_id)
-    sessions = []
-    real_tokens_for = push_devices.tokens_for
-
-    async def tokens_for(db, user_id, kind="fcm"):
-        sessions.append(db)
-        return await real_tokens_for(db, user_id, kind)
-
-    monkeypatch.setattr(push_devices, "tokens_for", tokens_for)
+    await _settled()
+    handed = _request_sessions(monkeypatch)
     held_at_push = []
     fcm.on_send = lambda kwargs: held_at_push.append(
-        (kwargs["data"].get("type"), [s.in_transaction() for s in sessions]))
+        (kwargs["data"].get("type"), [s.in_transaction() for s in handed]))
     r = await client.post("/calls/log-result", headers=_auth(buyer),
                           json={"room_id": room, "outcome": "cancelled"})
     assert r.status_code == 200, r.text
     await _settled()
     missed = [held for kind, held in held_at_push if kind == "missed_call"]
     assert missed, "the missed-call push was sent"
-    assert not any(missed[0]), "no database session was mid-transaction during the push"
+    # Sent from the request itself, on its session - which had given its
+    # connection back first.
+    assert missed[0] == [False], "the request's session was mid-transaction during the push"
 
 
 @pytest.mark.asyncio
@@ -769,21 +784,15 @@ async def test_placing_a_call_gives_its_connection_back_before_waiting_on_the_pu
         client, fcm, monkeypatch):
     listing_id, seller, buyer = await _people()
     await _register(client, seller)
-    sessions = []
-    real_tokens_for = push_devices.tokens_for
-
-    async def tokens_for(db, user_id, kind="fcm"):
-        sessions.append(db)
-        return await real_tokens_for(db, user_id, kind)
-
-    monkeypatch.setattr(push_devices, "tokens_for", tokens_for)
+    await _settled()
+    handed = _request_sessions(monkeypatch)
     held_at_push = []
     fcm.on_send = lambda kwargs: held_at_push.append(
-        (kwargs["data"].get("type"), [s.in_transaction() for s in sessions]))
+        (kwargs["data"].get("type"), [s.in_transaction() for s in handed]))
     await _initiate(client, buyer, listing_id)
     await _settled()
     [(kind, held)] = [(k, h) for k, h in held_at_push if k == "incoming_call"]
-    assert held and not any(held), "the request's session was given back before Firebase"
+    assert held == [False], "the request's session was given back before Firebase"
 
 
 @pytest.mark.asyncio
