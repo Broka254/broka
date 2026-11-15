@@ -18,7 +18,6 @@
 //    for a listing chat and for a store chat's photo.
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
