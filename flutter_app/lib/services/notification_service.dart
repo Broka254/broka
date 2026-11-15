@@ -557,8 +557,10 @@ class NotificationService {
     var sent = false;
     final token = _nonEmpty(data['threadToken']);
     if (token != null) {
+      // Read up to what the notification showed - the message it announced.
       final status = await ApiService.notificationAction(
-          'reply', token, content: text, clientMsgId: clientId);
+          'reply', token, content: text, clientMsgId: clientId,
+          messageId: _nonEmpty(data['messageId']));
       sent = status == 200;
       // Expired, or this phone signed out and back in since: the session
       // may still be good.
@@ -606,27 +608,32 @@ class NotificationService {
       debugPrint('[Notifications] reply not sent: ${e.runtimeType}');
       return false;
     }
-    await ApiService.markThreadRead(listingId, storeId: storeId, buyerId: buyerId);
+    await ApiService.markThreadRead(listingId, storeId: storeId, buyerId: buyerId,
+        upToMessageId: _nonEmpty(data['messageId']));
     return true;
   }
 
   /// Mark as read, pressed on a message notification: the conversation is
-  /// read up to now - the sender sees "Seen" - and the notification goes.
+  /// read up to the message the notification announced - the sender sees
+  /// "Seen" - and the notification goes. Not up to now: a message that
+  /// arrived after the notification was drawn was not on it.
   Future<void> markReadFromNotification(Map<String, dynamic> data) async {
     final threadId = _threadIdFromPayload(data);
     if (threadId == null) return;
     await cancelThread(threadId, data['buyerId'] as String?);
     final token = _nonEmpty(data['threadToken']);
+    final announced = _nonEmpty(data['messageId']);
     var done = false;
     if (token != null) {
-      done = await ApiService.notificationAction('read', token) == 200;
+      done = await ApiService.notificationAction('read', token, messageId: announced) == 200;
     }
     if (!done && ApiService.isLoggedIn) {
       final storeId = _nonEmpty(data['storeId']);
       final listingId = storeId == null ? _nonEmpty(data['listingId']) : null;
       if (storeId != null || listingId != null) {
         await ApiService.markThreadRead(listingId,
-            storeId: storeId, buyerId: _nonEmpty(data['buyerId']));
+            storeId: storeId, buyerId: _nonEmpty(data['buyerId']),
+            upToMessageId: announced);
         done = true;
       }
     }
@@ -718,8 +725,11 @@ class NotificationService {
       Map<String, dynamic> data, String roomId) async {
     await _endReplacedCall(data);
     // On a call, or done with this one: nothing rings, and the server is
-    // not told this phone is ringing.
-    if (!ActiveCall.instance.shouldRing(roomId)) return;
+    // not told this phone is ringing - only why it is not.
+    if (!ActiveCall.instance.shouldRing(roomId)) {
+      await _reportRingBlocked(data, roomId, _whyNotRinging(roomId), 'foreground');
+      return;
+    }
 
     // FIX (calling audit, 2026-09-18): verify the call is STILL RINGING
     // before making the phone ring.
@@ -750,6 +760,9 @@ class NotificationService {
       if (live.known && live.call?['room_id'] != roomId) {
         debugPrint('[Notifications] stale incoming-call push for $roomId - not ringing');
         await callEnded(roomId);
+        // A late push for a call that is over: it must not ring, and
+        // didn't - in the log as such.
+        await _reportRingBlocked(data, roomId, 'call_over', 'foreground');
         return;
       }
       if (!live.known) {
@@ -767,12 +780,13 @@ class NotificationService {
     );
     if (!ringing) {
       debugPrint('[Notifications] incoming call $roomId was not shown - not acknowledging');
+      await _reportRingBlocked(data, roomId, _takeRingBlocked(roomId), 'foreground');
       return;
     }
     // The sweep acknowledges only the calls it rang itself: nothing else
     // tries again for this one.
     final alert = await acknowledgeIncomingCall(roomId, data['callToken'] as String?,
-        persist: true);
+        persist: true, handler: 'foreground', pushAgeMs: _pushAgeMs(data));
     if (alert == CallAlertResult.unknown) {
       debugPrint('[Notifications] ring acknowledgement for $roomId unconfirmed');
     }
@@ -807,39 +821,172 @@ class NotificationService {
   /// still rings here: on a phone just woken from Doze the network often
   /// is not back for the first two, and the caller read "Calling…" through
   /// the whole ring of a phone that was ringing.
+  ///
+  /// [handler] names what rang the phone - background (the FCM isolate),
+  /// foreground (FCM with the app in front) or poller (the app's sweep) -
+  /// and each try tells the server which try it is and why the one before
+  /// failed (ApiService.postCallAlerted). When no try is confirmed and the
+  /// call still rings here, one CALL_ALERT_FAILED report says so in the
+  /// server's log, with the last status and why (2026-11-15): until then a
+  /// phone whose acknowledgements all failed left no trace at all there.
   Future<CallAlertResult> acknowledgeIncomingCall(
-      String roomId, String? callToken, {bool persist = false}) async {
-    if (callToken == null || callToken.isEmpty) return CallAlertResult.unknown;
-    var result = await ApiService.reportCallAlerted(roomId, callToken);
-    if (result == CallAlertResult.unknown) {
+      String roomId, String? callToken,
+      {bool persist = false, String handler = 'foreground', int? pushAgeMs}) async {
+    if (callToken == null || callToken.isEmpty) {
+      // Nothing to authorize it with - and nothing to report it with.
+      debugPrint('[Notifications] CALL_ALERT_FAILED room=$roomId attempt=0 '
+          'status=- category=token_missing handler=$handler');
+      return CallAlertResult.unknown;
+    }
+    var attempt = 1;
+    var last = await ApiService.postCallAlerted(roomId, callToken,
+        attempt: attempt, handler: handler, pushAgeMs: pushAgeMs);
+    if (last.result == CallAlertResult.unknown) {
       // A closed app has no poller to try again, and the caller stays on
       // "Calling..." until some phone confirms the ring. One immediate
       // retry rides out a transient failure; the server treats a repeated
       // alert for the same room as a no-op.
       debugPrint('[Notifications] CALL_ALERT_RETRY room=$roomId');
-      result = await ApiService.reportCallAlerted(roomId, callToken);
+      attempt++;
+      last = await ApiService.postCallAlerted(roomId, callToken,
+          attempt: attempt, handler: handler, previousError: last.category,
+          pushAgeMs: pushAgeMs);
     }
+    // The ring stopped here (answered, declined, over): nothing left to claim.
+    var stoppedHere = false;
     if (persist) {
       for (final delay in persistentAlertRetryDelays) {
-        if (result != CallAlertResult.unknown) break;
+        if (last.result != CallAlertResult.unknown) break;
         await Future<void>.delayed(delay);
         // Answered, declined or over on this phone meanwhile: there is no
         // ring left to claim. (The background isolate learns that from
         // what the app saved.)
         final active = ActiveCall.instance;
-        if (active.isSettled(roomId)) break;
-        if (!active.onCall && !await ActiveCall.savedAllowsRinging(roomId)) break;
+        if (active.isSettled(roomId)) {
+          stoppedHere = true;
+          break;
+        }
+        if (!active.onCall && !await ActiveCall.savedAllowsRinging(roomId)) {
+          stoppedHere = true;
+          break;
+        }
         debugPrint('[Notifications] CALL_ALERT_RETRY room=$roomId after=${delay.inMilliseconds}ms');
-        result = await ApiService.reportCallAlerted(roomId, callToken);
+        attempt++;
+        last = await ApiService.postCallAlerted(roomId, callToken,
+            attempt: attempt, handler: handler, previousError: last.category,
+            pushAgeMs: pushAgeMs);
       }
     }
-    debugPrint('[Notifications] CALL_ALERT_RESULT room=$roomId result=${result.name}');
+    final result = last.result;
+    debugPrint('[Notifications] CALL_ALERT_RESULT room=$roomId result=${result.name} '
+        'attempts=$attempt handler=$handler');
+    if (result == CallAlertResult.unknown && !stoppedHere &&
+        !ActiveCall.instance.isSettled(roomId)) {
+      await _reportCallPush(roomId, callToken, 'CALL_ALERT_FAILED', {
+        'handler': handler,
+        'attempt': attempt,
+        'status': last.status,
+        'category': last.category,
+        'push_age_ms': pushAgeMs,
+      });
+    }
     if (result == CallAlertResult.over) {
       debugPrint('[Notifications] call $roomId is over - not ringing');
       await callEnded(roomId);
     }
     return result;
   }
+
+  // What this isolate has already reported about a call push, so a sweep
+  // that finds the same refused ring every seven seconds says it once.
+  static final Set<String> _callPushReports = <String>{};
+
+  /// One line in the server's log about an incoming-call push on this
+  /// phone (POST /calls/{room}/events, with the call's own token): why it
+  /// did not ring (CALL_RING_BLOCKED), or that its ring was never confirmed
+  /// (CALL_ALERT_FAILED). Without it Railway's log could not tell a push
+  /// that never reached the phone from one it refused, or from a ring whose
+  /// acknowledgement kept failing (2026-11-15). One try, never awaited by a
+  /// ring, and nothing kept for later: the call token is a credential, and
+  /// the only ones this phone stores are its session's.
+  static Future<void> _reportCallPush(String roomId, String? callToken,
+      String event, Map<String, Object?> fields) async {
+    final detail = [
+      for (final e in fields.entries)
+        if (e.value != null) '${e.key}=${e.value}',
+    ].join(' ');
+    debugPrint('[Notifications] $event room=${roomId.isEmpty ? '-' : roomId} $detail');
+    if (roomId.isEmpty || callToken == null || callToken.isEmpty) return;
+    if (!_callPushReports.add('$roomId|$event|${fields['reason'] ?? ''}')) return;
+    final report = <String, dynamic>{
+      'event': event,
+      'client_ts': DateTime.now().toUtc().toIso8601String(),
+      for (final e in fields.entries)
+        if (e.value != null) e.key: e.value,
+    };
+    try {
+      await ApiService.postCallEvents(roomId, callToken, [report],
+          timeout: const Duration(seconds: 5));
+    } catch (_) {}
+  }
+
+  /// How long a push took to reach this phone, by its own clock (the
+  /// handlers pass FCM's sentTime as fcmSentAt); null when not known.
+  static int? _pushAgeMs(Map<String, dynamic> data) {
+    final sent = int.tryParse('${data['fcmSentAt'] ?? ''}');
+    if (sent == null) return null;
+    final age = DateTime.now().millisecondsSinceEpoch - sent;
+    return age >= 0 ? age : null;
+  }
+
+  /// Why showIncomingCall last refused to ring a room, for its caller to
+  /// report (CALL_RING_BLOCKED). Taken once by [_takeRingBlocked].
+  final Map<String, String> _ringBlocked = {};
+
+  String _takeRingBlocked(String roomId) => _ringBlocked.remove(roomId) ?? 'not_shown';
+
+  /// Why [ActiveCall.shouldRing] says no for [roomId].
+  static String _whyNotRinging(String roomId) {
+    final active = ActiveCall.instance;
+    if (roomId.isEmpty) return 'no_room';
+    if (active.isSettled(roomId)) return 'call_settled';
+    if (active.roomId == roomId) return 'already_on_screen';
+    return 'on_another_call';
+  }
+
+  /// [_whyNotRinging] for the background isolate, which knows the app's
+  /// call only from what the app saved (ActiveCall.savedAllowsRinging said
+  /// no). Its own screen already ringing in the app is already_on_screen -
+  /// no refusal; saved_call_state is the saved state changing in between.
+  static Future<String> _whyNotRingingSaved(String roomId) async {
+    if (roomId.isEmpty) return 'no_room';
+    if (await ActiveCall.savedSettled(roomId)) return 'call_settled';
+    final current = await ActiveCall.saved();
+    if (current == null) return 'saved_call_state';
+    return current.roomId == roomId ? 'already_on_screen' : 'on_another_call';
+  }
+
+  /// [_reportCallPush] for a ring this phone refused - unless it is the
+  /// same call already on screen, which is no refusal at all.
+  static Future<void> _reportRingBlocked(Map<String, dynamic> data, String roomId,
+      String reason, String handler) async {
+    if (reason == 'already_on_screen') return;
+    await _reportCallPush(roomId, data['callToken'] as String?, 'CALL_RING_BLOCKED', {
+      'reason': reason,
+      'handler': handler,
+      'push_age_ms': handler == 'poller' ? null : _pushAgeMs(data),
+    });
+  }
+
+  /// The sweep found a call ringing and showIncomingCall would not ring it:
+  /// why, in the server's log - once per call and reason.
+  Future<void> reportRingNotShown(String roomId, String? callToken,
+          {String handler = 'poller'}) =>
+      _reportRingBlocked({'callToken': callToken}, roomId, _takeRingBlocked(roomId), handler);
+
+  /// Forget which call pushes were reported - for tests.
+  @visibleForTesting
+  static void resetCallPushReports() => _callPushReports.clear();
 
   /// One line per call push, whichever isolate received it, keyed on the
   /// room so a call can be followed from FCM receipt to ring to teardown.
@@ -887,7 +1034,13 @@ class NotificationService {
         // The app's call screen may be open (the app is only in the
         // background): never ring over a call under way, or for the call
         // already on screen. The main isolate saves which call that is.
-        if (!await ActiveCall.savedAllowsRinging(roomId)) return;
+        // This used to return without a word: a call blocked by what the
+        // app had saved left no trace anywhere (2026-11-15).
+        if (!await ActiveCall.savedAllowsRinging(roomId)) {
+          await _reportRingBlocked(
+              data, roomId, await _whyNotRingingSaved(roomId), 'background');
+          return;
+        }
         // Ring first: the acknowledgement is a network round trip, and a
         // call must never wait on one to start ringing.
         final ringing = await svc.showIncomingCall(
@@ -906,10 +1059,14 @@ class NotificationService {
         // telling the caller it rang would be false.
         if (!ringing) {
           debugPrint('[Notifications] incoming call $roomId not shown in background - not acknowledging');
+          await _reportRingBlocked(data, roomId, svc._takeRingBlocked(roomId), 'background');
           return;
         }
+        // The call token alone authorizes this: an access token long
+        // expired in a closed app cannot stop it.
         final alert = await svc.acknowledgeIncomingCall(
-            roomId, data['callToken'] as String?, persist: true);
+            roomId, data['callToken'] as String?, persist: true,
+            handler: 'background', pushAgeMs: _pushAgeMs(data));
         if (alert == CallAlertResult.unknown) {
           debugPrint('[Notifications] background ring acknowledgement for '
               '$roomId unconfirmed');
@@ -2352,11 +2509,19 @@ class NotificationService {
     // ringtone started, the call screen opened, or a notification was
     // posted. Callers acknowledge the call to the server only on true, so
     // "Ringing" on the caller's screen cannot be claimed for a phone that
-    // never made a sound.
-    if (!_ready) return false;
+    // never made a sound. Each "no" says why (_ringBlocked), for the caller
+    // of this to report.
+    _ringBlocked.remove(roomId);
+    if (!_ready) {
+      _ringBlocked[roomId] = 'notifications_not_ready';
+      return false;
+    }
     // On a call, or done with this one (see ActiveCall.shouldRing). Every
     // path that rings comes through here.
-    if (!ActiveCall.instance.shouldRing(roomId)) return false;
+    if (!ActiveCall.instance.shouldRing(roomId)) {
+      _ringBlocked[roomId] = _whyNotRinging(roomId);
+      return false;
+    }
 
     bool ringing = false;
     if (ringInApp) {
@@ -2405,6 +2570,7 @@ class NotificationService {
       if (enabled == false) {
         debugPrint('[Notifications] CALL_RING_BLOCKED room=$roomId '
             'reason=notifications_disabled');
+        _ringBlocked[roomId] = 'notifications_disabled';
         return false;
       }
     }
@@ -2423,6 +2589,7 @@ class NotificationService {
       if (ActiveCall.instance.roomId != roomId) {
         await RingtoneService.instance.stopFor(roomId);
       }
+      _ringBlocked[roomId] = _whyNotRinging(roomId);
       return false;
     }
 
@@ -2462,6 +2629,7 @@ class NotificationService {
       // Nothing is showing this call, so nothing could stop a ring started
       // above - and the caller is about to be told the phone never rang.
       if (ringing) await RingtoneService.instance.stopFor(roomId);
+      _ringBlocked[roomId] = 'show_failed';
       return false;
     }
   }

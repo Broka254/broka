@@ -1227,7 +1227,9 @@ production the same fields are also an object, `call_event`, on the JSON
 line.
 
 Events: CALL_INITIATED, CALL_SETUP_REPLAYED, CALL_SETUP_CANCELLED,
-CALL_PUSH_RESULT, CALL_RINGING, CALL_ACCEPTED, WEBSOCKET_CONNECTED,
+CALL_PUSH_RESULT, CALLEE_ALERTED, CALL_ALERT_REJECTED, CALL_RING_BLOCKED,
+CALL_ALERT_FAILED, CALL_ANSWERED, CALL_ACCEPTED (a phone's own), CALL_CONNECTED,
+CALL_NO_ANSWER, CALL_MISSED, WEBSOCKET_CONNECTED,
 WEBSOCKET_DISCONNECTED, WEBSOCKET_RECONNECTED, WEBSOCKET_RECONNECT_SCHEDULED,
 WEBSOCKET_TOKEN_REFRESHED, PEER_JOINED, PEER_SIGNALING_LOST/RESTORED,
 PRECONNECT_STARTED/USED/ABANDONED, LOCAL_MEDIA_READY, SDP_OFFER_CREATED,
@@ -1240,7 +1242,9 @@ TURN_CREDENTIAL_REQUEST, TURN_CREDENTIAL_ISSUED, TURN_CREDENTIAL_RECEIVED,
 TURN_CREDENTIAL_FAILURE, TURN_NO_RELAY_CANDIDATES, WEBRTC_CONNECTED,
 WEBRTC_DISCONNECTED, WEBRTC_FAILED, CALL_TIMEOUT, CALL_HANGUP, CALL_ENDED.
 The server's `CALL_ENDED` carries the recorded outcome. Failures are logged
-at WARNING.
+at WARNING. Renamed on 2026-11-15 (see "Every ring accounted for"): the
+server's `CALL_RINGING` is now `CALLEE_ALERTED`, its `CALL_ACCEPTED` is
+`CALL_ANSWERED`, and `CALL_RINGING_REJECTED` is `CALL_ALERT_REJECTED`.
 
 Never logged: tokens, TURN credentials, SDP, ICE candidate lines or IP
 addresses - candidates appear by type and protocol only. A phone's strings
@@ -1251,7 +1255,7 @@ server's allowlists, at most 400 per socket and 120 per post.
 Reading a failed call: `TURN_CREDENTIAL_FAILURE` or
 `ICE_GATHERING_COMPLETE … relay=0 turn=true` (`TURN_NO_RELAY_CANDIDATES`)
 says the relay was missing; `ICE_CONNECTION_FAILED … received_relay=0` says
-the other side's relay never arrived; `CALL_ACCEPTED … caller_in_room=false`
+the other side's relay never arrived; `CALL_ANSWERED … caller_in_room=false`
 followed by `CALL_TIMEOUT reason=no_offer` is a caller who never joined.
 
 ## Signalling additions
@@ -1362,7 +1366,8 @@ twice. `CALL_SETTLE_FAILED` and `CALL_END_FAILED` name a Redis failure.
   phone).
 - `mark_callee_alerted` returns an `AlertResult` (`ringing`, `first`).
   `/alerted` answers 410 for a call that no longer rings.
-- Both log `CALL_ANSWER_REJECTED` / `CALL_RINGING_REJECTED`. The app already
+- Both log `CALL_ANSWER_REJECTED` / `CALL_RINGING_REJECTED` (since
+  2026-11-15 `CALL_ALERT_REJECTED`, for every refusal). The app already
   treats 404 and 410 alike: the ring stops and the call screen closes.
 
 **A socket for a call that is over is refused at every step.** The state is
@@ -1477,3 +1482,158 @@ this change, and no real phone was used. On two Android phones, check:
 In the log, one room's `[call-event]` lines should end with one `CALL_ENDED`
 whose `stage` matches what happened, and no `/answer` 200 after a
 `CALL_ENDED`.
+
+
+# Every ring accounted for (2026-11-15)
+
+Reported: a call to a phone whose app was closed stayed on "Calling…" on
+the caller's screen. Railway's log showed the call placed and FCM taking the
+push (`CALL_PUSH_ACCEPTED`), then nothing from the callee's phone: no
+`CALLEE_ALERTED`, and no refusal either.
+
+## Why the log could not say what happened
+
+- **FCM taking a push is not a ring.** The server heard from the callee's
+  phone only through a successful `POST /calls/{room}/alerted`. Of the
+  refusals, only 410 was logged (`CALL_RINGING_REJECTED`). A 401 (bad or
+  expired call token), 403 (not the callee) or 404 (call gone) left no line.
+- **A phone that would not ring kept quiet.** Notifications switched off, a
+  call already on screen, or the app's saved call state stopped the ring
+  with a line in the phone's logcat at most. The background isolate's saved
+  state check returned without a word.
+- **Acknowledgements that kept failing left nothing.** A phone just woken
+  from Doze often has no network for its first tries. It tried for about
+  seven seconds and gave up, and the server never heard of it.
+- **The sweep gave up after two tries.** The app's own sweep acknowledged a
+  call it rang twice, back to back. The call screen that ring opened then
+  made every later sweep skip the call (`ActiveCall.shouldRing`), so nothing
+  tried again and the caller saw "Calling…" through the whole ring.
+- **The background handler started unguarded.** A throw from
+  `Firebase.initializeApp()` ended it before anything rang. No log has shown
+  this happening; the guard is hardening.
+- **The ring watchdog could lose a missed call.** A room leaves the ringing
+  index as the watchdog takes it. A Redis or database error at that moment
+  meant no missed-call card and no missed-call push.
+- **A failed VoIP push logged its device token.** httpx's error text names
+  the request URL, which ends in the token.
+
+The code alone cannot rule these out, and they are worth checking on the
+callee's phone first:
+
+- **Its APK.** Builds from before bf880c0 (2026-11-14) talk to Render, not
+  Railway. Their acknowledgement goes to Render, and Railway's log never
+  shows it.
+- **Notifications for BROKA switched off** (Android 13+), or the call
+  channel muted.
+- **Battery optimisation or OEM autostart rules** (Tecno, Infinix, Xiaomi)
+  holding the push back. A call push lives 60 s (`CALL_PUSH_TTL_SECONDS`):
+  a phone that gets it later never rings.
+
+## What changed
+
+**The lifecycle, one line per step.** Each is a `[call-event]` line with
+`room`, `correlation_id` (the room), `role`, `user`, `source` and `ts`.
+
+| Event | When |
+|---|---|
+| `CALL_INITIATED` | The caller placed the call (`/initiate`). |
+| `CALL_PUSH_ACCEPTED` | FCM took the push for one phone. A `[calls]` line with the token's fingerprint, FCM's `message_id`, `user`, `correlation_id`, `source=fcm`, `ts`. Not delivery and not a ring. |
+| `CALLEE_ALERTED` | A phone of the callee's said it rings (the first `/alerted`). Only then is the caller sent `callee_ringing`. With `attempt`, `delivery_source` (`background`, `foreground` or `poller`), `previous_error`, `push_age_ms`. |
+| `CALL_ALERT_REJECTED` | WARNING. An acknowledgement refused: `status=401 reason=invalid_token\|token_expired\|wrong_room`, `403 not_callee`, `404 call_gone`, `410 not_ringing`, with the phone's attempt fields. |
+| `CALL_RING_BLOCKED` | WARNING, reported by the phone. The push arrived and the phone did not ring: `reason=notifications_disabled\|on_another_call\|call_settled\|call_over\|show_failed\|notifications_not_ready\|saved_call_state\|not_shown`, `handler`, `push_age_ms`. |
+| `CALL_ALERT_FAILED` | WARNING, reported by the phone. It rang and no acknowledgement got through: the last `status`, `category` (`http_503`, `timeout`, `network`...), `attempt`, `handler`. |
+| `CALL_ANSWERED` | The callee accepted: `via=answer` (POST /answer), `ringing_socket`, or `join` (an app without /answer). Only now does the caller's screen say "Connecting…". |
+| `CALL_CONNECTED` | A phone's WebRTC connection came up, once per side. |
+| `CALL_NO_ANSWER` | The ring ran out. `callee_alerted=false` means no phone of theirs ever said it rang. |
+| `CALL_MISSED` | The callee has the missed call: `outcome`, `card_message_id`, `tokens`, `push_accepted` (FCM's word, not delivery). |
+
+`/initiate`'s `[calls] CALL_RINGING` line is now `CALL_SESSION_RINGING`. It
+is the server's state, and it read like evidence that a phone rang.
+
+**Server** (`api/routers/calls.py`, `api/core/call_events.py`):
+
+- `/alerted` takes optional `attempt`, `handler`, `previous_error` and
+  `push_age_ms`, for the log only. They are cleaned to small numbers and
+  short words, and can never refuse the request. Its answers are unchanged.
+- `/calls/{room}/events` takes `CALL_RING_BLOCKED` and `CALL_ALERT_FAILED`
+  from the callee's phone, with `handler`, `status`, `category` and
+  `push_age_ms`. The call token authorizes them, as for every other report
+  (up to 6 hours expired).
+- `CALL_MISSED` is written by the server's own paths: the caller's socket
+  going (recorded as `cancelled`) or the watchdog after 55 s (`missed`). A
+  caller whose app died mid-ring still leaves the callee a missed call.
+- The watchdog puts a room it failed to settle back in the ringing index, up
+  to three more times, 5 s apart (`CALL_WATCHDOG_RETRY`, then
+  `CALL_WATCHDOG_GAVE_UP`). It remembers a result it already claimed, so the
+  card is written once.
+- A failed VoIP push logs the exception type, the room and the token's
+  fingerprint, never the exception's text.
+
+**App:**
+
+- Each try at `/alerted` (`ApiService.postCallAlerted`) says its number,
+  what rang the phone, why the try before failed, and how long FCM took to
+  bring the push (`fcmSentAt`, from FCM's sentTime). Failures are
+  `http_<status>`, `timeout` or `network`.
+- When no try got through and the call still rings here, the phone sends
+  one `CALL_ALERT_FAILED`. A ring it refused sends one `CALL_RING_BLOCKED`,
+  once per call and reason. Each report is one try with a 5 s limit, sent
+  after the ring decision, never before. The call token is not stored for a
+  later try: the only tokens the phone keeps are its session's (AGENTS.md).
+- The sweep's acknowledgement keeps trying after 2 s and 5 s, as a push's
+  does.
+- The background handler registers the isolate's plugins, then runs
+  Firebase's start and the push's handling each in its own try
+  (`handleBackgroundPush` in `main.dart`). A failed Firebase start no longer
+  stops the ring.
+- The acknowledgement carries no access token, so an expired session cannot
+  stop it. This was already so; it is now tested.
+
+## Reading a call in Railway's log
+
+Search for the room id. A call that rang and was answered:
+
+```
+CALL_INITIATED → [calls] CALL_PUSH_ACCEPTED user=<callee>
+  → CALLEE_ALERTED delivery_source=background attempt=1 push_age_ms=…
+  → CALL_ANSWERED via=answer → CALL_CONNECTED (one per side) → CALL_ENDED
+```
+
+| Last line from the callee | Meaning |
+|---|---|
+| `CALL_PUSH_ACCEPTED` and nothing after | The push never reached the app, or reached a build without these reports (before this change) or one talking to Render. Check the phone. |
+| `CALL_RING_BLOCKED reason=…` | The push arrived and the phone would not ring, for that reason. |
+| `CALL_ALERT_FAILED category=…` | It rang; no acknowledgement got through. The caller saw "Calling…". |
+| `CALL_ALERT_REJECTED status=401 reason=token_expired` | The push was held back longer than the call token lives (5 min). |
+| `CALL_NO_ANSWER callee_alerted=false` | No phone of theirs ever said it rang. |
+
+## Verification
+
+Backend: `tests/test_incoming_call_alerts.py`, and one new test in
+`tests/test_call_push_and_teardown.py`. App:
+`test/incoming_call_alert_reliability_test.dart`, and
+`test/push_delivery_test.dart` (updated). CI results are in the PR.
+
+Not device-verified. No phone was used for this change. On two Android
+phones, A calling B, both on a build from this change, with Railway's log
+open:
+
+1. B's app in front. B rings, and A goes from Calling… to Ringing… within a
+   second or two of it. Log: `CALLEE_ALERTED delivery_source=foreground`.
+2. B's app in the background (home screen): the same, with
+   `delivery_source=background`.
+3. B's app swiped away: the same, `delivery_source=background`.
+4. B locked with the screen off for 10 minutes or more (Doze): B rings. The
+   log shows `attempt` and `push_age_ms`.
+5. B with BROKA's notifications off: B does not ring, A stays on Calling….
+   Log: `CALL_RING_BLOCKED reason=notifications_disabled`.
+6. B on another call: `CALL_RING_BLOCKED reason=on_another_call`.
+7. B in airplane mode; A calls and hangs up after 20 s; B comes back online
+   2 minutes later. B does not ring for the old call, and has a missed-call
+   card and notification. Log: `CALL_MISSED`.
+8. B answers: A goes from Ringing… to Connecting… only once B presses
+   Accept. Log: `CALL_ANSWERED`, then `CALL_CONNECTED` twice.
+9. A force-stops BROKA while B rings: B's ring stops and B has a missed call
+   (`CALL_MISSED outcome=cancelled`).
+10. B's app in front, so the push and the sweep both find the call: one
+    notification, one ring.

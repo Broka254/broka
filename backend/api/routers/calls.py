@@ -30,7 +30,7 @@ import os
 import logging
 import re
 import secrets
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -570,9 +570,14 @@ async def _send_fcm(
                 configured=True, error_code="NO_MESSAGE_ID",
             )
         if route == "incoming_call":
+            # Firebase took it for this phone - not that the phone has it,
+            # or rang: CALLEE_ALERTED is that (2026-11-15). The room is the
+            # call's correlation id; the user, whose phone it is.
             logger.info(
-                "[calls] CALL_PUSH_ACCEPTED room=%s token=%s message_id=%s",
+                "[calls] CALL_PUSH_ACCEPTED room=%s token=%s message_id=%s user=%s "
+                "correlation_id=%s source=fcm ts=%s",
                 room, push_devices.token_fingerprint(token), message_id,
+                push_devices.current_push_user.get() or "-", room, call_events.utc_now(),
             )
         else:
             logger.debug("[calls] FCM_ACCEPTED route=%s room=%s token=%s message_id=%s",
@@ -670,12 +675,17 @@ async def _send_voip_push(token: str, data: dict) -> bool:
                 json={k: str(v) for k, v in data.items()},
             )
         if resp.status_code == 200:
-            logger.info("[calls] VOIP_PUSH_SENT room=%s", data.get("roomId"))
+            logger.info("[calls] VOIP_PUSH_SENT room=%s token=%s", data.get("roomId"),
+                        push_devices.token_fingerprint(token))
             return True
-        logger.warning("[calls] VoIP push rejected status=%s", resp.status_code)
+        logger.warning("[calls] VoIP push rejected status=%s room=%s token=%s",
+                       resp.status_code, data.get("roomId"), push_devices.token_fingerprint(token))
         return False
     except Exception as e:
-        logger.warning("[calls] VoIP push failed (%s): %s", type(e).__name__, e)
+        # The type only: httpx's text for a failed request names its URL,
+        # and the URL is the device token (/3/device/<token>).
+        logger.warning("[calls] VoIP push failed type=%s room=%s token=%s",
+                       type(e).__name__, data.get("roomId"), push_devices.token_fingerprint(token))
         return False
 
 
@@ -708,6 +718,70 @@ class CallAlertedRequest(BaseModel):
     # then, and renewing it from a background isolate would race the app's
     # own renewal for the same refresh token.
     call_token: str = Field(..., min_length=1, max_length=2048)
+
+
+class CallAlertReport(CallAlertedRequest):
+    """POST /calls/{room}/alerted: the call token, and what the phone says
+    about this attempt - for the log only (2026-11-15). A call whose push
+    FCM accepted left Railway's log with nothing at all from the callee's
+    phone: a push that never reached it, a ring the phone refused and an
+    acknowledgement that kept failing all looked the same. Every field is
+    optional, loosely typed and cleaned here; none can refuse the request.
+
+      attempt         which try this is (1 = the first)
+      handler         what rang the phone: background (FCM, app closed or
+                      in the background), foreground (FCM, app in front) or
+                      poller (the app's own sweep)
+      previous_error  why the try before this one failed (timeout, network,
+                      http_503...)
+      push_age_ms     how long the push took to reach the phone, by its clock
+    """
+    attempt: Any = None
+    handler: Any = None
+    previous_error: Any = None
+    push_age_ms: Any = None
+
+
+_REPORT_WORD = re.compile(r"[^A-Za-z0-9_.:\-]")
+
+
+def _alert_report(payload: CallAlertReport) -> dict:
+    """CallAlertReport's fields, safe for a log line: small numbers and
+    words of the phone's own characters, or nothing."""
+    def number(value, limit: int):
+        if isinstance(value, bool):
+            return None
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            return None
+        return n if 0 <= n <= limit else None
+
+    def word(value):
+        if not isinstance(value, str):
+            return None
+        return _REPORT_WORD.sub("", value)[:40] or None
+
+    return {
+        "attempt": number(payload.attempt, 1000),
+        "delivery_source": word(payload.handler),
+        "previous_error": word(payload.previous_error),
+        "push_age_ms": number(payload.push_age_ms, 7 * 24 * 3600 * 1000),
+    }
+
+
+def _alert_rejected(room_id: str, status: int, reason: str, *, user: Optional[str] = None,
+                    role: Optional[str] = None, call_state: Optional[str] = None,
+                    **report) -> None:
+    """One line per refused acknowledgement: which call, why, what the phone
+    answered - the failed attempts the caller's "Calling…" could only
+    guess at. Never the token."""
+    call_events.emit(
+        "CALL_ALERT_REJECTED", room=call_events.clean(room_id), role=role or "unknown",
+        user=user, level=logging.WARNING, call_state=call_state, reason=reason,
+        status=status, **report,
+    )
+
 
 class InitiateCallRequest(BaseModel):
     # Exactly one thread: a product's negotiation thread or a store-general
@@ -1116,7 +1190,10 @@ async def initiate_call(
         "[calls] CALL_INITIATED instance=%s room=%s caller=%s callee=%s type=%s",
         INSTANCE_ID, room_id, current["id"], callee.id, payload.call_type,
     )
-    logger.info("[calls] CALL_RINGING room=%s", room_id)
+    # The server's state, not a phone: it read CALL_RINGING, which looked
+    # like evidence that the callee's phone rang (2026-11-15). Only
+    # CALLEE_ALERTED (POST /alerted) says that.
+    logger.info("[calls] CALL_SESSION_RINGING room=%s", room_id)
 
     fcm_tokens = await push_devices.tokens_for(db, callee.id, "fcm")
     voip_tokens = await push_devices.tokens_for(db, callee.id, "apns_voip")
@@ -1346,43 +1423,65 @@ async def get_call_token(
 
 
 @router.post("/{room_id}/alerted")
-async def call_alerted(room_id: str, payload: CallAlertedRequest):
+async def call_alerted(room_id: str, payload: CallAlertReport):
     """A phone of the callee's is ringing with this call.
 
     What turns the caller's "Calling..." into "Ringing...", as WhatsApp
     does. The caller's screen used to decide that from the callee's
     presence instead - "They were last seen offline - they may not pick
     up" - which said nothing about whether their phone had the call: a
-    closed app is "offline" and rings perfectly well from a push.
+    closed app is "offline" and rings perfectly well from a push. Nor is
+    FCM accepting the push proof of anything: CALL_PUSH_ACCEPTED says
+    Firebase took it, and only this request says a phone rang.
 
     Authorized by the callee's room-scoped call token rather than an access
-    token: the phone sends this from a closed app, straight from the push.
-    A call that is already over answers 410, so a push that arrived late
-    stops ringing at once.
+    token: the phone sends this from a closed app, straight from the push,
+    and an expired access token must not stop it. A call that is already
+    over answers 410, so a push that arrived late stops ringing at once.
+
+    Every refusal is logged (CALL_ALERT_REJECTED, with the status and why)
+    and the first acknowledgement as CALLEE_ALERTED, with what the phone
+    says about its attempt (CallAlertReport) - the caller is told only
+    after it.
     """
+    report = _alert_report(payload)
     claims = decode_call_token(payload.call_token)
     if not claims or claims.get("room_id") != room_id:
+        if claims:
+            reason = "wrong_room"
+        elif decode_call_token_for_report(payload.call_token,
+                                          grace_seconds=CALL_EVENTS_TOKEN_GRACE_SECONDS):
+            # Genuine, but past its five minutes: a push held back that long.
+            reason = "token_expired"
+        else:
+            reason = "invalid_token"
+        _alert_rejected(room_id, 401, reason, **report)
         raise HTTPException(status_code=401, detail="Invalid call token")
+    uid = claims.get("sub")
     session = await call_state.get_session(room_id)
     if session is None:
+        _alert_rejected(room_id, 404, "call_gone", user=uid, **report)
         raise HTTPException(status_code=404, detail="Call not found or no longer active")
-    if claims.get("sub") != session.callee_id:
+    if uid != session.callee_id:
+        _alert_rejected(room_id, 403, "not_callee", user=uid, role=role_of(session, uid),
+                        call_state=session.state.value, **report)
         raise HTTPException(status_code=403, detail="Only the person called can report ringing")
     # Decided by the write itself, not by the read above: the read can be
     # of a call that a hang-up ends a moment later (2026-11-14).
     alert = await call_state.mark_callee_alerted(room_id)
     if alert.session is None:
+        _alert_rejected(room_id, 404, "call_gone", user=uid, **report)
         raise HTTPException(status_code=404, detail="Call not found or no longer active")
     if not alert.ringing:
-        # Answered (on this phone or another), declined, missed or ended.
-        call_events.emit("CALL_RINGING_REJECTED", room=room_id, role="callee",
-                         user=session.callee_id, call_state=alert.session.state.value,
-                         reason="not_ringing")
+        # Answered (on this phone or another), declined, missed or ended:
+        # a late push, which must not bring the call back (2026-11-14).
+        _alert_rejected(room_id, 410, "not_ringing", user=uid, role="callee",
+                        call_state=alert.session.state.value, **report)
         raise HTTPException(status_code=410, detail="This call is no longer ringing")
     if alert.first:
-        logger.info("[calls] CALLEE_ALERTED room=%s", room_id)
-        call_events.emit("CALL_RINGING", room=room_id, role="callee", user=session.callee_id,
-                         call_state=alert.session.state.value)
+        call_events.emit("CALLEE_ALERTED", room=room_id, role="callee", user=session.callee_id,
+                         call_state=alert.session.state.value, **report)
+        # Only now: "Ringing" on the caller's screen is this phone's word.
         await _tell_caller_ringing(room_id, session.caller_id)
     return {"status": "ringing"}
 
@@ -1440,16 +1539,17 @@ async def call_answered(room_id: str, payload: CallAlertedRequest):
         # The same Accept again (a retry, a second tap, the notification and
         # the screen both), or answered on another phone: nothing more to tell.
         return {"status": "answered"}
-    logger.info("[calls] CALL_ANSWERED instance=%s room=%s", INSTANCE_ID, room_id)
     # Whether the caller is in the room yet says, at a glance, whether
     # the call that follows can connect (2026-11-13: it was not).
     try:
         caller_present = session.caller_id in await signaling_hub.distributed_peers(room_id)
     except Exception:
         caller_present = None
-    call_events.emit("CALL_ACCEPTED", room=room_id, role="callee", user=session.callee_id,
+    # The recipient accepted: from here, and only from here, the caller's
+    # screen says "Connecting…" (callee_answered).
+    call_events.emit("CALL_ANSWERED", room=room_id, role="callee", user=session.callee_id,
                      call_state=answer.session.state.value, via="answer",
-                     caller_in_room=caller_present)
+                     caller_in_room=caller_present, instance=INSTANCE_ID)
     # The caller stops waiting for an answer now. Their screen hung up
     # after 45 seconds unless the callee's socket had joined - and a
     # callee answering from a closed app needs that long and more to
@@ -2044,6 +2144,20 @@ async def _conclude(session, outcome: str, *, logged_by: Optional[str],
         other = session.callee_id if logged_by == session.caller_id else session.caller_id
         await _send_to_user(session.room_id, other, {"type": "hangup", "reason": "failed"})
 
+    if outcome == "missed":
+        # Nobody answered before the ring ran out - the server's watchdog,
+        # or a phone's own ring timer (log-result). callee_alerted says
+        # whether any phone of theirs ever said it rang: false is a push
+        # that FCM accepted and no phone acted on (2026-11-15).
+        call_events.emit(
+            "CALL_NO_ANSWER", room=session.room_id,
+            role=role_of(session, logged_by) if logged_by else "server", user=logged_by,
+            call_state=session.state.value, reason="ring_timeout",
+            callee=session.callee_id, callee_alerted=bool(session.callee_alerted),
+            reported_by="server" if logged_by is None else role_of(session, logged_by),
+            call_type=session.call_type,
+        )
+
     # The one record of how the call ended, with the definitions the call
     # history uses - so the logs and the history count the same calls -
     # and how far it got (call_events.stage_of).
@@ -2154,7 +2268,7 @@ async def _write_call_card(db: AsyncSession, session, listing, outcome: str, *,
         # the caller gave up first. Never a reason to fail the request.
         try:
             await _push_missed_call(
-                db, session, listing, buyer_id, call_msg.id, store=store)
+                db, session, listing, buyer_id, call_msg.id, store=store, outcome=outcome)
         except Exception as exc:
             logger.warning("[calls] missed-call push failed room=%s: %s", session.room_id, exc)
     elif outcome == "declined":
@@ -2252,7 +2366,7 @@ MISSED_CALL_PUSH_TTL_SECONDS = 24 * 3600
 
 async def _push_missed_call(
     db: AsyncSession, session, listing, buyer_id: str,
-    card_id: Optional[str] = None, store=None,
+    card_id: Optional[str] = None, store=None, outcome: str = "missed",
 ) -> None:
     """Tell the callee, by push, that they missed a call.
 
@@ -2277,7 +2391,7 @@ async def _push_missed_call(
     photo = await _photo_of(db, session.caller_id) or ""
     tokens = await push_devices.tokens_for(db, session.callee_id)
     await _release(db)
-    await push_devices.push_user(
+    accepted = await push_devices.push_user(
         session.callee_id, tokens=tokens,
         title=f"Missed {'video ' if is_video else ''}call from {who}",
         body=f"About: {thread_name}",
@@ -2304,6 +2418,18 @@ async def _push_missed_call(
         # own (NotificationService.missedCallTag), on its Messages channel.
         android_tag=f"missed_{notification_thread}_{buyer_id}",
         android_channel_id="broka_messages",
+    )
+    # The callee has a missed call on record: its card in the chat (whose id
+    # this names) and the push. Written from the server's own paths - the
+    # caller's socket leaving, the watchdog - so a caller's app that died
+    # mid-ring still leaves one. push_accepted is FCM's word, not delivery.
+    call_events.emit(
+        "CALL_MISSED", room=session.room_id, role="callee", user=session.callee_id,
+        call_state=getattr(getattr(session, "state", None), "value", None),
+        outcome=outcome, card_message_id=card_id,
+        callee_alerted=bool(getattr(session, "callee_alerted", False)),
+        tokens=len(tokens or ()), push_accepted=accepted, delivery_source="fcm",
+        call_type=session.call_type,
     )
 
 
@@ -2677,8 +2803,11 @@ async def _signaling(
                 await call_state.update_state(room_id, CallState.accepted)
             logger.info("[calls] CALL_ACCEPTED instance=%s room=%s user=%s conn=%s", INSTANCE_ID, room_id, uid, connection_id)
             if answered_here:
-                call_events.emit("CALL_ACCEPTED", room=room_id, role=role, user=uid,
-                                 call_state="accepted", ws="open", via="join")
+                # Answered by joining: an app without POST /answer, or one
+                # whose Accept request was lost.
+                call_events.emit("CALL_ANSWERED", room=room_id, role=role, user=uid,
+                                 call_state="accepted", ws="open", via="join",
+                                 instance=INSTANCE_ID)
     # Server-authored: the phone knows at once that its socket is up end to
     # end. A callee alone in the room otherwise heard nothing until the
     # first heartbeat ping, 15 seconds on - its reconnect budget and its
@@ -2941,19 +3070,28 @@ async def _signaling(
             if msg_type == "state":
                 reported = msg.get("state")
                 if reported in ("connected", "disconnected", "failed"):
+                    first_up = reported == "connected" and not seen_up
                     if reported == "connected":
                         seen_up = True
                         await _leave_accepted(room_id)
                     updated = await call_state.update_state(room_id, CallState(reported))
                     logger.info("[calls] WEBRTC_%s room=%s user=%s",
                                 reported.upper(), room_id, uid)
+                    since_join_ms = int((asyncio.get_running_loop().time() - joined_at) * 1000)
                     call_events.emit(
                         f"WEBRTC_{reported.upper()}", room=room_id, role=role, user=uid,
                         level=logging.WARNING if reported == "failed" else logging.INFO,
                         call_state=updated.state.value if updated else None,
-                        ws="open", pc=reported,
-                        since_join_ms=int((asyncio.get_running_loop().time() - joined_at) * 1000),
+                        ws="open", pc=reported, since_join_ms=since_join_ms,
                     )
+                    if first_up and updated is not None and updated.state == CallState.connected:
+                        # The call is through, as this side's phone saw it -
+                        # once per side, the first time its connection is up.
+                        call_events.emit(
+                            "CALL_CONNECTED", room=room_id, role=role, user=uid,
+                            call_state=updated.state.value, ws="open", pc="connected",
+                            since_join_ms=since_join_ms, call_type=session.call_type,
+                        )
                 continue
 
             if msg_type not in WS_RELAYABLE_TYPES:
@@ -3252,8 +3390,10 @@ async def _standby_accepted(room_id: str, uid: str, connection_id: str,
             return False
         logger.info("[calls] CALL_ACCEPTED instance=%s room=%s user=%s conn=%s (on the socket it rang on)", INSTANCE_ID, room_id, uid, connection_id)
         if answer.first:
-            call_events.emit("CALL_ACCEPTED", room=room_id, role="callee", user=uid,
-                             call_state="accepted", ws="open", via="ringing_socket")
+            # The recipient accepted, as through POST /answer (CALL_ANSWERED).
+            call_events.emit("CALL_ANSWERED", room=room_id, role="callee", user=uid,
+                             call_state="accepted", ws="open", via="ringing_socket",
+                             instance=INSTANCE_ID)
             _spawn(_push_ring_over(current))
     await call_state.note(room_id, callee_joined=True)
     await signaling_hub.register(room_id, uid, connection_id, standby=False, peer=peer)
@@ -3302,31 +3442,78 @@ async def ring_watchdog_tick(now: Optional[float] = None) -> int:
     """
     settled = 0
     for room_id in await call_state.pop_due_ringing(now):
+        # A room this process already moved to missed (or claimed) and then
+        # failed on: its missed call is still to be recorded, below.
+        retrying = room_id in _watchdog_retries
+        claimed_here = room_id in _watchdog_claimed
         try:
             session = await call_state.get_session(room_id)
             if session is None:
+                _watchdog_forget(room_id)
                 continue
             # `expired` is how get_session reports a session that outlived
             # its TTL still ringing - unanswered all the same.
-            if session.state not in (CallState.initiating, CallState.ringing, CallState.expired):
+            due = (CallState.initiating, CallState.ringing, CallState.expired)
+            if session.state not in due and not (retrying and session.state == CallState.missed):
+                _watchdog_forget(room_id)
                 continue
-            if session.state != CallState.expired:
+            if session.state in (CallState.initiating, CallState.ringing):
                 # Missed now, in one step - and only if it still rings: an
                 # Accept or a hang-up landing this instant is never
                 # overwritten, and settles the call its own way.
                 moved = await call_state.transition(room_id, CallState.missed,
                                                     only_from=_UNANSWERED_STATES)
                 if not moved.applied:
+                    _watchdog_forget(room_id)
                     continue
                 session = moved.session
                 await _discard_signals(room_id, session)
-            if not await call_state.mark_result_logged(room_id):
-                continue
+            # The claim decides who records it: the caller's own hang-up or
+            # log-result may have, since a failed try here.
+            if not claimed_here:
+                if not await call_state.mark_result_logged(room_id):
+                    _watchdog_forget(room_id)
+                    continue
+                _watchdog_claimed.add(room_id)
             await _conclude_and_record(session, "missed", logged_by=None)
+            _watchdog_forget(room_id)
             settled += 1
         except Exception as exc:
-            logger.warning("[calls] ring watchdog failed room=%s: %s", room_id, exc)
+            # The room left the ringing index when it was popped: not put
+            # back, nothing would ever record this missed call - no card, no
+            # missed-call push - for a caller whose app died mid-ring.
+            attempt = _watchdog_retries.get(room_id, 0) + 1
+            if attempt > RING_WATCHDOG_RETRIES:
+                _watchdog_forget(room_id)
+                logger.error("[calls] CALL_WATCHDOG_GAVE_UP room=%s attempts=%d err=%s",
+                             room_id, attempt - 1, type(exc).__name__)
+                continue
+            _watchdog_retries[room_id] = attempt
+            logger.warning("[calls] CALL_WATCHDOG_RETRY room=%s attempt=%d err=%s",
+                           room_id, attempt, type(exc).__name__)
+            try:
+                await call_state.add_ringing(
+                    room_id, (_time_now() if now is None else now) + RING_WATCHDOG_RETRY_SECONDS)
+            except Exception as again:
+                _watchdog_forget(room_id)
+                logger.error("[calls] CALL_WATCHDOG_GAVE_UP room=%s err=%s",
+                             room_id, type(again).__name__)
     return settled
+
+
+# Rooms the watchdog failed to settle and put back in the ringing index, by
+# how many times, and those of them whose result it had already claimed. A
+# transient failure (Redis or the database refusing for a moment) is tried
+# again a few seconds on, a few times.
+_watchdog_retries: Dict[str, int] = {}
+_watchdog_claimed: set = set()
+RING_WATCHDOG_RETRIES = 3
+RING_WATCHDOG_RETRY_SECONDS = 5
+
+
+def _watchdog_forget(room_id: str) -> None:
+    _watchdog_retries.pop(room_id, None)
+    _watchdog_claimed.discard(room_id)
 
 
 RING_WATCHDOG_INTERVAL_SECONDS = 5

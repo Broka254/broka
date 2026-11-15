@@ -16,6 +16,7 @@ import '../features/auctions/domain/models/auction.dart' show BidRejection;
 import '../core/network/api_client.dart';
 import '../core/cache/screen_cache.dart';
 import '../core/legal/legal_documents.dart';
+import '../utils/backend_time.dart';
 import 'last_screen_tracker.dart';
 import 'sell_draft_store.dart';
 
@@ -1393,11 +1394,16 @@ class ApiService {
   /// closed app whose own has usually expired, and renewing it there races
   /// the app's renewal. ("This phone has it" is [notificationDelivered].)
   /// Answers the status code, or null when the server could not be reached.
+  ///
+  /// [messageId] is the message the push announced: the read covers it and
+  /// what came before, not whatever arrived after the notification was
+  /// drawn (2026-11-15). Without one the server reads up to now.
   static Future<int?> notificationAction(
     String action,
     String threadToken, {
     String? content,
     String? clientMsgId,
+    String? messageId,
   }) async {
     if (threadToken.isEmpty) return null;
     try {
@@ -1408,6 +1414,7 @@ class ApiService {
           'thread_token': threadToken,
           if (content != null) 'content': content,
           if (clientMsgId != null) 'client_msg_id': clientMsgId,
+          if (messageId != null && messageId.isNotEmpty) 'message_id': messageId,
         }),
       ).timeout(const Duration(seconds: 15));
       if (res.statusCode != 200) {
@@ -1516,8 +1523,10 @@ class ApiService {
     }
   }
 
-  static Future<void> markStoreRead(String storeId, {String? buyerId}) async {
-    return markThreadRead(null, storeId: storeId, buyerId: buyerId);
+  static Future<void> markStoreRead(String storeId,
+      {String? buyerId, String? upToMessageId}) async {
+    return markThreadRead(null,
+        storeId: storeId, buyerId: buyerId, upToMessageId: upToMessageId);
   }
 
   static Future<Map<String, DateTime?>?> getStoreReadStatus(
@@ -1635,8 +1644,12 @@ class ApiService {
     }
   }
 
+  /// "I've read this thread up to [upToMessageId]" - the newest of the other
+  /// side's messages on screen (2026-11-15). The server reads that message
+  /// and everything before it, and nothing that reached it after the
+  /// screen last loaded; without one it reads up to now, as it always did.
   static Future<void> markThreadRead(String? listingId,
-      {String? storeId, String? buyerId}) async {
+      {String? storeId, String? buyerId, String? upToMessageId}) async {
     _requireExactlyOneThread(listingId, storeId);
     try {
       final path = storeId != null && storeId.isNotEmpty
@@ -1645,7 +1658,11 @@ class ApiService {
       await _sendAuthed(() => http.post(
         Uri.parse('$baseUrl$path'),
         headers: _headers,
-        body: jsonEncode({if (buyerId != null) 'buyer_id': buyerId}),
+        body: jsonEncode({
+          if (buyerId != null) 'buyer_id': buyerId,
+          if (upToMessageId != null && upToMessageId.isNotEmpty)
+            'up_to_message_id': upToMessageId,
+        }),
       ).timeout(const Duration(seconds: 10)));
     } catch (_) {}
   }
@@ -1679,9 +1696,10 @@ class ApiService {
           // Watermarks arrive as UTC ISO strings with a trailing Z, and so
           // does message.created_at, so both parse to absolute instants and
           // isBefore/isAfter compare them correctly whatever the device's
-          // timezone. toLocal() here is purely so anything that later
-          // formats one of these for display doesn't have to remember to.
-          return v is String ? DateTime.tryParse(v)?.toLocal() : null;
+          // timezone - and one without its Z is still UTC (parseBackendUtc).
+          // toLocal() here is purely so anything that later formats one of
+          // these for display doesn't have to remember to.
+          return v is String ? parseBackendUtc(v)?.toLocal() : null;
         }
         return {
           'buyer_last_read':       at('buyer_last_read'),
@@ -2306,27 +2324,72 @@ class ApiService {
   /// [CallAlertResult.over] means the call already ended: the push arrived
   /// late, and whatever is ringing should stop.
   static Future<CallAlertResult> reportCallAlerted(
-      String roomId, String callToken) async {
-    if (roomId.isEmpty || callToken.isEmpty) return CallAlertResult.unknown;
+          String roomId, String callToken) async =>
+      (await postCallAlerted(roomId, callToken)).result;
+
+  /// [reportCallAlerted], saying why an unconfirmed try was not confirmed -
+  /// and telling the server which try this is ([attempt]), what rang the
+  /// phone ([handler]: background, foreground or poller), why the try
+  /// before it failed ([previousError]) and how old the push was
+  /// ([pushAgeMs]). The server logs them with the acknowledgement
+  /// (CALLEE_ALERTED) or its refusal (CALL_ALERT_REJECTED), so a phone
+  /// that needed four tries shows as one in Railway's log rather than as
+  /// nothing at all; its answer never depends on them. The call token
+  /// alone authorizes it: no access token is sent, and an expired one can
+  /// not stop it.
+  static Future<CallAlertAttempt> postCallAlerted(
+    String roomId,
+    String callToken, {
+    int attempt = 1,
+    String? handler,
+    String? previousError,
+    int? pushAgeMs,
+  }) async {
+    if (roomId.isEmpty) {
+      return const CallAlertAttempt(CallAlertResult.unknown, category: 'room_missing');
+    }
+    if (callToken.isEmpty) {
+      return const CallAlertAttempt(CallAlertResult.unknown, category: 'token_missing');
+    }
     try {
       final res = await http
           .post(
             Uri.parse('$baseUrl/calls/${Uri.encodeComponent(roomId)}/alerted'),
             headers: const {'Content-Type': 'application/json'},
-            body: jsonEncode({'call_token': callToken}),
+            body: jsonEncode({
+              'call_token': callToken,
+              'attempt': attempt,
+              if (handler != null) 'handler': handler,
+              if (previousError != null) 'previous_error': previousError,
+              if (pushAgeMs != null) 'push_age_ms': pushAgeMs,
+            }),
           )
           .timeout(const Duration(seconds: 8));
-      if (res.statusCode == 200) return CallAlertResult.ringing;
-      if (res.statusCode == 404 || res.statusCode == 410) {
-        return CallAlertResult.over;
+      if (res.statusCode == 200) {
+        return CallAlertAttempt(CallAlertResult.ringing, status: res.statusCode);
       }
-      debugPrint('[Push] call-alert rejected: HTTP ${res.statusCode}');
+      if (res.statusCode == 404 || res.statusCode == 410) {
+        return CallAlertAttempt(CallAlertResult.over, status: res.statusCode);
+      }
+      return _alertFailed(roomId, attempt, handler, res.statusCode, 'http_${res.statusCode}');
+    } on TimeoutException {
+      return _alertFailed(roomId, attempt, handler, null, 'timeout');
+    } on http.ClientException {
+      // No connection, DNS, a reset: the server never answered.
+      return _alertFailed(roomId, attempt, handler, null, 'network');
     } catch (e) {
-      // Distinguishes an unreachable server (retry next sweep) from an
-      // answer; the caller of this treats both as "unconfirmed".
-      debugPrint('[Push] call-alert failed: ${e.runtimeType}');
+      return _alertFailed(roomId, attempt, handler, null, 'error_${e.runtimeType}');
     }
-    return CallAlertResult.unknown;
+  }
+
+  /// One unconfirmed try, in the log - by room, with the status and why
+  /// (logcat here; the server hears of it with the next try, or from
+  /// NotificationService's CALL_ALERT_FAILED report). Never the token.
+  static CallAlertAttempt _alertFailed(
+      String roomId, int attempt, String? handler, int? status, String category) {
+    debugPrint('[Push] CALL_ALERT_FAILED room=$roomId attempt=$attempt '
+        'status=${status ?? '-'} category=$category handler=${handler ?? '-'}');
+    return CallAlertAttempt(CallAlertResult.unknown, status: status, category: category);
   }
 
   /// Tell the server the callee answered [roomId] - the moment Accept is
@@ -2524,25 +2587,31 @@ class ApiService {
   }
 
   /// A call's diagnostics that could not go over its socket, posted as the
-  /// call ends (POST /calls/{room}/events - see call_diagnostics.dart).
-  /// Fire-and-forget: a lost report never touches the call.
-  static Future<void> postCallEvents(
-      String roomId, String callToken, List<Map<String, dynamic>> events) async {
-    if (roomId.isEmpty || callToken.isEmpty || events.isEmpty) return;
+  /// call ends (POST /calls/{room}/events - see call_diagnostics.dart), and
+  /// what the callee's phone did with an incoming-call push
+  /// (NotificationService's CALL_RING_BLOCKED / CALL_ALERT_FAILED).
+  /// Fire-and-forget: a lost report never touches the call. True when
+  /// every batch was taken.
+  static Future<bool> postCallEvents(
+      String roomId, String callToken, List<Map<String, dynamic>> events,
+      {Duration timeout = const Duration(seconds: 8)}) async {
+    if (roomId.isEmpty || callToken.isEmpty || events.isEmpty) return false;
     for (var i = 0; i < events.length; i += 120) {
       final batch = events.sublist(i, i + 120 > events.length ? events.length : i + 120);
       try {
-        await http
+        final res = await http
             .post(
               Uri.parse('$baseUrl/calls/${Uri.encodeComponent(roomId)}/events'),
               headers: const {'Content-Type': 'application/json'},
               body: jsonEncode({'call_token': callToken, 'events': batch}),
             )
-            .timeout(const Duration(seconds: 8));
+            .timeout(timeout);
+        if (res.statusCode != 200) return false;
       } catch (_) {
-        return;
+        return false;
       }
     }
+    return true;
   }
 
   /// Record a call's outcome ("completed" | "missed" | "declined") so both
@@ -3100,4 +3169,20 @@ enum CallAlertResult {
 
   /// No answer from the server - assume it is still ringing.
   unknown,
+}
+
+/// One try at POST /calls/{room}/alerted (ApiService.postCallAlerted): what
+/// the server said, and - when it said nothing useful - why, for the logs
+/// and for the next try to report (2026-11-15).
+class CallAlertAttempt {
+  const CallAlertAttempt(this.result, {this.status, this.category});
+
+  final CallAlertResult result;
+
+  /// The HTTP status, or null when no response came back.
+  final int? status;
+
+  /// Why it was not confirmed: timeout, network, http_<status>, or
+  /// token_missing. Null when it was.
+  final String? category;
 }

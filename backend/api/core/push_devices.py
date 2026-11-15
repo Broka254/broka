@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+from contextvars import ContextVar
 from datetime import datetime
 from typing import Awaitable, Callable, Optional
 
@@ -35,6 +36,11 @@ from api.models.push_device import PushDevice
 logger = logging.getLogger(__name__)
 
 KINDS = ("fcm", "apns_voip")
+
+# Whose phones push_user is pushing to, for the sender's per-phone log lines
+# (calls._send_fcm knows the token and the room, not the user). Set around
+# the sends only; never a token.
+current_push_user: ContextVar[Optional[str]] = ContextVar("current_push_user", default=None)
 
 # Phones kept per user and kind. A token that is never reported dead (the
 # app was uninstalled on a phone that never came back online) would
@@ -371,10 +377,16 @@ async def push_user(
                            user_id, token_fingerprint(token), type(exc).__name__)
             return data
 
-    results = await asyncio.gather(
-        *(sender(token=t, title=title, body=body, data=_data(t), **send_kwargs) for t in tokens),
-        return_exceptions=True,
-    )
+    # The sends are tasks: each copies this context, the user with it.
+    marker = current_push_user.set(user_id)
+    try:
+        results = await asyncio.gather(
+            *(sender(token=t, title=title, body=body, data=_data(t), **send_kwargs)
+              for t in tokens),
+            return_exceptions=True,
+        )
+    finally:
+        current_push_user.reset(marker)
     sent = 0
     for token, result in zip(tokens, results):
         if isinstance(result, BaseException):

@@ -41,12 +41,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from api.core import chat_relay, message_delivery
 from api.core.chat_files import (
     MAX_FILE_BYTES, FileRejected, accept_document, content_disposition, message_media_fields,
 )
 from api.core.image_processing import ImageRejected, process_image
 from api.core.rate_limit import chat_media_daily_limiter, chat_media_limiter
-from api.database import get_db, NegotiationMessage, Listing, User
+from api.database import get_db, NegotiationMessage, Listing, ThreadReadState, User
 from api.models.chat_file import ChatFile
 from api.security import get_current_user, decode_access_token
 
@@ -136,12 +137,12 @@ async def _send_or_drop(key: str, ws: WebSocket, payload: dict) -> None:
         pass
 
 
-async def _broadcast(key: str, payload: dict, exclude_uid: Optional[str] = None) -> None:
-    """Broadcast a JSON message to WebSocket clients in a thread, skipping
-    any connection owned by exclude_uid - normally the message's own sender,
+async def _broadcast_local(key: str, payload: dict, exclude_uid: Optional[str] = None) -> int:
+    """Send a frame to this process's sockets for a thread, skipping any
+    connection owned by exclude_uid - normally the message's own sender,
     who already sees it immediately via their own optimistic UI update and
     would otherwise get it a second time when it echoed back over the
-    socket.
+    socket. Returns how many sockets it was written to.
 
     Every socket at once, each with its own time limit. They were written
     one after another with no limit, and the message's own request waited
@@ -153,8 +154,85 @@ async def _broadcast(key: str, payload: dict, exclude_uid: Optional[str] = None)
         if exclude_uid is None or owner_uid != exclude_uid
     ]
     if not targets:
-        return
+        return 0
     await asyncio.gather(*(_send_or_drop(key, ws, payload) for ws in targets))
+    return len(targets)
+
+
+async def _broadcast(key: str, payload: dict, exclude_uid: Optional[str] = None) -> None:
+    """A frame for every open copy of the thread: the sockets in this
+    process, and through the relay the ones held by the API's other
+    processes (api/core/chat_relay.py). It used to stop at this process -
+    with two replicas, half of every thread's receipts, messages and typing
+    never reached the phone they were for (2026-11-15)."""
+    await _broadcast_local(key, payload, exclude_uid)
+    await chat_relay.relay.publish(key, payload, exclude_uid)
+
+
+# What another process relays is for this process's own sockets only.
+chat_relay.relay.set_deliver(_broadcast_local)
+
+
+def _iso_z(dt: Optional[_dt]) -> Optional[str]:
+    return (dt.isoformat() + "Z") if dt else None
+
+
+async def _current_receipt(db: AsyncSession, *, listing_id: Optional[str],
+                           store_id: Optional[str], buyer_id: str,
+                           counterpart: str) -> Optional[dict]:
+    """The other side's ticks as they stand now, as a receipt frame for a
+    socket that has just connected - or None when they have none.
+
+    A receipt goes out once, the moment the watermark moves. A sender whose
+    socket was reconnecting then (a network change, the phone waking up) or
+    whose socket another replica held before the relay existed was never
+    sent it, and this socket's history replay carried no ticks: the bubble
+    sat on Sent until the next 30-second read-status refresh, by which time
+    the message had often been read too - Sent, then Seen. Read-only: a
+    socket connecting is not anyone's delivery (see negotiate_ws)."""
+    where = (ThreadReadState.store_id == store_id) if store_id else \
+        (ThreadReadState.listing_id == listing_id)
+    row = (await db.execute(
+        select(ThreadReadState.last_delivered_at, ThreadReadState.last_read_at).where(
+            where, ThreadReadState.buyer_id == buyer_id,
+            ThreadReadState.role == counterpart,
+        )
+    )).first()
+    if row is None:
+        return None
+    delivered_at, read_at = row
+    # A row made by a delivery alone carries the epoch as its read time.
+    if read_at is not None and read_at.year <= 1970:
+        read_at = None
+    if delivered_at is None and read_at is None:
+        return None
+    return {"type": "receipt", "role": counterpart,
+            "last_delivered": _iso_z(delivered_at), "last_read": _iso_z(read_at)}
+
+
+async def _send_current_receipt(websocket, db: AsyncSession, *, listing_id: Optional[str],
+                                store_id: Optional[str], buyer_id: str,
+                                is_seller: bool) -> None:
+    """_current_receipt, sent to the socket that just connected. Never fails
+    the connection: a failed read leaves the session needing a rollback
+    before the history replay can use it."""
+    try:
+        frame = await _current_receipt(
+            db, listing_id=listing_id, store_id=store_id, buyer_id=buyer_id,
+            counterpart="buyer" if is_seller else "seller")
+    except Exception as exc:
+        logger.warning("[media-ws] current receipt failed: %s", type(exc).__name__)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        return
+    if frame is None:
+        return
+    try:
+        await websocket.send_json(frame)
+    except Exception:
+        pass
 
 
 # ── WebSocket — real-time chat ─────────────────────────────────────────────────
@@ -266,30 +344,20 @@ async def negotiate_ws(
     # "the message didn't send". Accept first, then publish.
     await websocket.accept()
     _thread_connections.setdefault(key, {})[websocket] = uid
+    # Frames the API's other processes send this thread reach this socket.
+    chat_relay.relay.ensure_listening()
     logger.info("[media-ws] %s joined thread=%s is_seller=%s", uid, key, is_seller)
 
-    # A live chat socket is the strongest delivery signal there is: this
-    # user's device is connected to this exact thread right now. Record it so
-    # the other side's ticks advance without waiting for a poll.
-    try:
-        from api.routers.negotiate import _touch_watermark
-        delivered_at = await _touch_watermark(
-            db, listing_id, effective_buyer_id,
-            "seller" if is_seller else "buyer",
-            delivered=True, read=False,
-        )
-        await broadcast_receipt(
-            listing_id, effective_buyer_id, "seller" if is_seller else "buyer",
-            exclude_uid=uid, delivered_at=delivered_at, read_at=None,
-        )
-    except Exception as exc:
-        # Never fail a chat connection over a receipt. A failed write leaves
-        # the session needing a rollback before the replay below can run.
-        logger.warning("[media-ws] delivery watermark failed: %s", exc)
-        try:
-            await db.rollback()
-        except Exception:
-            pass
+    # Connecting is not a delivery. It used to move this side's delivered
+    # watermark to "now" - before a single message had been sent down this
+    # socket, and with no per-message record - so the other side's ticks
+    # claimed messages this phone was never shown to have (2026-11-15). The
+    # app acknowledges what it holds, by id (sync/ack, the chat's own ack)
+    # or reads it (mark-read, bounded to the newest message on screen).
+    # What it is owed instead: the other side's ticks as they stand, which
+    # a receipt broadcast while this socket was away never brought it.
+    await _send_current_receipt(websocket, db, listing_id=listing_id, store_id=None,
+                                buyer_id=effective_buyer_id, is_seller=is_seller)
 
     # Send recent history on connect - none of what this person deleted
     # (thread_clears): a replay from scratch would put it all back.
@@ -661,6 +729,8 @@ async def upload_media(
     )
     if chat_file is not None:
         db.add(chat_file)
+    # MESSAGE_SAVED says how the message came in (message_delivery.SOURCE_KEY).
+    db.info.setdefault(message_delivery.SOURCE_KEY, "media_upload")
     db.add(nm)
     try:
         await db.flush()
@@ -785,10 +855,11 @@ async def broadcast_text_message(
     is_seller:  bool,
 ) -> None:
     """Called by negotiate.py after saving a text message so WS clients update
-    instantly. Excludes the sender's own connection(s) - see _broadcast."""
+    instantly. Excludes the sender's own connection(s) - see _broadcast.
+    Not only when this process holds a socket for the thread: the other
+    side's may be on another replica (_broadcast)."""
     key = _thread_key(listing_id, buyer_id)
-    if key in _thread_connections and _thread_connections[key]:
-        await _broadcast(key, _msg_to_dict(msg, uid, is_seller), exclude_uid=uid)
+    await _broadcast(key, _msg_to_dict(msg, uid, is_seller), exclude_uid=uid)
 
 
 async def broadcast_message_update(
@@ -802,39 +873,45 @@ async def broadcast_message_update(
     the edit/delete event to stop showing words that no longer exist.
     """
     key = _thread_key(listing_id, buyer_id)
-    if _thread_connections.get(key):
-        await _broadcast(key, payload)
+    await _broadcast(key, payload)
 
 
 async def broadcast_store_text_message(
     store_id: str, buyer_id: str, msg: NegotiationMessage, uid: str, is_seller: bool,
 ) -> None:
     key = _store_thread_key(store_id, buyer_id)
-    if key in _thread_connections and _thread_connections[key]:
-        await _broadcast(key, _msg_to_dict(msg, uid, is_seller), exclude_uid=uid)
+    await _broadcast(key, _msg_to_dict(msg, uid, is_seller), exclude_uid=uid)
 
 
 async def broadcast_store_message_update(store_id: str, buyer_id: str, payload: dict) -> None:
     key = _store_thread_key(store_id, buyer_id)
-    if _thread_connections.get(key):
-        await _broadcast(key, payload)
+    await _broadcast(key, payload)
+
+
+def _receipt_frame(role: str, delivered_at: Optional[_dt], read_at: Optional[_dt],
+                   message_ids: Optional[list], up_to_message_id: Optional[str]) -> dict:
+    """One side's ticks moved. `message_ids` are the server ids this receipt
+    made DELIVERED (an acknowledgement names them) and `up_to_message_id`
+    the message its watermark stops at - so a tick on the sender's phone can
+    be traced to the messages the recipient's phone acknowledged, not only
+    to a time. Left out when not known: older apps read only the times."""
+    frame = {"type": "receipt", "role": role,
+             "last_delivered": _iso_z(delivered_at), "last_read": _iso_z(read_at)}
+    if message_ids:
+        frame["message_ids"] = list(message_ids)
+    if up_to_message_id:
+        frame["up_to_message_id"] = up_to_message_id
+    return frame
 
 
 async def broadcast_store_receipt(
     store_id: str, buyer_id: str, role: str, *,
     exclude_uid: str, delivered_at: Optional[_dt], read_at: Optional[_dt],
+    message_ids: Optional[list] = None, up_to_message_id: Optional[str] = None,
 ) -> None:
     key = _store_thread_key(store_id, buyer_id)
-    if not _thread_connections.get(key):
-        return
-
-    def _iso(dt: Optional[_dt]) -> Optional[str]:
-        return (dt.isoformat() + "Z") if dt else None
-
-    await _broadcast(key, {
-        "type": "receipt", "role": role,
-        "last_delivered": _iso(delivered_at), "last_read": _iso(read_at),
-    }, exclude_uid=exclude_uid)
+    await _broadcast(key, _receipt_frame(role, delivered_at, read_at, message_ids,
+                                         up_to_message_id), exclude_uid=exclude_uid)
 
 
 @router.websocket("/ws/store/{store_id}")
@@ -877,22 +954,11 @@ async def store_ws(
     key = _store_thread_key(store_id, effective_buyer_id)
     await websocket.accept()
     _thread_connections.setdefault(key, {})[websocket] = uid
-    try:
-        from api.routers.negotiate import _touch_watermark
-        delivered_at = await _touch_watermark(
-            db, None, effective_buyer_id, "seller" if is_seller else "buyer",
-            delivered=True, read=False, store_id=store_id,
-        )
-        await broadcast_store_receipt(
-            store_id, effective_buyer_id, "seller" if is_seller else "buyer",
-            exclude_uid=uid, delivered_at=delivered_at, read_at=None,
-        )
-    except Exception as exc:
-        logger.warning("[media-ws] store delivery watermark failed: %s", exc)
-        try:
-            await db.rollback()
-        except Exception:
-            pass
+    chat_relay.relay.ensure_listening()
+    # As on the listing socket: connecting is not a delivery, and the socket
+    # is told the other side's ticks as they stand.
+    await _send_current_receipt(websocket, db, listing_id=None, store_id=store_id,
+                                buyer_id=effective_buyer_id, is_seller=is_seller)
     replay_after = _replay_since(since)
     try:
         from api.core import thread_clears
@@ -978,21 +1044,14 @@ async def broadcast_receipt(
     exclude_uid: str,
     delivered_at: Optional[_dt],
     read_at:      Optional[_dt],
+    message_ids:  Optional[list] = None,
+    up_to_message_id: Optional[str] = None,
 ) -> None:
     """Tell the thread's open sockets that [role]'s device received (and,
     with read_at, read) the thread up to these moments. The sender's chat
     turns the matching messages' ticks without waiting for its next
-    read-status poll. Not sent back to the side whose ticks these are."""
+    read-status poll. Not sent back to the side whose ticks these are.
+    Every replica's sockets, not only this one's (_broadcast)."""
     key = _thread_key(listing_id, buyer_id)
-    if not _thread_connections.get(key):
-        return
-
-    def _iso(dt: Optional[_dt]) -> Optional[str]:
-        return (dt.isoformat() + "Z") if dt else None
-
-    await _broadcast(key, {
-        "type":           "receipt",
-        "role":           role,
-        "last_delivered": _iso(delivered_at),
-        "last_read":      _iso(read_at),
-    }, exclude_uid=exclude_uid)
+    await _broadcast(key, _receipt_frame(role, delivered_at, read_at, message_ids,
+                                         up_to_message_id), exclude_uid=exclude_uid)

@@ -161,6 +161,18 @@ class ActiveCall {
     }
   }
 
+  /// Whether this phone is done with [roomId], as last saved - the
+  /// background isolate's [isSettled]. False when it cannot tell.
+  static Future<bool> savedSettled(String roomId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      return (prefs.getStringList(_settledPrefsKey) ?? const <String>[]).contains(roomId);
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Whether a call for [roomId] may ring, judged from the saved state -
   /// the background isolate's version of [shouldRing].
   static Future<bool> savedAllowsRinging(String roomId) async {

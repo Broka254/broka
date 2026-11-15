@@ -610,6 +610,14 @@ class NegotiationScreen extends StatefulWidget {
   /// False renders the constellation as one still frame - for tests.
   final bool animateBackground;
 
+  /// Opens the chat's socket. A test stands in one that never leaves the
+  /// process (test/support/fake_voice.dart's FakeSocket), to drop it and
+  /// bring it back.
+  @visibleForTesting
+  static WebSocketChannel Function(Uri uri) connectSocket = _connectSocket;
+
+  static WebSocketChannel _connectSocket(Uri uri) => WebSocketChannel.connect(uri);
+
   @override
   State<NegotiationScreen> createState() => _NegotiationScreenState();
 }
@@ -1258,7 +1266,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
 
     final WebSocketChannel ws;
     try {
-      ws = WebSocketChannel.connect(Uri.parse(url));
+      ws = NegotiationScreen.connectSocket(Uri.parse(url));
     } catch (_) {
       _wsConnected = false;
       _scheduleReconnect();
@@ -1282,7 +1290,15 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       // socket was down comes through the history (an unchanged thread is
       // an empty 304). The socket replays only messages newer than the
       // last one this phone has.
-      if (_wsWasUp) unawaited(_pollNewMessages());
+      if (_wsWasUp) {
+        unawaited(_pollNewMessages());
+        // And the ticks. A receipt is sent once, as the other phone
+        // acknowledges, and one sent while this socket was down never
+        // arrives: the bubble sat on "Sent" until the 30-second refresh, by
+        // when the message had often been read as well - Sent, then Seen,
+        // with Delivered never shown (2026-11-15).
+        unawaited(_refreshReceipts());
+      }
       _wsWasUp = true;
     }).catchError((_) {
       // The stream's onError/onDone below reports it and reconnects.
@@ -1534,9 +1550,13 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   void _applyReceipt(Map<String, dynamic> data) {
     final other = _role == 'buyer' ? 'seller' : 'buyer';
     if (data['role'] != other) return;
+    // Naive UTC is read as UTC, as every backend time is (parseBackendUtc):
+    // tryParse alone would take a time without its "Z" for local time, and
+    // put the tick hours off. Forward only, below: a receipt older than one
+    // already applied - a frame overtaken by a newer poll - changes nothing.
     DateTime? at(String key) {
       final v = data[key];
-      return v is String ? DateTime.tryParse(v)?.toLocal() : null;
+      return v is String ? parseBackendUtc(v)?.toLocal() : null;
     }
     setState(() {
       _counterpartLastDelivered = _later(_counterpartLastDelivered, at('last_delivered'));
@@ -1900,12 +1920,40 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   Future<void> _syncReadState() async {
     if (!_hasThread) return;
     if (_onScreen) {
-      unawaited(ApiService.markThreadRead(_listing?.id,
-          storeId: _storeId, buyerId: _buyerId));
+      // Read up to the newest of their messages this screen shows - not
+      // "up to now" (2026-11-15). This runs every 30 seconds while the chat
+      // is open, and "now" covered a message the server had and this phone
+      // did not (its socket frame lost, the poll idle behind a socket that
+      // looked alive): the sender saw it go from Sent to Seen while it sat
+      // unseen on the server. Nothing of theirs on screen, nothing to read.
+      final upTo = _newestFromThemId();
+      if (upTo != null) {
+        unawaited(ApiService.markThreadRead(_listing?.id,
+            storeId: _storeId, buyerId: _buyerId, upToMessageId: upTo));
+      }
     } else {
       unawaited(_acknowledgeInbound());
     }
     await _refreshReceipts();
+  }
+
+  /// The server id of the newest message from the other side this screen
+  /// shows - what a read receipt covers (ApiService.markThreadRead's
+  /// upToMessageId) - or null when it shows none of theirs.
+  String? _newestFromThemId() {
+    final other = _role == 'buyer' ? 'seller' : 'buyer';
+    ChatMessage? newest;
+    for (final m in _messages) {
+      if (m.id.isEmpty || m.role != other || m.isBroker || m.viaAi) continue;
+      final best = newest?.createdAt;
+      final at = m.createdAt;
+      // In time order already; a message with no time is taken as the
+      // newest only when nothing with a time came before it.
+      if (newest == null || (at != null && (best == null || !at.isBefore(best)))) {
+        newest = m;
+      }
+    }
+    return newest?.id;
   }
 
   /// This screen holds the other side's messages but nobody is looking at

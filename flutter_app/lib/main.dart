@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show DartPluginRegistrant;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -88,21 +89,56 @@ Map<String, dynamic>? pendingColdStartCallData;
 /// re-initializing Firebase here rather than assuming it's already done).
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  // This isolate's plugins (preferences, notifications) - as the
+  // notification action handler does. Idempotent.
+  try {
+    DartPluginRegistrant.ensureInitialized();
+  } catch (_) {}
+  await handleBackgroundPush(message);
+}
+
+Future<void> _initializeFirebase() async {
   await Firebase.initializeApp();
+}
+
+/// [firebaseMessagingBackgroundHandler], once the isolate's plugins are
+/// registered. [initializeFirebase] is Firebase's own start - which a test
+/// replaces with one that fails, as it can on a phone.
+@visibleForTesting
+Future<void> handleBackgroundPush(RemoteMessage message,
+    {Future<void> Function() initializeFirebase = _initializeFirebase}) async {
+  // Nothing below uses a Firebase service: the push is in hand already. A
+  // throw here used to end the handler before anything rang - no ring, no
+  // acknowledgement, and the caller on "Calling…" with nothing in any log
+  // to say why (2026-11-15).
+  try {
+    await initializeFirebase();
+  } catch (e) {
+    debugPrint('[FCM] background Firebase.initializeApp failed (${e.runtimeType}) '
+        '- handling the push anyway');
+  }
   // Calls ring, rings stop, messages are recorded as announced - see
   // NotificationService.handleBackgroundMessage. A message push's own
   // wording comes along: the sender's face is drawn onto the notification
   // Android drew from it, which means drawing it again, words and all.
-  await NotificationService.handleBackgroundMessage({
-    ...message.data,
-    if (message.notification?.title != null) 'title': message.notification!.title,
-    if (message.notification?.body != null) 'body': message.notification!.body,
-    // For the PUSH_RECEIVED log line only: which FCM message this was, and
-    // how long it took to reach the phone.
-    if (message.messageId != null) 'fcmMessageId': message.messageId,
-    if (message.sentTime != null)
-      'fcmSentAt': '${message.sentTime!.millisecondsSinceEpoch}',
-  });
+  try {
+    await NotificationService.handleBackgroundMessage({
+      ...message.data,
+      if (message.notification?.title != null) 'title': message.notification!.title,
+      if (message.notification?.body != null) 'body': message.notification!.body,
+      // For the PUSH_RECEIVED log line, and the push's age reported with
+      // the call's acknowledgement: which FCM message this was, and how
+      // long it took to reach the phone.
+      if (message.messageId != null) 'fcmMessageId': message.messageId,
+      if (message.sentTime != null)
+        'fcmSentAt': '${message.sentTime!.millisecondsSinceEpoch}',
+    });
+  } catch (e) {
+    // FlutterFire prints an escaped error and nothing else; this names the
+    // push it was.
+    debugPrint('[FCM] background handler failed type=${message.data['type'] ?? '-'} '
+        'room=${message.data['roomId'] ?? '-'}: ${e.runtimeType}');
+  }
 }
 
 /// Back from a long time away: Home, rather than a screen whose timers and

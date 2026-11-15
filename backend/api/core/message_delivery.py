@@ -73,6 +73,11 @@ RETRY_PUSH_TIMEOUT_SECONDS = 45
 RETENTION_DAYS = 60
 
 _SAVED_KEY = "broka_delivery_saved"
+# How the messages a session saves came in, for MESSAGE_SAVED's `source`: the
+# endpoint sets it on its session (`db.info`) before the flush -
+# "direct_message", "media_upload", "notification_reply". Zeno's own
+# messages say "zeno"; anything else "api".
+SOURCE_KEY = "broka_message_source"
 
 # FCM's own words for why a push was refused, from firebase_admin's
 # exception classes (calls._send_fcm). The Render log says UNAVAILABLE, not
@@ -122,8 +127,13 @@ def _fmt(value) -> str:
 
 
 def log_event(event: str, **fields) -> None:
-    """One lifecycle line: EVENT key=value ... with a UTC timestamp."""
+    """One lifecycle line: EVENT key=value ... with a UTC timestamp and a
+    correlation id - the message's id for a message's events (filter on it
+    to read one message's whole life), else the sync's, else the
+    recipient's."""
     fields.setdefault("timestamp", _now())
+    fields.setdefault("correlation_id", fields.get("message_id") or fields.get("sync_id")
+                      or fields.get("conversation_id") or fields.get("recipient_id"))
     logger.info("%s %s", event, " ".join(f"{k}={_fmt(v)}" for k, v in fields.items()))
 
 
@@ -187,6 +197,9 @@ def record_new_messages(session, messages: list) -> None:
             "recipient_role": ",".join(sorted(roles)), "push_attempts": 0,
             "from_zeno": m.role == "broker", "kind": m.msg_type or "text", "untracked": True,
         } for m, roles in messages]
+    entry = session.info.get(SOURCE_KEY)
+    for summary in summaries:
+        summary["source"] = "zeno" if summary.get("from_zeno") else (entry or "api")
     session.info.setdefault(_SAVED_KEY, []).extend(summaries)
 
 
@@ -261,6 +274,7 @@ def committed(session) -> None:
         fields = _row_fields(row, status=SAVED, attempt=0)
         fields["kind"] = row.get("kind")
         fields["from_zeno"] = row.get("from_zeno")
+        fields["source"] = row.get("source") or "api"
         if row.get("untracked"):
             fields["tracked"] = False
         log_event("MESSAGE_SAVED", **fields)
@@ -384,18 +398,20 @@ async def record_push_result(claimed: list[dict], *, sent: int, outcome, trigger
                      len(claimed), type(exc).__name__)
         return
     for c in claimed:
+        # source=fcm: Firebase's answer. Accepted is not delivered - the
+        # phone says that (MESSAGE_DELIVERED), never this.
         if sent > 0:
             status = PUSH_ACCEPTED if c["id"] in written else current.get(c["id"])
             log_event("MESSAGE_PUSH_ACCEPTED",
                       **_row_fields(c, status=status, attempt=c["attempt"]),
-                      device_count=device_count, accepted=sent, trigger=trigger)
+                      device_count=device_count, accepted=sent, trigger=trigger, source="fcm")
         else:
             status = PUSH_FAILED if c["id"] in written else current.get(c["id"])
             log_event("MESSAGE_PUSH_FAILED",
                       **_row_fields(c, status=status, attempt=c["attempt"]),
                       device_count=device_count, error=error, retryable=retryable,
                       next_retry_in_s=c.get("next_retry_in_s"),
-                      final=c.get("next_retry_in_s") is None, trigger=trigger)
+                      final=c.get("next_retry_in_s") is None, trigger=trigger, source="fcm")
 
 
 async def skip_push(*, listing_id: Optional[str], store_id: Optional[str],
@@ -447,14 +463,16 @@ async def mark_delivered(db, *, recipient_id: str, message_ids: Iterable[str], s
     leaves a DELIVERED or READ row as it is.
 
     Returns {"delivered": [...], "already": [...], "unknown": [...],
-    "threads": {(listing_id, store_id, buyer_id, role): newest created_at}},
-    the last for moving the direct chat's delivery watermark (the sender's
-    double tick) up to what was acknowledged - Zeno's messages have no
-    sender waiting on a tick.
+    "threads": {(listing_id, store_id, buyer_id, role): newest created_at},
+    "thread_ids": {same key: {"up_to": newest message id, "delivered": [ids
+    this acknowledgement made DELIVERED]}}}, the last two for moving the
+    direct chat's delivery watermark (the sender's double tick) up to what
+    was acknowledged, and naming the messages it moved for - Zeno's
+    messages have no sender waiting on a tick.
     """
     MD = MessageDelivery
     ids = list(dict.fromkeys(i for i in message_ids if i))
-    result = {"delivered": [], "already": [], "unknown": [], "threads": {}}
+    result = {"delivered": [], "already": [], "unknown": [], "threads": {}, "thread_ids": {}}
     if not ids:
         return result
     rows = (await db.execute(
@@ -483,9 +501,13 @@ async def mark_delivered(db, *, recipient_id: str, message_ids: Iterable[str], s
     for s in snapshot:
         if not s["from_zeno"]:
             key = (s["listing_id"], s["store_id"], s["buyer_id"], s["recipient_role"])
+            named = result["thread_ids"].setdefault(key, {"up_to": None, "delivered": []})
             newest = result["threads"].get(key)
             if newest is None or s["message_created_at"] > newest:
                 result["threads"][key] = s["message_created_at"]
+                named["up_to"] = s["message_id"]
+            if s["message_id"] in changed:
+                named["delivered"].append(s["message_id"])
     by_message = {s["message_id"]: s for s in snapshot}
     for mid in ids:
         s = by_message.get(mid)
@@ -503,7 +525,7 @@ async def mark_delivered(db, *, recipient_id: str, message_ids: Iterable[str], s
         if mid in changed:
             since = int((now - s["message_created_at"]).total_seconds() * 1000)
             log_event("MESSAGE_DELIVERED", **_row_fields(s, status=DELIVERED),
-                      delivered_via=source, since_saved_ms=since)
+                      delivered_via=source, since_saved_ms=since, source=source)
     if result["unknown"]:
         await _log_untracked_acks(db, recipient_id, result["unknown"], source=source,
                                   sync_id=sync_id)
@@ -586,11 +608,13 @@ async def _log_untracked_acks(db, recipient_id: str, ids: list, *, source: str,
 
 
 async def mark_read_in_thread(db, *, listing_id: Optional[str], store_id: Optional[str],
-                              buyer_id: str, role: str, read_at: datetime) -> list[dict]:
+                              buyer_id: str, role: str, read_at: datetime,
+                              up_to: Optional[datetime] = None) -> list[dict]:
     """The read receipt for one side of one conversation: everything it was
-    sent up to `read_at` is READ. Runs in the caller's transaction (the
-    watermark's, negotiate._move_watermark); log the result with log_read
-    once that commits.
+    sent up to `up_to` - the newest message the reader's screen showed;
+    without one, up to `read_at` - is READ, at `read_at`. Runs in the
+    caller's transaction (the watermark's, negotiate._move_watermark); log
+    the result with log_read once that commits.
 
     `role` is the watermark's: "buyer"/"seller" for the direct chat, which
     reads the other person's messages; "zeno_buyer"/"zeno_seller" for Zeno's
@@ -601,13 +625,14 @@ async def mark_read_in_thread(db, *, listing_id: Optional[str], store_id: Option
     side = role[len("zeno_"):] if from_zeno else role
     if side not in ("buyer", "seller"):
         return []
+    covered = min(up_to, read_at) if up_to is not None else read_at
     rows = (await db.execute(
         select(MD).where(
             _thread_clause(listing_id, store_id, buyer_id),
             MD.recipient_role == side,
             MD.from_zeno.is_(from_zeno),
             MD.status != READ,
-            MD.message_created_at <= read_at,
+            MD.message_created_at <= covered,
         ).execution_options(populate_existing=True)
     )).scalars().all()
     if not rows:
@@ -639,7 +664,7 @@ def log_read(rows: list[dict], *, source: str) -> None:
         if STATUS_RANK.get(s["previous_status"], 0) < STATUS_RANK[DELIVERED]:
             since = int((_now() - s["message_created_at"]).total_seconds() * 1000)
             log_event("MESSAGE_DELIVERED", **_row_fields(s, status=DELIVERED),
-                      delivered_via="read", since_saved_ms=since)
+                      delivered_via="read", since_saved_ms=since, source="read")
         log_event("MESSAGE_READ", **_row_fields(s, status=READ), source=source)
 
 
