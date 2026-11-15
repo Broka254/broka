@@ -269,6 +269,29 @@ class TestFcmErrorClassification:
         assert raw_token not in caplog.text, "only a fingerprint may be logged"
 
     @pytest.mark.asyncio
+    async def test_acceptance_names_whose_phone_and_the_call_it_belongs_to(
+            self, captured, caplog):
+        """CALL_PUSH_ACCEPTED (2026-11-15) carries the callee, the room as the
+        call's correlation id, its source and the time - Firebase's word that
+        it took the push, which is all it is."""
+        from api.core import push_devices
+        raw_token = "FCM_ACCEPTED_SECRET_987"
+        marker = push_devices.current_push_user.set("callee-7")
+        try:
+            with caplog.at_level("INFO", logger="api.routers.calls"):
+                await calls_module._send_fcm(
+                    raw_token, "t", "b", {"type": "incoming_call", "roomId": "r2"},
+                )
+        finally:
+            push_devices.current_push_user.reset(marker)
+        line = next(r.getMessage() for r in caplog.records
+                    if "CALL_PUSH_ACCEPTED" in r.getMessage())
+        for field in ("room=r2", "user=callee-7", "correlation_id=r2", "source=fcm", "ts=",
+                      f"token={push_devices.token_fingerprint(raw_token)}"):
+            assert field in line, (field, line)
+        assert raw_token not in caplog.text
+
+    @pytest.mark.asyncio
     async def test_a_send_that_returns_no_message_id_is_not_a_success(
             self, captured, monkeypatch):
         """Firebase's return value is the acceptance signal - not merely
