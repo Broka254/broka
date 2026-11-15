@@ -1,3 +1,44 @@
+# Delivered shows on the sender's screen; every incoming call is accounted for in the log (2026-11-15)
+
+Asked for: a message to an offline recipient went Sent, then straight to
+Seen, never Delivered; calls to a closed app stayed on "Calling…" with
+nothing from the callee's phone in Railway's log; and structured, secret-free
+log lines for each step of both. Targeted repairs, no rebuild.
+
+- **Receipts reach every replica.** Chat socket frames went only to the
+  process that made them, and Railway runs two replicas: whenever the
+  acknowledgement landed on the other one, the sender's chat never got the
+  delivered receipt, and its 30-second refresh came after the read.
+  `api/core/chat_relay.py` relays every chat frame over Redis Pub/Sub
+  (`broka:chat:frames`; frames over 1 MiB stay local). Needs `REDIS_URL` on
+  every replica, as call signalling already does.
+- **A socket that connects is told the ticks**, and connecting no longer
+  counts as delivery. The chat also fetches the ticks when its socket comes
+  back.
+- **Reads are bounded.** `mark-read` takes `up_to_message_id` (the newest
+  of the other side's messages on screen); the notification's Mark as read
+  and Reply take the push's `message_id`. Without one, up to now, as before.
+  An id not in the conversation is answered 404.
+- **Receipt frames name their messages** (`message_ids`,
+  `up_to_message_id`), and `MESSAGE_*` lines carry `correlation_id` and
+  `source`.
+- **Calls.** `CALLEE_ALERTED` (was `CALL_RINGING`), `CALL_ANSWERED` (was
+  the server's `CALL_ACCEPTED`), `CALL_CONNECTED`, `CALL_NO_ANSWER`,
+  `CALL_MISSED`, and `CALL_ALERT_REJECTED` for every refused `/alerted`
+  (401/403/404/410, with why). `CALL_PUSH_ACCEPTED` names the user. The
+  phone reports a ring it would not make (`CALL_RING_BLOCKED`) and
+  acknowledgements that never got through (`CALL_ALERT_FAILED`), and each
+  `/alerted` try says its number, handler, previous error and the push's
+  age.
+- **Calls, fixes.** The sweep keeps acknowledging a call whose screen it
+  opened; the FCM background handler rings even when Firebase will not
+  start; the ring watchdog retries a room it failed to settle instead of
+  losing its missed call; a failed VoIP push no longer logs its device
+  token.
+- **Docs.** CALLING.md "Every ring accounted for", NOTIFICATIONS.md
+  "Delivered on the sender's screen", each with a two-phone checklist. Not
+  device-tested.
+
 # The app and the web storefront default to the Railway API instead of Render (2026-11-14)
 
 Asked for: point the frontends at `https://broka-api-development.up.railway.app`.

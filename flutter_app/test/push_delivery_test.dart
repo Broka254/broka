@@ -110,7 +110,11 @@ void main() {
       await withClient(() => NotificationService.handleBackgroundMessage(callPush()));
       expect(shown.single['title'], '📞 Incoming call from Ann');
       final ack = requests.singleWhere((r) => r.url.path == '/calls/room-1/alerted');
-      expect(jsonDecode(ack.body), {'call_token': 'callee-token'});
+      final body = jsonDecode(ack.body) as Map<String, dynamic>;
+      expect(body['call_token'], 'callee-token');
+      // Which try, and what rang the phone - for the server's log only.
+      expect(body['attempt'], 1);
+      expect(body['handler'], 'background');
       expect(ack.headers.containsKey('Authorization'), isFalse,
           reason: 'a closed app has no live access token - the call token is the proof');
       expect(cancelled, isEmpty);
@@ -546,7 +550,9 @@ void main() {
       expect(payload['buyerId'], 'buyer-new');
       expect(payload['listingId'], 'listing-new');
       final ack = requests.singleWhere((r) => r.url.path == '/calls/room-9/alerted');
-      expect(jsonDecode(ack.body), {'call_token': 'tok-9'});
+      final ackBody = jsonDecode(ack.body) as Map<String, dynamic>;
+      expect(ackBody['call_token'], 'tok-9');
+      expect(ackBody['handler'], 'poller');
       // The caller is told "Ringing" only after this phone is actually
       // ringing - not before the notification/ring exists.
       final shownAt = events.indexOf('shown');
@@ -579,6 +585,12 @@ void main() {
     });
 
     test('retries a ringing acknowledgement the server did not confirm', () async {
+      final delays = NotificationService.persistentAlertRetryDelays;
+      NotificationService.persistentAlertRetryDelays = const [
+        Duration(milliseconds: 1),
+        Duration(milliseconds: 1),
+      ];
+      addTearDown(() => NotificationService.persistentAlertRetryDelays = delays);
       var alertCalls = 0;
       route = (req) {
         if (req.url.path.startsWith('/negotiate/inbox/')) return _json(const []);
@@ -599,13 +611,15 @@ void main() {
       };
       await withClient(() => GlobalPollerService.instance.catchUp());
       await Future<void>.delayed(const Duration(milliseconds: 50));
-      expect(alertCalls, 2, reason: 'the first attempt and its immediate retry');
-
-      // The next sweep tries again: a failed ack used to be marked done
-      // forever, leaving the caller on "Calling...".
-      await withClient(() => GlobalPollerService.instance.catchUp());
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+      // The first attempt, its immediate retry - and, as for a push, again a
+      // moment later: a failed ack used to be marked done forever, and once
+      // the sweep's own call screen is open no later sweep comes back to it.
       expect(alertCalls, 3);
+      final last = jsonDecode(requests
+          .lastWhere((r) => r.url.path == '/calls/room-9/alerted').body) as Map;
+      expect(last['attempt'], 3);
+      expect(last['previous_error'], 'http_500',
+          reason: 'the server hears why the tries before it failed');
 
       // Confirmed once, never repeated by later sweeps.
       await withClient(() => GlobalPollerService.instance.catchUp());

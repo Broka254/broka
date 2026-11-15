@@ -1264,7 +1264,11 @@ class GlobalPollerService {
             buyerId: buyerId,
             listingName: (thread['store_name'] ?? thread['listing_name']) as String?),
       );
-      if (!started) return;
+      if (!started) {
+        await NotificationService.instance
+            .reportRingNotShown(roomId, callInfo['call_token'] as String?);
+        return;
+      }
       _shownCallNotifications[threadId] = roomId;
       // A network round trip must not hold up the sweep; the room stays
       // marked in flight so the next tick does not post it twice.
@@ -1338,7 +1342,12 @@ class GlobalPollerService {
           roomId: roomId, listingId: listingId, storeId: storeId, buyerId: buyerId,
           listingName: listingName),
     );
-    if (!started) return true;
+    if (!started) {
+      // Why it would not ring, in the server's log - once per call.
+      await NotificationService.instance
+          .reportRingNotShown(roomId, call['call_token'] as String?);
+      return true;
+    }
     _shownCallNotifications[threadId] = roomId;
     unawaited(_acknowledge(roomId, call['call_token'] as String?));
     return true;
@@ -1374,11 +1383,16 @@ class GlobalPollerService {
   /// per call - but only forget the room once the server confirmed it.
   /// A failed acknowledgement used to be marked done forever, leaving the
   /// caller on "Calling..." for a phone that was ringing.
+  ///
+  /// Persistent, as a push's is (2026-11-15): the sweep rings a call in
+  /// front by opening its screen, and from then on ActiveCall.shouldRing
+  /// keeps every later sweep away from it - two tries back to back failing
+  /// left the caller on "Calling…" through the whole ring.
   Future<void> _acknowledge(String roomId, String? callToken) async {
     if (callToken == null || callToken.isEmpty) return;
     if (!_acknowledgedRooms.add(roomId)) return;
     final result = await NotificationService.instance
-        .acknowledgeIncomingCall(roomId, callToken);
+        .acknowledgeIncomingCall(roomId, callToken, persist: true, handler: 'poller');
     if (result == CallAlertResult.unknown) {
       _acknowledgedRooms.remove(roomId);
       debugPrint('[Push] ring acknowledgement for $roomId unconfirmed - will retry');

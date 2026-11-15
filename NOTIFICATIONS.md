@@ -743,7 +743,8 @@ changes nothing. A push receipt delivers only the message it names. The
 "3 new messages" it counted were announced to the phone, not given to it;
 the sync delivers those. The legacy `mark-delivered` still moves the
 sender's tick, as older app builds expect, but records no delivery. The
-chat socket's connect-time watermark is unchanged too.
+chat socket's connect-time watermark was removed on 2026-11-15 (see
+"Delivered on the sender's screen" below).
 
 **Retries.** `workers._message_delivery_loop` runs every 30 seconds, under
 an advisory lease so only one replica runs it:
@@ -829,12 +830,13 @@ with the event name and carries ids only: never a message's words, a push
 token, a thread token or a credential. In production the line is the
 `msg` of the JSON log record. Each per-message event carries
 `message_id conversation_id sender_id recipient_id recipient_role
-delivery_status attempt timestamp`. Push events add `device_count`, and
-failures add `error`.
+delivery_status attempt timestamp`, and since 2026-11-15 `correlation_id`
+(the message's id; a sync's id or the recipient's for sync events). Push
+events add `device_count` and `source=fcm`, and failures add `error`.
 
 | Event | Means |
 |---|---|
-| `MESSAGE_SAVED` | Committed. `kind`, `from_zeno`. |
+| `MESSAGE_SAVED` | Committed. `kind`, `from_zeno`, `source=direct_message\|media_upload\|notification_reply\|zeno\|api`. |
 | `MESSAGE_PUSH_STARTED` | A push attempt for it. `trigger=message\|retry\|device_registered`. |
 | `MESSAGE_PUSH_ACCEPTED` | FCM took it (`accepted` phones of `device_count`). |
 | `MESSAGE_PUSH_FAILED` | No phone took it: `error`, `retryable`, `next_retry_in_s`, `final`. |
@@ -845,7 +847,7 @@ failures add `error`.
 | `MESSAGE_DELIVERY_ACK_RECEIVED` | The app acknowledged it: `source=sync\|chat\|push_receipt`, `result=delivered\|already_delivered\|already_read`. |
 | `MESSAGE_DELIVERY_ACK_UNTRACKED` | One line per acknowledgement, for the ids it named that have no delivery row of the acknowledger's: `count`, and how many of each `call_card`, `own_message`, `zeno`, `untracked` (written before tracking, pruned, or its tracking failed), `not_found`, `not_recipient`. Nothing is written for them: an untracked id is never made `DELIVERED`. |
 | `MESSAGE_DELIVERY_ACK_REJECTED` | WARNING, one per id: `reason=not_found` (no such message) or `reason=not_recipient` (a conversation the acknowledger is not part of). |
-| `MESSAGE_DELIVERED` | Now `DELIVERED`: `delivered_via`, `since_saved_ms`. A message read before any receipt logs this with `delivered_via=read` just before `MESSAGE_READ`. |
+| `MESSAGE_DELIVERED` | Now `DELIVERED`: `delivered_via` (also as `source`), `since_saved_ms`. A message read before any receipt logs this with `delivered_via=read` just before `MESSAGE_READ`. |
 | `MESSAGE_READ` | Now `READ`: `source=chat_open\|zeno_room\|notification_mark_read\|notification_reply`. |
 | `OFFLINE_SYNC_COMPLETED` | The last page was acknowledged (`final=true`), or there was nothing to send. |
 | `OFFLINE_SYNC_FAILED` | `source=server`: the endpoint failed. `source=client_report`: the phone's earlier try failed (`error`), as it reported on its next one. |
@@ -906,9 +908,9 @@ messages are older than ten minutes. Rows are kept 60 days.
 - **iOS** has no connectivity events (the sync runs on start, resume and
   when the sweep gets through again), and still sends no background push
   receipt.
-- **Ticks versus the record.** The chat socket's connect-time watermark and
-  older builds' `mark-delivered` still move the sender's tick without a
-  per-message delivery.
+- **Ticks versus the record.** Older builds' `mark-delivered` still moves
+  the sender's tick without a per-message delivery. The chat socket's
+  connect-time watermark did too, until 2026-11-15.
 - **Not device-tested.** No Android device or SDK was available where this
   was written. On two phones, check each case in the table under "Checking
   a phone" above. The recipient's `OFFLINE_SYNC_STARTED trigger=…` should
@@ -918,3 +920,134 @@ messages are older than ten minutes. Rows are kept 60 days.
 Tests: `backend/tests/test_offline_delivery.py` (scenarios A-G, retries,
 restarts, privacy), `flutter_app/test/message_sync_test.dart`,
 `flutter_app/test/direct_chat_offline_sync_test.dart`.
+
+
+## Delivered on the sender's screen (2026-11-15)
+
+Reported: a message sent to someone offline went from Sent straight to Seen
+on the sender's phone, never showing Delivered, although the API logged
+`MESSAGE_DELIVERED` when the recipient's phone synced.
+
+### What was wrong
+
+1. **A receipt stayed on the replica that made it.** A chat socket lives in
+   one process (`media._thread_connections`), and Railway runs the API as two
+   replicas. A receipt frame went only to the sockets of the process that
+   handled the acknowledgement. Whenever the recipient's `sync/ack` landed on
+   the other replica from the sender's chat socket, the sender's open chat
+   never got the frame. Its tick waited for the 30-second read-status
+   refresh, and a message opened inside that window went from Sent to Seen.
+   Message, edit and typing frames had the same limit; the poll and the push
+   covered for messages.
+2. **A socket that reconnected was not told what it missed.** A receipt
+   frame is sent once. One sent while the sender's socket was down (a
+   network change, the phone waking) never arrived, and the reconnect fetched
+   the history but not the ticks.
+3. **The open chat read "up to now".** Every 30 seconds an open chat marked
+   the thread read up to the moment the request landed. That covered
+   messages that had reached the server and not the phone: they became Seen,
+   and `DELIVERED`, without the phone ever having them.
+4. **Opening a chat socket counted as delivery.** It moved that side's
+   delivery watermark to "now" before a single message had gone down the
+   socket, with no per-message record.
+
+The watermarks and `MESSAGE_DELIVERED` were right. The sender's screen
+missed the receipt.
+
+### What changed
+
+**Server:**
+
+- **Every chat frame reaches every replica** (`api/core/chat_relay.py`).
+  `media._broadcast` writes to its own process's sockets and publishes the
+  frame on one Redis Pub/Sub channel, `broka:chat:frames`. Each other process
+  hands it to its own sockets for that thread, leaving out the sender's.
+  - A frame over 1 MiB (a photo or voice note as a data URI) stays on its
+    replica, as before.
+  - Publishing waits at most 1 s, so a slow Redis cannot hold a message's
+    request.
+  - Pub/Sub keeps nothing. A socket that was away is caught up when it
+    connects (next point).
+  - Without `REDIS_URL` there is one process and nothing to relay.
+  - Log: `[chat-relay] CHAT_RELAY_SUBSCRIBED` once per process, and
+    `CHAT_RELAY_PUBLISH_FAILED`, `CHAT_RELAY_SKIPPED reason=too_large` and
+    `CHAT_RELAY_LISTENER_FAILED` (it subscribes again after 1 to 10 s). A
+    frame's content is never logged.
+- **A socket that connects is told the ticks.** `/ws/negotiate/...` and
+  `/ws/store/...` send the other side's watermarks as a `receipt` frame
+  before the history replay. Connecting no longer moves the connecting
+  side's delivery watermark.
+- **A read covers what the screen showed.** `mark-read` (listing and store)
+  takes `up_to_message_id`, the newest of the other side's messages on the
+  reader's screen. The read watermark, the delivery watermark and the
+  per-message `READ` stop at that message.
+  - A message that is not the reader's to read in this conversation is
+    answered 404, and `[negotiate] READ_BOUND_REFUSED` is logged.
+  - Without one (older apps) the read is up to now, as before.
+  - The answer adds `up_to_message_id`, and its `last_read_at` is the
+    watermark the row now holds.
+- **The notification's Mark as read and Reply** read up to the message the
+  push announced (`message_id`), as its delivered receipt already did.
+- **A receipt frame names what moved it.** `message_ids` lists the messages
+  this acknowledgement made `DELIVERED`; `up_to_message_id` is where its
+  watermark stops. `DELIVERY_WATERMARK_UPDATED` logs `up_to_message` and
+  `messages`.
+
+**App:**
+
+- The chat fetches the ticks (`read-status`) whenever its socket comes back.
+- Its 30-second read receipt names the newest message of theirs on screen
+  (`upToMessageId`). With none of theirs on screen, it sends no read.
+- A receipt time without a `Z` is read as UTC (`parseBackendUtc`), and a
+  receipt older than one already applied changes nothing.
+
+Every new field is optional in both directions. An older app sends no bound
+and is answered as before, and it ignores the new frame fields.
+
+### Following one message
+
+```
+MESSAGE_SAVED message_id=M source=direct_message
+MESSAGE_PUSH_ACCEPTED message_id=M source=fcm
+OFFLINE_SYNC_STARTED recipient_id=R trigger=connectivity_restored
+MESSAGE_DELIVERY_ACK_RECEIVED message_id=M source=sync result=delivered
+MESSAGE_DELIVERED message_id=M delivered_via=sync
+[negotiate] DELIVERY_WATERMARK_UPDATED thread=… source=sync_ack up_to_message=M messages=1
+MESSAGE_READ message_id=M source=chat_open
+```
+
+The sender's chat shows Delivered from `DELIVERY_WATERMARK_UPDATED`. If it
+does not, check that both replicas logged `CHAT_RELAY_SUBSCRIBED`.
+
+### Not covered
+
+- **The Inbox list** still takes its ticks from the inbox fetch: every 42 s
+  once nothing has changed and push works (70 s with Data saver). A message
+  delivered and read inside that gap can still show Sent, then Seen, in the
+  list. The open chat is not affected.
+- **iOS** still sends no background push receipt.
+- **Not device-tested.** On two Android phones, with this build on both and
+  Railway running two replicas:
+  1. B offline (airplane mode); A sends a text. A shows Sent. B back online
+     after 1 minute, then (other messages) after 30 minutes and after a few
+     hours, without opening BROKA: A shows Delivered within seconds of B
+     reconnecting. B opens the chat: A shows Seen.
+  2. B gets the push and does not open the chat: A shows Delivered, not
+     Seen. B opens it later: Seen.
+  3. A sends three messages while B is offline: all three show Delivered
+     together, then Seen.
+  4. B signed in on two phones: the first to sync moves A to Delivered; the
+     second changes nothing.
+  5. B's network drops in the middle of the sync: whatever was acknowledged
+     shows Delivered, and the rest follow on the next sync.
+  6. B's app swiped away and opened again: the messages are there, and the
+     ticks are right on A.
+  7. A's chat open while A's phone changes network: the ticks catch up when
+     its socket comes back, not 30 s later.
+  8. The same with a photo, and with a store chat.
+
+  In Railway's log, each message should read as above, in order, with one
+  `MESSAGE_DELIVERED` and one `MESSAGE_READ`.
+
+Tests: `backend/tests/test_receipts_reach_the_sender.py`,
+`flutter_app/test/delivery_receipt_ladder_test.dart`.

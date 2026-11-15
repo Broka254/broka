@@ -32,12 +32,26 @@ logger = logging.getLogger("api.call_events")
 # server can't see ICE, a phone can't see the other phone's socket).
 STATE_FIELDS = ("call_state", "ws", "ice_gathering", "ice", "pc", "path", "reason", "error")
 
-# Events the server emits.
+# Events the server emits. The call's lifecycle, in order (2026-11-15):
+#   CALL_INITIATED      the call is placed (the caller's /initiate)
+#   CALL_PUSH_ACCEPTED  FCM took the incoming-call push for one phone
+#                       ([calls] line, per phone) - not delivery, not a ring
+#   CALLEE_ALERTED      a phone of the callee's said it rings (POST /alerted);
+#                       only then is the caller told "Ringing"
+#   CALL_ANSWERED       the callee accepted (POST /answer, or joining)
+#   CALL_CONNECTED      a phone's connection came up (once per side)
+#   CALL_NO_ANSWER      the ring ran out with nobody answering
+#   CALL_MISSED         the callee has the missed call: card and push
+# CALL_ALERT_REJECTED is an acknowledgement refused (401/403/404/410), with
+# the status and why. CALLEE_ALERTED replaced CALL_RINGING, CALL_ANSWERED
+# the server's CALL_ACCEPTED (a phone still reports its own CALL_ACCEPTED).
 SERVER_EVENTS = frozenset({
     "CALL_INITIATED", "CALL_SETUP_REPLAYED", "CALL_SETUP_CANCELLED",
-    "CALL_PUSH_RESULT", "CALL_RINGING", "CALL_ACCEPTED", "CALL_HANGUP", "CALL_ENDED",
-    # A ring report or an Accept for a call that was already over (410).
-    "CALL_RINGING_REJECTED", "CALL_ANSWER_REJECTED",
+    "CALL_PUSH_RESULT", "CALLEE_ALERTED", "CALL_ANSWERED", "CALL_CONNECTED",
+    "CALL_NO_ANSWER", "CALL_MISSED", "CALL_HANGUP", "CALL_ENDED",
+    # A ring report or an Accept that was refused - for a call that was
+    # already over (410), a bad or expired token, someone else's call.
+    "CALL_ALERT_REJECTED", "CALL_ANSWER_REJECTED",
     "WEBSOCKET_CONNECTED", "WEBSOCKET_RECONNECTED", "WEBSOCKET_DISCONNECTED",
     "PEER_JOINED", "SDP_OFFER_RELAYED", "SDP_ANSWER_RELAYED",
     # Signals kept for an absent phone that were not handed to it on joining.
@@ -96,6 +110,11 @@ CLIENT_EVENTS = frozenset({
     "TURN_NO_RELAY_CANDIDATES",
     "WEBRTC_CONNECTED", "WEBRTC_DISCONNECTED", "WEBRTC_FAILED",
     "PRECONNECT_STARTED", "PRECONNECT_USED", "PRECONNECT_ABANDONED",
+    # The callee's phone about the incoming-call push (2026-11-15), so the
+    # log can tell a push that never reached the app from one it refused
+    # to ring (notifications off, another call on screen...) and from a
+    # ring whose acknowledgement never got through.
+    "CALL_RING_BLOCKED", "CALL_ALERT_FAILED",
 })
 
 # What else a phone may attach, and nothing more: scalars only.
@@ -111,6 +130,10 @@ CLIENT_EXTRA_FIELDS = frozenset({
     # On a caller's CALL_ENDED: whether the callee ever joined, and how many
     # offers left the phone (2026-11-14).
     "peer_joined", "offers_sent",
+    # On the callee's CALL_RING_BLOCKED / CALL_ALERT_FAILED: what handled the
+    # push (background, foreground, poller), the HTTP status and failure
+    # category of its last acknowledgement, and the push's age (2026-11-15).
+    "handler", "status", "category", "push_age_ms",
 })
 
 _MAX_VALUE = 160
@@ -171,10 +194,14 @@ def _kv(value: Any) -> str:
 def emit(event: str, *, room: Optional[str], role: Optional[str] = None,
          user: Optional[str] = None, source: str = "server",
          level: int = logging.INFO, **fields: Any) -> dict:
-    """Log one call event. Returns the fields it logged (for tests)."""
+    """Log one call event. Returns the fields it logged (for tests).
+
+    `correlation_id` is the room: one call's every line, server's and
+    phones', is found by it."""
     record: dict = {
         "event": event,
         "room": room or "-",
+        "correlation_id": room or "-",
         "role": role or "unknown",
         "source": source,
         "user": user,
@@ -236,5 +263,5 @@ def client_event(raw: Mapping[str, Any], *, room: str, role: str, user: Optional
 _CLIENT_WARNINGS = frozenset({
     "WEBRTC_FAILED", "ICE_CONNECTION_FAILED", "TURN_CREDENTIAL_FAILURE",
     "TURN_NO_RELAY_CANDIDATES", "SDP_FAILED", "LOCAL_MEDIA_FAILED", "CALL_TIMEOUT",
-    "ICE_CANDIDATE_FAILED",
+    "ICE_CANDIDATE_FAILED", "CALL_RING_BLOCKED", "CALL_ALERT_FAILED",
 })
