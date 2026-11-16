@@ -1,0 +1,803 @@
+{
+ "as_of": "2026-11-16",
+ "disclosures": {
+  "estimate": "An estimate from the provider's published pricing. The quotation on the provider's own checkout is the amount you actually pay.",
+  "main": "Broka does not operate these escrow services and does not hold, receive or release your money. The services are provided independently by their respective operators. Broka does not guarantee their performance or independently control their funds. Review the provider's current fees, conditions, refund policy and dispute procedures before paying.",
+  "points": [
+   "Each provider has its own terms and privacy policy. Read them before you use it.",
+   "When you use a provider you enter into a separate agreement with it, not with Broka.",
+   "A provider's protection applies only according to that provider's own rules.",
+   "Broka cannot guarantee that a dispute will end in a refund.",
+   "Open the provider's official website yourself, or follow Broka's exact approved https link. Never use a link, paybill, till or phone number someone sends you in a chat."
+  ],
+  "relationship": [
+   "Broka is not a party to your transaction with the provider and has no control over its funds.",
+   "Broka lists providers to help you compare them. A listing is information, not a recommendation and not a promise about how the provider will behave.",
+   "Broka cannot recover money held by, or sent through, a provider, and cannot decide a dispute that the provider is handling.",
+   "Details are taken from the provider's own public pages and checked by Broka on the date shown. Providers can change them at any time: the provider's own checkout is the authority on what you will pay."
+  ],
+  "version": 1
+ },
+ "estimate_note": "Estimates assume the buyer pays every charge on top of the amount the seller should receive. The quotation on the provider's own checkout is the amount you actually pay.",
+ "excluded": [],
+ "notices": [
+  {
+   "canonical_domain": "escrowkenya.com",
+   "id": "escrowkenya",
+   "name": "Escrow Kenya",
+   "public_notice": "Escrow Kenya (escrowkenya.com) is not on Broka's list. It is a different website from Kenya Escrow (kenyaescrow.com).",
+   "review_label": "Not on Broka's list",
+   "status": "suspended"
+  }
+ ],
+ "query": {
+  "amount": null,
+  "filters": {},
+  "payout": null,
+  "sort": "name"
+ },
+ "ranking": null,
+ "results": [
+  {
+   "canonical_domain": "econfirm.co.ke",
+   "conditions": {
+    "amount_basis": "transaction_value",
+    "categories": null,
+    "category_labels": null,
+    "kyc_required": null,
+    "limits_summary": "KSh 100 to KSh 500,000 (the transaction value)",
+    "max_amount": 500000,
+    "min_amount": 100,
+    "other": [
+     "Its website advertises transaction values from KSh 100 to KSh 500,000."
+    ],
+    "payment_method_labels": [
+     "M-Pesa STK Push"
+    ],
+    "payment_methods": [
+     "mpesa_stk_push"
+    ],
+    "payout_method_labels": [
+     "M-Pesa (to a phone number)",
+     "M-Pesa (to a till)"
+    ],
+    "payout_methods": [
+     "mpesa_phone",
+     "mpesa_till"
+    ],
+    "regions": null,
+    "registration_required": null,
+    "requirements_summary": "Not documented; Not documented"
+   },
+   "fee_disclosure": "published_percentage",
+   "fee_summary": "Platform commission 1% (published). The M-Pesa payout reserve is charged separately.",
+   "freshness": {
+    "needs_review": true,
+    "pricing": {
+     "days_since_verified": null,
+     "days_until_expiry": null,
+     "expires_on": null,
+     "label": "Not yet verified by BROKA",
+     "state": "unverified",
+     "verified_on": null,
+     "warning": "BROKA has not yet verified this provider's pricing. The figures come from the provider's own public pages. Confirm them on the provider's site before paying."
+    },
+    "record": {
+     "label": "Not yet verified by BROKA",
+     "next_review": null,
+     "state": "unverified",
+     "verified_on": null,
+     "warning": "BROKA has not yet verified this provider's details. They come from the provider's own public pages."
+    },
+    "state": "unverified",
+    "warnings": [
+     "BROKA has not yet verified this provider's pricing. The figures come from the provider's own public pages. Confirm them on the provider's site before paying.",
+     "BROKA has not yet verified this provider's details. They come from the provider's own public pages."
+    ]
+   },
+   "id": "econfirm",
+   "identity": {
+    "canonical_domain": "econfirm.co.ke",
+    "confusable_with": [],
+    "contact_email": null,
+    "contact_phone": null,
+    "countries": [
+     "KE"
+    ],
+    "legal_entity_confirmed": false,
+    "legal_entity_label": "Operator named by the provider (not yet verified by Broka)",
+    "legal_entity_name": "Confirm Delegence Solutions",
+    "logo_url": null,
+    "operator_note": "Its terms name Confirm Delegence Solutions as the operator. BROKA has not yet confirmed the company's exact registered name.",
+    "privacy_url": null,
+    "terms_url": "https://econfirm.co.ke/terms-and-conditions",
+    "website_url": "https://econfirm.co.ke/"
+   },
+   "name": "eConfirm",
+   "not_to_be_confused_with": [],
+   "pricing": {
+    "absorbs_mpesa_fees": false,
+    "additional_fees_may_apply": null,
+    "basis": "transaction_value",
+    "commission": {
+     "label": "Platform commission",
+     "payer": "not_stated",
+     "percent": "1"
+    },
+    "currency": "KES",
+    "disclosure": "published_percentage",
+    "last_verified": null,
+    "payout_fees": [
+     {
+      "by_destination": {
+       "phone": {
+        "tiers": [
+         {
+          "fixed": "10",
+          "max": 500000,
+          "min": 100
+         }
+        ]
+       },
+       "till": {
+        "tiers": [
+         {
+          "fixed": "5",
+          "max": 500000,
+          "min": 100
+         }
+        ]
+       }
+      },
+      "documented": true,
+      "estimated": true,
+      "label": "Estimated M-Pesa payout reserve",
+      "payer": "not_stated"
+     }
+    ],
+    "processing_fees": [],
+    "public_note": "The 1% is the platform commission only, not the total fee. An estimated M-Pesa payout reserve is charged as well, and it differs for a payout to a phone and a payout to a till.",
+    "quote_url": "https://econfirm.co.ke/",
+    "source_url": "https://econfirm.co.ke/tariffs"
+   },
+   "protection": {
+    "auto_release": {
+     "can_occur": null,
+     "description": null
+    },
+    "buyer_protection": null,
+    "cancellation_policy": null,
+    "confirmation_window": null,
+    "deposit_insurance": null,
+    "dispute_initiation": "Its terms describe escrow, transaction disputes and complaint handling. Read them for how a dispute is opened and how long it takes.",
+    "dispute_timeframe": null,
+    "evidence_required": null,
+    "how_funds_are_held": null,
+    "notable_terms": [
+     "Its terms describe the platform as a fully functional beta."
+    ],
+    "refund_conditions": null,
+    "release_conditions": null,
+    "seller_protection": null,
+    "when_funds_locked": null
+   },
+   "public_notice": null,
+   "recommendable": false,
+   "review_label": "Under review: not yet verified by Broka",
+   "sources": [
+    {
+     "label": "Tariffs",
+     "url": "https://econfirm.co.ke/tariffs"
+    },
+    {
+     "label": "Terms and conditions",
+     "url": "https://econfirm.co.ke/terms-and-conditions"
+    }
+   ],
+   "status": "under_review",
+   "summaries": {
+    "disputes": "Its terms describe escrow, transaction disputes and complaint handling. Read them for how a dispute is opened and how long it takes.",
+    "fees": "Platform commission 1% (published). The M-Pesa payout reserve is charged separately.",
+    "limits": "KSh 100 to KSh 500,000 (the transaction value)",
+    "payment_methods": "M-Pesa STK Push",
+    "release": "Not documented. Check the provider's own website.",
+    "requirements": "Not documented; Not documented"
+   },
+   "tagline": "M-Pesa escrow · commission plus payout reserve",
+   "trust": {
+    "identity_verification": "pending",
+    "last_verified": null,
+    "next_review": null,
+    "operational_test": "not_started",
+    "pricing_review": "pending",
+    "sources": [
+     {
+      "label": "Tariffs",
+      "url": "https://econfirm.co.ke/tariffs"
+     },
+     {
+      "label": "Terms and conditions",
+      "url": "https://econfirm.co.ke/terms-and-conditions"
+     }
+    ],
+    "terms_review": "pending"
+   },
+   "undocumented": [
+    "registration",
+    "kyc",
+    "categories",
+    "how_funds_are_held",
+    "release_conditions",
+    "dispute_timeframe",
+    "refund_conditions",
+    "cancellation_policy",
+    "seller_protection",
+    "buyer_protection",
+    "evidence_required",
+    "confirmation_window",
+    "additional_fees"
+   ],
+   "website_url": "https://econfirm.co.ke/"
+  },
+  {
+   "canonical_domain": "kenyaescrow.com",
+   "conditions": {
+    "amount_basis": "seller_receives",
+    "categories": null,
+    "category_labels": null,
+    "kyc_required": null,
+    "limits_summary": "KSh 50 to KSh 240,000 (the amount the seller receives)",
+    "max_amount": 240000,
+    "min_amount": 50,
+    "other": [
+     "No account is required.",
+     "It sends SMS and WhatsApp notifications."
+    ],
+    "payment_method_labels": [
+     "M-Pesa STK Push"
+    ],
+    "payment_methods": [
+     "mpesa_stk_push"
+    ],
+    "payout_method_labels": null,
+    "payout_methods": null,
+    "regions": null,
+    "registration_required": false,
+    "requirements_summary": "No account required. ID checks not documented."
+   },
+   "fee_disclosure": "published_tiered",
+   "fee_summary": "Fee depends on the amount: a percentage plus a fixed charge, in 11 published bands. Use the calculator for your amount.",
+   "freshness": {
+    "needs_review": true,
+    "pricing": {
+     "days_since_verified": null,
+     "days_until_expiry": null,
+     "expires_on": null,
+     "label": "Not yet verified by BROKA",
+     "state": "unverified",
+     "verified_on": null,
+     "warning": "BROKA has not yet verified this provider's pricing. The figures come from the provider's own public pages. Confirm them on the provider's site before paying."
+    },
+    "record": {
+     "label": "Not yet verified by BROKA",
+     "next_review": null,
+     "state": "unverified",
+     "verified_on": null,
+     "warning": "BROKA has not yet verified this provider's details. They come from the provider's own public pages."
+    },
+    "state": "unverified",
+    "warnings": [
+     "BROKA has not yet verified this provider's pricing. The figures come from the provider's own public pages. Confirm them on the provider's site before paying.",
+     "BROKA has not yet verified this provider's details. They come from the provider's own public pages."
+    ]
+   },
+   "id": "kenyaescrow",
+   "identity": {
+    "canonical_domain": "kenyaescrow.com",
+    "confusable_with": [
+     {
+      "domain": "escrowkenya.com",
+      "name": "Escrow Kenya",
+      "note": "A different website. BROKA does not list it. Check the address before you pay."
+     }
+    ],
+    "contact_email": null,
+    "contact_phone": null,
+    "countries": [
+     "KE"
+    ],
+    "legal_entity_confirmed": false,
+    "legal_entity_label": "Legal operator not yet confirmed",
+    "legal_entity_name": null,
+    "logo_url": null,
+    "operator_note": "The company that operates this service has not yet been independently confirmed.",
+    "privacy_url": null,
+    "terms_url": null,
+    "website_url": "https://kenyaescrow.com/"
+   },
+   "name": "Kenya Escrow",
+   "not_to_be_confused_with": [
+    {
+     "domain": "escrowkenya.com",
+     "name": "Escrow Kenya",
+     "note": "A different website. BROKA does not list it. Check the address before you pay."
+    }
+   ],
+   "pricing": {
+    "absorbs_mpesa_fees": true,
+    "additional_fees_may_apply": null,
+    "basis": "seller_receives",
+    "commission": {
+     "label": "Escrow fee (percentage plus fixed charge, by amount)",
+     "payer": "buyer",
+     "tiers": [
+      {
+       "fixed": "10",
+       "max": 100,
+       "min": 50,
+       "percent": "10"
+      },
+      {
+       "fixed": "19",
+       "max": 500,
+       "min": 101,
+       "percent": "10"
+      },
+      {
+       "fixed": "40",
+       "max": 1000,
+       "min": 501,
+       "percent": "6"
+      },
+      {
+       "fixed": "46",
+       "max": 5000,
+       "min": 1001,
+       "percent": "5.4"
+      },
+      {
+       "fixed": "81",
+       "max": 10000,
+       "min": 5001,
+       "percent": "4.7"
+      },
+      {
+       "fixed": "151",
+       "max": 25000,
+       "min": 10001,
+       "percent": "4"
+      },
+      {
+       "fixed": "226",
+       "max": 50000,
+       "min": 25001,
+       "percent": "3.7"
+      },
+      {
+       "fixed": "440",
+       "max": 100000,
+       "min": 50001,
+       "percent": "3.3"
+      },
+      {
+       "fixed": "955",
+       "max": 150000,
+       "min": 100001,
+       "percent": "2.8"
+      },
+      {
+       "fixed": "1190",
+       "max": 200000,
+       "min": 150001,
+       "percent": "2.65"
+      },
+      {
+       "fixed": "5905",
+       "max": 240000,
+       "min": 200001,
+       "percent": "0.3"
+      }
+     ]
+    },
+    "currency": "KES",
+    "disclosure": "published_tiered",
+    "last_verified": null,
+    "payout_fees": [],
+    "processing_fees": [],
+    "public_note": "The fee is the seller's amount times the percentage for its band, plus a fixed charge. Its pricing page says users pay no additional M-Pesa transaction charge.",
+    "quote_url": "https://kenyaescrow.com/pricing",
+    "source_url": "https://kenyaescrow.com/pricing"
+   },
+   "protection": {
+    "auto_release": {
+     "can_occur": null,
+     "description": null
+    },
+    "buyer_protection": null,
+    "cancellation_policy": null,
+    "confirmation_window": null,
+    "deposit_insurance": null,
+    "dispute_initiation": "Its site advertises a dispute process that is reviewed by people. How a dispute is opened is not recorded here: check its FAQ.",
+    "dispute_timeframe": null,
+    "evidence_required": null,
+    "how_funds_are_held": null,
+    "notable_terms": [],
+    "refund_conditions": null,
+    "release_conditions": "Its site describes release as controlled by the buyer.",
+    "seller_protection": null,
+    "when_funds_locked": null
+   },
+   "public_notice": null,
+   "recommendable": false,
+   "review_label": "Under review: not yet verified by Broka",
+   "sources": [
+    {
+     "label": "Pricing",
+     "url": "https://kenyaescrow.com/pricing"
+    },
+    {
+     "label": "FAQ",
+     "url": "https://kenyaescrow.com/faq"
+    }
+   ],
+   "status": "under_review",
+   "summaries": {
+    "disputes": "Its site advertises a dispute process that is reviewed by people. How a dispute is opened is not recorded here: check its FAQ.",
+    "fees": "Fee depends on the amount: a percentage plus a fixed charge, in 11 published bands. Use the calculator for your amount.",
+    "limits": "KSh 50 to KSh 240,000 (the amount the seller receives)",
+    "payment_methods": "M-Pesa STK Push",
+    "release": "Its site describes release as controlled by the buyer.",
+    "requirements": "No account required. ID checks not documented."
+   },
+   "tagline": "M-Pesa escrow · no account needed · fee bands published",
+   "trust": {
+    "identity_verification": "pending",
+    "last_verified": null,
+    "next_review": null,
+    "operational_test": "not_started",
+    "pricing_review": "pending",
+    "sources": [
+     {
+      "label": "Pricing",
+      "url": "https://kenyaescrow.com/pricing"
+     },
+     {
+      "label": "FAQ",
+      "url": "https://kenyaescrow.com/faq"
+     }
+    ],
+    "terms_review": "pending"
+   },
+   "undocumented": [
+    "kyc",
+    "categories",
+    "payout_methods",
+    "how_funds_are_held",
+    "dispute_timeframe",
+    "refund_conditions",
+    "cancellation_policy",
+    "seller_protection",
+    "buyer_protection",
+    "evidence_required",
+    "confirmation_window",
+    "additional_fees"
+   ],
+   "website_url": "https://kenyaescrow.com/"
+  },
+  {
+   "canonical_domain": "lipasafe.co.ke",
+   "conditions": {
+    "amount_basis": "not_stated",
+    "categories": null,
+    "category_labels": null,
+    "kyc_required": true,
+    "limits_summary": "Limits not published",
+    "max_amount": null,
+    "min_amount": null,
+    "other": [],
+    "payment_method_labels": [
+     "M-Pesa"
+    ],
+    "payment_methods": [
+     "mpesa"
+    ],
+    "payout_method_labels": null,
+    "payout_methods": null,
+    "regions": null,
+    "registration_required": true,
+    "requirements_summary": "Account required; ID checks (KYC) required"
+   },
+   "fee_disclosure": "quote_required",
+   "fee_summary": "Check live quotation in Lipasafe before paying",
+   "freshness": {
+    "needs_review": true,
+    "pricing": {
+     "days_since_verified": null,
+     "days_until_expiry": null,
+     "expires_on": null,
+     "label": "Not yet verified by BROKA",
+     "state": "unverified",
+     "verified_on": null,
+     "warning": "BROKA has not yet verified this provider's pricing. The figures come from the provider's own public pages. Confirm them on the provider's site before paying."
+    },
+    "record": {
+     "label": "Not yet verified by BROKA",
+     "next_review": null,
+     "state": "unverified",
+     "verified_on": null,
+     "warning": "BROKA has not yet verified this provider's details. They come from the provider's own public pages."
+    },
+    "state": "unverified",
+    "warnings": [
+     "BROKA has not yet verified this provider's pricing. The figures come from the provider's own public pages. Confirm them on the provider's site before paying.",
+     "BROKA has not yet verified this provider's details. They come from the provider's own public pages."
+    ]
+   },
+   "id": "lipasafe",
+   "identity": {
+    "canonical_domain": "lipasafe.co.ke",
+    "confusable_with": [],
+    "contact_email": null,
+    "contact_phone": null,
+    "countries": [
+     "KE"
+    ],
+    "legal_entity_confirmed": false,
+    "legal_entity_label": "Operator named by the provider (not yet verified by Broka)",
+    "legal_entity_name": "Holda Fintech Technologies Limited",
+    "logo_url": null,
+    "operator_note": "Its terms name Holda Fintech Technologies Limited as the operator. BROKA has not yet confirmed this independently.",
+    "privacy_url": null,
+    "terms_url": "https://lipasafe.co.ke/terms",
+    "website_url": "https://lipasafe.co.ke/"
+   },
+   "name": "Lipasafe",
+   "not_to_be_confused_with": [],
+   "pricing": {
+    "absorbs_mpesa_fees": null,
+    "additional_fees_may_apply": null,
+    "basis": "not_stated",
+    "commission": null,
+    "currency": "KES",
+    "disclosure": "quote_required",
+    "last_verified": null,
+    "payout_fees": [],
+    "processing_fees": [],
+    "public_note": "It states that fees, including the escrow and payout charges, are shown inside its app before you confirm. No rate is published, so BROKA does not estimate one.",
+    "quote_url": "https://lipasafe.co.ke/",
+    "source_url": "https://lipasafe.co.ke/terms"
+   },
+   "protection": {
+    "auto_release": {
+     "can_occur": true,
+     "description": "It states that funds may be released automatically when the confirmation period ends without a dispute."
+    },
+    "buyer_protection": null,
+    "cancellation_policy": null,
+    "confirmation_window": null,
+    "deposit_insurance": "It states that funds are not represented as bank deposits and are not covered by deposit insurance.",
+    "dispute_initiation": "Its terms describe evidence-based dispute resolution.",
+    "dispute_timeframe": null,
+    "evidence_required": null,
+    "how_funds_are_held": "It states that it holds the funds until the agreed release conditions are met.",
+    "notable_terms": [],
+    "refund_conditions": null,
+    "release_conditions": null,
+    "seller_protection": null,
+    "when_funds_locked": null
+   },
+   "public_notice": null,
+   "recommendable": false,
+   "review_label": "Under review: not yet verified by Broka",
+   "sources": [
+    {
+     "label": "Terms",
+     "url": "https://lipasafe.co.ke/terms"
+    }
+   ],
+   "status": "under_review",
+   "summaries": {
+    "disputes": "Its terms describe evidence-based dispute resolution.",
+    "fees": "Check live quotation in Lipasafe before paying",
+    "limits": "Limits not published",
+    "payment_methods": "M-Pesa",
+    "release": "It states that funds may be released automatically when the confirmation period ends without a dispute.",
+    "requirements": "Account required; ID checks (KYC) required"
+   },
+   "tagline": "M-Pesa escrow · account and ID check required",
+   "trust": {
+    "identity_verification": "pending",
+    "last_verified": null,
+    "next_review": null,
+    "operational_test": "not_started",
+    "pricing_review": "pending",
+    "sources": [
+     {
+      "label": "Terms",
+      "url": "https://lipasafe.co.ke/terms"
+     }
+    ],
+    "terms_review": "pending"
+   },
+   "undocumented": [
+    "minimum_amount",
+    "maximum_amount",
+    "categories",
+    "payout_methods",
+    "release_conditions",
+    "dispute_timeframe",
+    "refund_conditions",
+    "cancellation_policy",
+    "seller_protection",
+    "buyer_protection",
+    "evidence_required",
+    "confirmation_window",
+    "additional_fees"
+   ],
+   "website_url": "https://lipasafe.co.ke/"
+  },
+  {
+   "canonical_domain": "shikilia.co.ke",
+   "conditions": {
+    "amount_basis": "not_stated",
+    "categories": null,
+    "category_labels": null,
+    "kyc_required": null,
+    "limits_summary": "From KSh 10; maximum not published",
+    "max_amount": null,
+    "min_amount": 10,
+    "other": [
+     "The deal runs on WhatsApp.",
+     "Its checkout currently shows a KSh 10 minimum."
+    ],
+    "payment_method_labels": [
+     "M-Pesa"
+    ],
+    "payment_methods": [
+     "mpesa"
+    ],
+    "payout_method_labels": null,
+    "payout_methods": null,
+    "regions": null,
+    "registration_required": null,
+    "requirements_summary": "Not documented; Not documented"
+   },
+   "fee_disclosure": "not_disclosed",
+   "fee_summary": "Fee not publicly specified – confirm before paying",
+   "freshness": {
+    "needs_review": true,
+    "pricing": {
+     "days_since_verified": null,
+     "days_until_expiry": null,
+     "expires_on": null,
+     "label": "Not yet verified by BROKA",
+     "state": "unverified",
+     "verified_on": null,
+     "warning": "BROKA has not yet verified this provider's pricing. The figures come from the provider's own public pages. Confirm them on the provider's site before paying."
+    },
+    "record": {
+     "label": "Not yet verified by BROKA",
+     "next_review": null,
+     "state": "unverified",
+     "verified_on": null,
+     "warning": "BROKA has not yet verified this provider's details. They come from the provider's own public pages."
+    },
+    "state": "unverified",
+    "warnings": [
+     "BROKA has not yet verified this provider's pricing. The figures come from the provider's own public pages. Confirm them on the provider's site before paying.",
+     "BROKA has not yet verified this provider's details. They come from the provider's own public pages."
+    ]
+   },
+   "id": "shikilia",
+   "identity": {
+    "canonical_domain": "shikilia.co.ke",
+    "confusable_with": [],
+    "contact_email": null,
+    "contact_phone": null,
+    "countries": [
+     "KE"
+    ],
+    "legal_entity_confirmed": false,
+    "legal_entity_label": "Legal operator not yet confirmed",
+    "legal_entity_name": null,
+    "logo_url": null,
+    "operator_note": "Its homepage names Jeno-tech Solutions and Jo-Jo Mani Investment Limited, and its footer identifies Jo-Jo Mani Investment Ltd and refers to Travel Pay and Jeno-Tech. Which company is responsible for the escrow transaction has not been confirmed.",
+    "privacy_url": null,
+    "terms_url": null,
+    "website_url": "https://www.shikilia.co.ke/"
+   },
+   "name": "Shikilia",
+   "not_to_be_confused_with": [],
+   "pricing": {
+    "absorbs_mpesa_fees": null,
+    "additional_fees_may_apply": null,
+    "basis": "not_stated",
+    "commission": null,
+    "currency": "KES",
+    "disclosure": "not_disclosed",
+    "last_verified": null,
+    "payout_fees": [],
+    "processing_fees": [],
+    "public_note": "Its website advertises no monthly fee and a per-transaction fee. No percentage or fixed charge is published, so BROKA does not estimate one.",
+    "quote_url": "https://www.shikilia.co.ke/checkout",
+    "source_url": "https://www.shikilia.co.ke/checkout"
+   },
+   "protection": {
+    "auto_release": {
+     "can_occur": null,
+     "description": null
+    },
+    "buyer_protection": "Its website describes a 24-hour buyer protection window.",
+    "cancellation_policy": null,
+    "confirmation_window": null,
+    "deposit_insurance": null,
+    "dispute_initiation": null,
+    "dispute_timeframe": "Its website advertises a dispute review within 24 to 48 hours.",
+    "evidence_required": null,
+    "how_funds_are_held": null,
+    "notable_terms": [],
+    "refund_conditions": null,
+    "release_conditions": "Its website describes delivery being confirmed with a QR code.",
+    "seller_protection": null,
+    "when_funds_locked": null
+   },
+   "public_notice": null,
+   "recommendable": false,
+   "review_label": "Under review: not yet verified by Broka",
+   "sources": [
+    {
+     "label": "Checkout",
+     "url": "https://www.shikilia.co.ke/checkout"
+    },
+    {
+     "label": "Protection",
+     "url": "https://www.shikilia.co.ke/protection"
+    }
+   ],
+   "status": "under_review",
+   "summaries": {
+    "disputes": "Its website advertises a dispute review within 24 to 48 hours.",
+    "fees": "Fee not publicly specified – confirm before paying",
+    "limits": "From KSh 10; maximum not published",
+    "payment_methods": "M-Pesa",
+    "release": "Its website describes delivery being confirmed with a QR code.",
+    "requirements": "Not documented; Not documented"
+   },
+   "tagline": "M-Pesa escrow on WhatsApp",
+   "trust": {
+    "identity_verification": "pending",
+    "last_verified": null,
+    "next_review": null,
+    "operational_test": "not_started",
+    "pricing_review": "pending",
+    "sources": [
+     {
+      "label": "Checkout",
+      "url": "https://www.shikilia.co.ke/checkout"
+     },
+     {
+      "label": "Protection",
+      "url": "https://www.shikilia.co.ke/protection"
+     }
+    ],
+    "terms_review": "pending"
+   },
+   "undocumented": [
+    "maximum_amount",
+    "registration",
+    "kyc",
+    "categories",
+    "payout_methods",
+    "how_funds_are_held",
+    "dispute_initiation",
+    "refund_conditions",
+    "cancellation_policy",
+    "seller_protection",
+    "evidence_required",
+    "confirmation_window",
+    "additional_fees"
+   ],
+   "website_url": "https://www.shikilia.co.ke/"
+  }
+ ]
+}

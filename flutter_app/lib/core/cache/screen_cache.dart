@@ -49,6 +49,7 @@ enum CacheFeature {
   storeInsights,
   storeProducts,
   callHistory,
+  escrowProviders,
 }
 
 /// How long an entry counts as current, and how long it is kept at all.
@@ -124,6 +125,16 @@ class CachePolicies {
   /// conditionally (an unchanged history is an empty 304), and the saved
   /// copy is drawn first so the screen is never blank on a slow network.
   static const callHistory = CachePolicy(freshFor: Duration.zero, keepFor: Duration(days: 14));
+
+  /// The escrow providers BROKA lists, with their fees and when BROKA last
+  /// checked them. A provider can be suspended or change its fees at any
+  /// time, so this is the shortest-lived cache in the app: five minutes fresh,
+  /// and a copy older than two days is DISCARDED, not shown - "where to send
+  /// your money" from last week is worse than saying the list is unavailable.
+  /// Whatever is shown from the phone's copy says when it was fetched
+  /// (ProviderDirectory.fetchedAt) and carries the server's own verification
+  /// dates, so an old copy never reads as current.
+  static const escrowProviders = CachePolicy(freshFor: Duration(minutes: 5), keepFor: Duration(days: 2));
 }
 
 /// Where an entry lives: whose it is, what it is, and for which parameters.

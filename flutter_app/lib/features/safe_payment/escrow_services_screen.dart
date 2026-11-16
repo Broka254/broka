@@ -10,13 +10,17 @@
 // tap away from the top and from every service.
 //
 // Everything about a service comes from GET /pricing/safe-payment, as the
-// service publishes it; offline, the services still show by name and
-// address (SafePaymentInfo.offline) and fees are left to their sites.
+// service publishes it. Offline there is NO list of services - the app does not
+// carry one (SafePaymentInfo.offline): a list baked into a release named a
+// provider BROKA later suspended. The comparison screen
+// (provider_comparison_screen.dart) is where services are compared, with fees,
+// limits and when BROKA last checked each of them.
 
 import 'package:flutter/material.dart';
 
 import '../../main.dart';
 import '../../widgets/chat_ambient_background.dart';
+import 'provider_comparison_screen.dart';
 import 'safe_payment.dart';
 
 class EscrowServicesScreen extends StatefulWidget {
@@ -50,7 +54,7 @@ class _EscrowServicesScreenState extends State<EscrowServicesScreen> {
   @override
   Widget build(BuildContext context) {
     final info = _info ?? SafePaymentInfo.offline;
-    final providers = info.providers.isNotEmpty ? info.providers : SafePaymentInfo.offline.providers;
+    final providers = info.providers;
     final beats = info.howEscrowWorks.isNotEmpty ? info.howEscrowWorks : SafePaymentInfo.offline.howEscrowWorks;
     final rules = info.escrowRules.isNotEmpty ? info.escrowRules : SafePaymentInfo.offline.escrowRules;
     return ChatAmbientBackground(
@@ -72,6 +76,21 @@ class _EscrowServicesScreenState extends State<EscrowServicesScreen> {
             _Hero(onBuyer: () => _zeno(zenoEscrowPrompt),
                 onSeller: () => _zeno('How do I get paid through escrow?'),
                 zenoHelp: info.zenoHelp),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              key: const Key('open-comparison'),
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => ProviderComparisonScreen(openUrl: widget.openUrl, onZeno: widget.onZeno),
+              )),
+              icon: const Icon(Icons.compare_arrows_rounded, size: 18),
+              label: const Text('Compare fees, limits and protection'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: BrokaColors.textHigh,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                side: BorderSide(color: BrokaColors.neonGreen.withOpacity(0.6)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+            ),
             const SizedBox(height: 18),
             const _Heading('How escrow works'),
             for (final (i, b) in beats.indexed) _Beat(number: i + 1, beat: b),
@@ -87,6 +106,17 @@ class _EscrowServicesScreenState extends State<EscrowServicesScreen> {
                 style: TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.45),
               ),
             ),
+            if (providers.isEmpty && !_loading)
+              const Padding(
+                key: Key('providers-unavailable'),
+                padding: EdgeInsets.only(bottom: 12),
+                child: Text(
+                  'The list of escrow services could not be loaded just now. BROKA does not keep one on your '
+                  "phone that could be out of date. Connect to the internet and try again - and don't use an "
+                  'escrow link someone sends you in its place.',
+                  style: TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.45),
+                ),
+              ),
             for (final p in providers)
               _ProviderCard(
                 provider: p,

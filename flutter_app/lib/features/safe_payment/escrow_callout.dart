@@ -24,7 +24,7 @@ class EscrowCallout extends StatefulWidget {
     super.key,
     this.compact = false,
     this.title = 'Pay with escrow',
-    this.subtitle = 'Your money is held until you have the item. Zeno walks you through it, step by step.',
+    this.subtitle = 'Independent escrow services can hold a payment until delivery, under their own rules. Compare them, and Zeno walks you through it.',
     this.onOpen,
     this.onZeno,
     this.margin = EdgeInsets.zero,
@@ -169,7 +169,7 @@ class _EscrowCalloutState extends State<EscrowCallout> with SingleTickerProvider
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
               Text(widget.title, style: const TextStyle(
                   color: BrokaColors.textHigh, fontSize: 13.5, fontWeight: FontWeight.w900)),
-              const Text('Money held until you have it · Zeno guides you',
+              const Text('Independent services · compare them · Zeno guides you',
                   maxLines: 1, overflow: TextOverflow.ellipsis,
                   style: TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
             ]),
@@ -191,13 +191,6 @@ class _EscrowCalloutState extends State<EscrowCallout> with SingleTickerProvider
                   Flexible(
                     child: Text(widget.title, style: const TextStyle(
                         color: BrokaColors.textHigh, fontSize: 17, fontWeight: FontWeight.w900)),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                    decoration: BoxDecoration(color: BrokaColors.neonGreen, borderRadius: BorderRadius.circular(6)),
-                    child: const Text('SAFEST', style: TextStyle(
-                        color: BrokaColors.bg, fontSize: 9.5, fontWeight: FontWeight.w900, letterSpacing: 0.8)),
                   ),
                 ]),
                 const SizedBox(height: 3),
