@@ -174,8 +174,13 @@ def _static(guide_id: str) -> dict:
             "intro": "BROKA doesn't take payments itself yet. An escrow service holds the money "
                      "until the buyer has the item - ask me to walk you through it.",
             "steps": [
-                _step("Pick an escrow service", "E-Confirm, Escrow Kenya, Kenya Escrow, Lipasafe or "
-                      "Shikilia - independent, not run by BROKA.", "escrow_services"),
+                # No provider is named here: a name typed into a card cannot
+                # be suspended, and this one still listed escrowkenya.com
+                # after the catalogue had taken it off. The screen it opens
+                # shows only what the catalogue lists today.
+                _step("Compare the escrow services", "BROKA lists independent services and what each "
+                      "publishes about its fees and limits. BROKA doesn't run them - check the "
+                      "provider's own checkout before you pay.", "escrow_services"),
                 _step("Pay the service, never the seller", "Open it yourself - never from a link "
                       "the other person sends."),
                 _step("Release once you have it", "Only when it's what you agreed."),

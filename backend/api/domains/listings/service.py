@@ -280,6 +280,19 @@ class ListingService:
                 status_code=403,
                 detail="Your account has been restricted due to trust score. Contact support.",
             )
+        # A temporary protective restriction an administrator applied while a
+        # scam report is reviewed (domains/scam_reports). It ends on its own
+        # date, can be appealed, and says in plain words what it is about -
+        # never "you are a scammer", which no report establishes.
+        from api.domains.scam_reports import policy as restriction_policy, service as restrictions
+        held = await restrictions.is_restricted(self.db, seller_id, "create_listing")
+        if held is not None:
+            raise HTTPException(status_code=403, detail={
+                "code": "ACCOUNT_RESTRICTED",
+                "message": (f"{held.public_reason} {restriction_policy.RESTRICTION_NOTICE} "
+                            f"It ends on {held.expires_at:%d %b %Y}."),
+                "restriction_id": held.id,
+            })
 
         # A repeat of a create that already happened. Before the rate limit,
         # so the retry of a listing that exists is never refused for it.

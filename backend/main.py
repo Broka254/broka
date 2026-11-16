@@ -87,6 +87,14 @@ from api.domains.auctions.router   import router as auctions_router
 from api.domains.auction_ws.router import router as auction_ws_router
 from api.domains.buy_agent.router  import router as buy_agent_router
 from api.domains.zeno_assistant.router import router as zeno_assistant_router
+from api.domains.escrow_directory.router import (
+    public_router as escrow_directory_public_router,
+    admin_router as escrow_directory_admin_router,
+)
+from api.domains.scam_reports.router import (
+    customer_router as scam_reports_customer_router,
+    admin_router as scam_reports_admin_router,
+)
 from api.domains.pricing.router  import router as pricing_router
 from api.domains.premium.router  import router as premium_router
 from api.domains.payments.router import router as payments_router
@@ -308,6 +316,8 @@ app.include_router(auction_ws_router, prefix="/auction-ws", tags=["Auction WS"])
 app.include_router(buy_agent_router,  prefix="/buy-agent-requests", tags=["Buy-Agent"])
 app.include_router(zeno_assistant_router, prefix="/zeno", tags=["Zeno Assistant"])
 app.include_router(pricing_router,    prefix="/pricing",    tags=["Pricing"])
+app.include_router(escrow_directory_public_router, prefix="/escrow-providers", tags=["Escrow Providers"])
+app.include_router(scam_reports_customer_router, prefix="/scam-reports", tags=["Scam Reports"])
 app.include_router(premium_router,    prefix="/premium",    tags=["Premium"])
 app.include_router(payments_router,   prefix="/payments",   tags=["Payments (ZetuPay)"])
 app.include_router(escrow_router,     prefix="/deal",       tags=["Escrow/Deal v3"])
@@ -329,6 +339,10 @@ app.include_router(reviews_router,    prefix="/reviews",    tags=["Reviews v3"])
 app.include_router(negotiate.router,  prefix="/negotiate",  tags=["Negotiate (legacy)"])
 app.include_router(ai_broker_router,  prefix="/negotiate",  tags=["AI Broker v3"])
 app.include_router(admin_router,      prefix="/admin",      tags=["Admin v3"])
+app.include_router(escrow_directory_admin_router, prefix="/admin/escrow-providers",
+                   tags=["Admin - Escrow Providers"])
+app.include_router(scam_reports_admin_router, prefix="/admin/scam-reports",
+                   tags=["Admin - Scam Reports"])
 from api.domains.admin.alerts_revenue import router as admin_additions_router
 app.include_router(admin_additions_router, prefix="/admin", tags=["Admin v3"])
 # Founder intelligence (pulse, demand/supply, funnel, cohorts, sellers,

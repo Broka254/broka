@@ -59,6 +59,11 @@ class Permission(str, enum.Enum):
     # provider invoice or overriding an estimate writes financial history,
     # so it is a distinct capability from reading the admin dashboard.
     MANAGE_COSTS          = "can_manage_costs"
+    # The escrow provider directory (api/domains/escrow_directory): editing
+    # what BROKA tells buyers about a provider, recording a review, and
+    # suspending one. It decides which websites the app sends people to
+    # pay, so it is its own capability, not part of MANAGE_USERS.
+    MANAGE_ESCROW_PROVIDERS = "can_manage_escrow_providers"
 
     # AI
     USE_AI_BROKER         = "can_use_ai_broker"
@@ -105,6 +110,7 @@ _ADMIN_PERMISSIONS: set[Permission] = _USER_PERMISSIONS | {
     Permission.VIEW_FEEDBACK,
     Permission.MANAGE_FEEDBACK,
     Permission.MANAGE_COSTS,
+    Permission.MANAGE_ESCROW_PROVIDERS,
 }
 
 # Permissions blocked for suspended/fraud-flagged users

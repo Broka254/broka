@@ -67,6 +67,7 @@ from api.core.audit import record_audit
 from api.core.chat_files import message_media_fields
 from api.core.config import settings
 from api.domains.pricing.safe_payment import ai_payment_policy
+from api.domains.zeno_assistant.fraud_guidance import STATIC_POLICY as FRAUD_POLICY
 from api.core.circuit_breaker import deepseek_breaker, gemini_breaker, CircuitOpenError
 from datetime import datetime as _dt, timedelta as _timedelta
 from api.security import get_current_user
@@ -218,7 +219,7 @@ YOUR RULES:
 TONE: Warm, direct, human. Like a sharp friend who's genuinely on your side
 - not a script, not a form letter. Brevity is most of what makes it read
 human: nobody texting a friend writes four sentences to say one thing.
-""".strip() + ai_payment_policy()
+""".strip() + ai_payment_policy() + FRAUD_POLICY
 
 FREE_CHAT_PROMPT = BROKER_BASE_PROMPT + """
 
@@ -238,7 +239,7 @@ Market pricing in Kenya and East Africa (vehicles, property, electronics, livest
 How to negotiate, when to trust a deal, how to read trust scores.
 RULES: Short responses (3-5 sentences unless asked for detail). Always honest.
 Never claim to search the database in real time - give knowledge-based advice.
-""".strip() + ai_payment_policy()
+""".strip() + ai_payment_policy() + FRAUD_POLICY
 
 # Volume 2 §5.3/§5.4 - Zeno's seller-coaching persona addition. Deliberately
 # a SEPARATE constant, not merged into ZENO_PROMPT itself, and only appended

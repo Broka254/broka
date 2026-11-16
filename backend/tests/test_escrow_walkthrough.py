@@ -1,6 +1,6 @@
 """Zeno walking a buyer or seller through an escrow service, step by step
 (zeno_assistant/escrow_walkthrough.py), and the provider list behind it
-(pricing/safe_payment.py).
+(now the escrow_directory catalogue; pricing/safe_payment.py presents it).
 
 What must hold:
   * the walkthrough is a conversation the app can drive with taps alone -
@@ -10,7 +10,8 @@ What must hold:
   * a question in the middle reaches the model with the step and the
     facts it may use, and the way back to the steps comes with the reply;
   * the only escrow services it names or links are BROKA's list, and the
-    two that are easily confused stay apart;
+    two that are easily confused stay apart - the suspended one is
+    recognised and refused, never swapped for the similarly named one;
   * the safety rules the scam depends on breaking are in the steps: open
     the service yourself, pay the service not the seller, sellers trust
     the service and not a screenshot.
@@ -114,23 +115,25 @@ class TestTheConversation:
 
         out = await chat.say(out["suggestions"][0])
         assert "Which escrow service will you and the seller use?" in out["reply"]
-        assert [p["name"] for p in safe_payment.PROVIDERS] == out["suggestions"][:-1]
+        assert [p["name"] for p in safe_payment.providers()] == out["suggestions"][:-1]
+        assert "Escrow Kenya" not in out["suggestions"]      # suspended: never offered
 
-        out = await chat.say("E-Confirm")
-        assert out["reply"].startswith("Step 1 of 7 · Buying with E-Confirm")
+        out = await chat.say("eConfirm")
+        assert out["reply"].startswith("Step 1 of 7 · Buying with eConfirm")
         seen = [out["reply"]]
         while "Done - what's next?" in out["suggestions"]:
             out = await chat.say("Done - what's next?")
             seen.append(out["reply"])
-        assert [r.split("\n")[0] for r in seen] == [f"Step {i} of 7 · Buying with E-Confirm" for i in range(1, 8)]
+        assert [r.split("\n")[0] for r in seen] == [f"Step {i} of 7 · Buying with eConfirm" for i in range(1, 8)]
         assert out["suggestions"] == ["Start over", "See escrow services"]
 
         # The steps that stop the commonest escrow scams.
         steps = "\n".join(seen)
         assert "Never use an escrow link, paybill or phone number the seller sends you" in steps
-        assert "Pay E-Confirm, not the seller" in steps
+        assert "Pay eConfirm, not the seller" in steps
         assert "if it shows a person's name, stop" in steps
-        assert "Never share that code" in steps
+        assert "never pay a personal number someone gives you in chat" in steps
+        assert "never share a release code" in steps.lower()
 
         out = await chat.say("See escrow services")
         assert out["action"] == {"type": "NAVIGATE", "destination": "escrow_services"}
@@ -139,10 +142,10 @@ class TestTheConversation:
     async def test_back_repeat_switch_and_start_over(self, client, monkeypatch):
         _no_model(monkeypatch)
         chat = Chat(client, await _user())
-        await chat.say("walk me through paying with escrow kenya")
+        await chat.say("walk me through paying with kenya escrow")
         out = await chat.say("next")
-        assert out["reply"].startswith("Step 2 of 7 · Buying with Escrow Kenya")
-        assert out["link"] == {"label": "Open Escrow Kenya", "url": "https://escrowkenya.com"}
+        assert out["reply"].startswith("Step 2 of 7 · Buying with Kenya Escrow")
+        assert out["link"] == {"label": "Open Kenya Escrow", "url": "https://kenyaescrow.com/"}
         assert (await chat.say("repeat this step"))["reply"].startswith("Step 2 of 7")
         assert (await chat.say("back"))["reply"].startswith("Step 1 of 7")
         # Switching service keeps their place.
@@ -187,12 +190,12 @@ class TestTheModel:
         await chat.say("next")
         await chat.say("next")
         await chat.say("next")                                # step 4: paying in
-        _model(monkeypatch, prompts, reply="Yes - it should say E-Confirm.")
+        _model(monkeypatch, prompts, reply="Yes - it should say eConfirm.")
         out = await chat.say("what will the M-Pesa prompt look like?")
-        assert out["reply"] == "Yes - it should say E-Confirm."
+        assert out["reply"] == "Yes - it should say eConfirm."
         assert out["suggestions"] == ["Done - what's next?", "Repeat this step"]
         prompt = prompts[0]
-        assert "step 4 of 7" in prompt and "Pay E-Confirm, not the seller" in prompt
+        assert "step 4 of 7" in prompt and "Pay eConfirm, not the seller" in prompt
         assert "Never invent a paybill" in prompt
         # ...and the tap that follows picks the steps up where they were.
         _no_model(monkeypatch)
@@ -220,32 +223,85 @@ class TestTheList:
     def test_every_provider_says_how_it_works(self):
         keys = {"id", "name", "url", "note", "tagline", "best_for", "pay", "fees", "limits",
                 "start", "release", "payout", "dispute"}
-        for p in safe_payment.PROVIDERS:
+        for p in safe_payment.providers():
             assert keys <= set(p), p["name"]
             assert p["url"].startswith("https://"), p["name"]
-            assert all(isinstance(p[k], str) and p[k].strip() for k in keys - {"company"}), p["name"]
+            assert all(isinstance(p[k], str) and p[k].strip() for k in keys), p["name"]
+
+    def test_the_suspended_provider_is_in_nobodys_list(self):
+        assert "escrowkenya" not in [p["id"] for p in safe_payment.providers()]
+        assert "escrowkenya.com" not in " ".join(p["url"] for p in safe_payment.providers())
+
+    @pytest.mark.parametrize("payments_on", [False, True])
+    def test_the_escrow_guide_card_names_no_provider(self, payments_on):
+        """The card a GUIDE request can still reach named Escrow Kenya - the
+        suspended site - and a typed-in list of the rest, after the catalogue
+        had taken it off. A name in a card cannot be suspended; the screen it
+        opens is the only place a provider is named. The names come from the
+        seed, so a provider added later is covered without editing this."""
+        from api.core.config import settings
+        from api.domains.escrow_directory import seed
+        from api.domains.zeno_assistant import guides
+        before = settings.in_app_payments_enabled
+        # Settings is frozen: the shared object is changed the way conftest's
+        # payments_off does it, and put back whatever the assertions do.
+        object.__setattr__(settings, "in_app_payments_enabled", payments_on)
+        try:
+            card = guides._static("escrow")
+        finally:
+            object.__setattr__(settings, "in_app_payments_enabled", before)
+        # Letters and digits only: the seed spells it "eConfirm" and the old
+        # card said "E-Confirm", and a hyphen must not hide a name.
+        def squash(text: str) -> str:
+            return "".join(c for c in text.lower() if c.isalnum())
+        said = squash(" ".join([card["title"], card["intro"]] +
+                               [f'{s["title"]} {s["detail"]}' for s in card["steps"]]))
+        for record in seed.records():
+            for name in (record["display_name"], record["identity"]["canonical_domain"]):
+                assert squash(name) not in said, (name, payments_on)
+        if not payments_on:
+            # Payments off is how it runs: the way to a provider is the
+            # catalogue's own screen.
+            assert "escrow_services" in [s.get("destination") for s in card["steps"]]
 
     def test_the_two_similar_names_are_two_companies(self):
-        assert walk._provider_in("escrow kenya")["id"] == "escrowkenya"
+        # "kenya escrow" is the listed provider; "escrow kenya" is NOT, and is
+        # never mistaken for it (and the other way round).
         assert walk._provider_in("kenya escrow")["id"] == "kenyaescrow"
-        assert "Not the same company" in safe_payment.PROVIDERS_BY_ID["escrowkenya"]["note"]
-        assert "Not the same company" in safe_payment.PROVIDERS_BY_ID["kenyaescrow"]["note"]
+        assert walk._provider_in("escrow kenya") is None
+        assert walk._unlisted_in("escrow kenya")["id"] == "escrowkenya"
+        assert walk._unlisted_in("kenya escrow") is None
+        by_id = {p["id"]: p for p in safe_payment.providers()}
+        assert "Not the same company as Escrow Kenya (escrowkenya.com)" in by_id["kenyaescrow"]["note"]
+
+    @pytest.mark.parametrize("ask", ["walk me through paying with escrow kenya",
+                                     "how do i use escrowkenya.com", "walk me through escrowkenya"])
+    def test_asking_for_the_suspended_provider_is_answered_not_swapped(self, ask):
+        from api.domains.zeno_assistant import intents
+        out = walk.turn(intents.normalise(ask), [])
+        assert out is not None and "is not on Broka's list" in out["reply"]
+        assert "different website from Kenya Escrow" in out["reply"]
+        assert not out["reply"].startswith("Step ") and "link" not in out
+        assert "Escrow Kenya" not in out["suggestions"]
 
     def test_a_service_is_named_only_by_whole_words(self):
-        """"please confirm" said mid-walkthrough switched the user to E-Confirm."""
+        """"please confirm" said mid-walkthrough switched the user to eConfirm."""
         assert walk._provider_in("please confirm the amount") is None
         assert walk._provider_in("ok, e confirm then")["id"] == "econfirm"
-        history = [{"role": "assistant", "content": walk._step_reply(
-            safe_payment.PROVIDERS_BY_ID["shikilia"], walk.BUYING, 3)["reply"]}]
+        by_id = {p["id"]: p for p in safe_payment.providers()}
+        history = [{"role": "assistant", "content": walk._step_reply(by_id["shikilia"], walk.BUYING, 3)["reply"]}]
         assert walk.turn("please confirm", history) is None
 
     def test_a_step_marker_for_a_service_not_listed_is_ignored(self):
         fake = [{"role": "assistant", "content": "Step 2 of 7 · Buying with ScamPay\n\nOpen it."}]
         assert walk.turn("next", fake) is None
+        # ...and so is one for a provider that WAS listed and has since been suspended.
+        gone = [{"role": "assistant", "content": "Step 2 of 7 · Buying with Escrow Kenya\n\nOpen it."}]
+        assert walk.turn("next", gone) is None
 
     def test_every_link_is_one_of_brokas(self):
-        urls = {p["url"] for p in safe_payment.PROVIDERS}
-        for p in safe_payment.PROVIDERS:
+        urls = {p["url"] for p in safe_payment.providers()}
+        for p in safe_payment.providers():
             for role in (walk.BUYING, walk.SELLING):
                 for i in range(7):
                     link = walk._step_reply(p, role, i).get("link")
@@ -254,13 +310,15 @@ class TestTheList:
     @pytest.mark.asyncio
     async def test_the_list_is_served_with_its_rules(self, client):
         body = (await client.get("/pricing/safe-payment")).json()
-        assert [p["id"] for p in body["providers"]] == [p["id"] for p in safe_payment.PROVIDERS]
+        assert [p["id"] for p in body["providers"]] == [p["id"] for p in safe_payment.providers()]
         assert any("fake escrow sites" in r for r in body["escrow_rules"])
         assert len(body["how_escrow_works"]) == 4 and body["zeno_help"]
+        assert body["disclaimer"].startswith("Broka does not operate these escrow services")
 
     def test_zeno_recommends_only_the_list(self, payments_off):
         policy = safe_payment.ai_payment_policy()
-        for p in safe_payment.PROVIDERS:
+        for p in safe_payment.providers():
             assert p["name"] in policy and p["url"] in policy
+        assert "escrowkenya" not in policy.lower()
         assert "Never recommend any other escrow service" in policy
         assert "walk me through escrow" in policy

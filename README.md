@@ -5,9 +5,11 @@ an AI broker that negotiates, translates, privately coaches each side, and
 mediates disputes.
 
 **For launch (2026-10-08) BROKA holds no deal money.** Buyers pay sellers
-through one of Kenya's independent escrow services (E-Confirm, Escrow Kenya,
-Kenya Escrow, Lipasafe, Shikilia), listed in the app and on the web store,
-and Zeno walks them through it one step at a time. No commission is charged.
+through one of Kenya's independent escrow services, listed in the app and on
+the web store from a single reviewed directory (`ESCROW_PROVIDERS.md`: who
+each provider is, what it publishes about fees and protection, and when BROKA
+last checked it), and Zeno walks them through it one step at a time and warns
+them off the common scams. No commission is charged.
 BROKA's own escrow is built and switched off (`IN_APP_PAYMENTS_ENABLED`), and
 so are auctions (`AUCTIONS_ENABLED`), whose winning bids need it. See
 `CHANGES.md`, "Paying with escrow services, and no auctions for launch".
@@ -19,7 +21,7 @@ so are auctions (`AUCTIONS_ENABLED`), whose winning bids need it. See
 | `web/` | The web storefront at `broka.co.ke/store/<name>`: Next.js 16 (App Router) + TypeScript on Vercel |
 
 Design notes live next to this file: `ARCHITECTURE.md`, `AUCTIONS.md`,
-`CALLING.md`, `EVENT_ARCHITECTURE.md`, `PRIVACY.md`, `ZENO_ACTIONS.md` and
+`CALLING.md`, `ESCROW_PROVIDERS.md`, `EVENT_ARCHITECTURE.md`, `PRIVACY.md`, `ZENO_ACTIONS.md` and
 `SELLER_METRICS.md`, plus the audit write-ups (`ESCROW_AUDIT.md`,
 `DISPUTE_AUDIT.md`, `AI_AUDIT.md`, `COMMUNICATIONS_AUDIT.md`,
 `REPO_REVIEW.md`).

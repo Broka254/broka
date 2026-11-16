@@ -28,7 +28,7 @@ import httpx
 
 from api.core import gemini
 from api.core.config import settings
-from api.domains.pricing.safe_payment import ai_payment_policy
+from api.domains.pricing.safe_payment import ai_payment_policy, fraud_prevention_policy
 from api.core.circuit_breaker import (
     gemini_breaker, deepseek_breaker, openrouter_breaker, groq_breaker, CircuitOpenError,
 )
@@ -910,6 +910,7 @@ class AIBrokerService:
             f"Conversation so far:\n{transcript}\n\n"
             f"User's newest message: \"{_clip(message, 1000) or '(just the photo)'}\"\n\n"
             + ai_payment_policy().strip() + ("\n\n" if ai_payment_policy() else "")
+            + fraud_prevention_policy().strip() + "\n\n"
             + (f"{escrow}\n\n" if escrow else "")
             + photo +
             "THINGS YOU CAN DO (at most one per turn, and only when the user asks for it or "

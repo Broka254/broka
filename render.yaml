@@ -152,6 +152,14 @@ services:
       - key: AUCTIONS_ENABLED
         value: "false"       # true: auctions are back - creating, bidding, the Auction House. Off for
                              # launch: a winning bid needs in-app escrow (AUCTIONS.md).
+      - key: ESCROW_PROVIDER_DOMAINS
+        value: "econfirm.co.ke,kenyaescrow.com,lipasafe.co.ke,shikilia.co.ke,escrowkenya.com"
+                             # The ONLY websites an escrow provider record may link to. Adding a
+                             # domain is a reviewed deploy, not an admin action (ESCROW_PROVIDERS.md).
+      - key: ESCROW_PRICING_MAX_AGE_DAYS
+        value: "30"          # How long checked pricing counts as current before it is shown as outdated.
+      - key: ESCROW_RECORD_MAX_AGE_DAYS
+        value: "90"          # The same for the rest of a provider's record.
       - key: FREE_LISTINGS_PER_SELLER
         value: "0"           # Each seller's first N active listings pay no listing fee.
       - key: FOUNDING_SELLER_TIERS

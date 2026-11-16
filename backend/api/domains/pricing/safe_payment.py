@@ -15,16 +15,22 @@ app says so next to them, every time: a buyer who thinks BROKA stands
 behind a provider will blame BROKA when it fails them.
 
 GET /pricing/safe-payment serves it, so the list can change without an app
-release. Every fact about a provider below is what that provider publishes
-about itself (checked 2026-10-08); where it publishes no fee or limit the
-entry says to check, rather than guess. Add or change a provider only after
-checking its own site. Two names are easily confused - Escrow Kenya
-(escrowkenya.com) and Kenya Escrow (kenyaescrow.com) are different
-companies - so each entry says so.
+release. The PROVIDERS THEMSELVES are not in this file any more (2026-11): the
+one authoritative list is the escrow_directory catalogue - each provider's
+fees, limits and protection process, who confirmed them and when, whether it
+is listed, under review or suspended. This file keeps the advice and the
+rules, and presents the catalogue in the shape older app builds read.
+
+The old list here was typed from memory of each provider's site, could not be
+corrected without a release, and had no way to say "suspended". It named
+escrowkenya.com as an active service. Add or change a provider through the
+admin endpoints (ESCROW_PROVIDERS.md), never here.
 """
 from __future__ import annotations
 
 from api.core.config import settings
+from api.domains.escrow_directory import catalogue, projection
+from api.domains.zeno_assistant import fraud_guidance
 from fastapi import HTTPException
 
 PAYMENTS_OFF_CODE = "IN_APP_PAYMENTS_OFF"
@@ -70,104 +76,20 @@ HOW_ESCROW_WORKS = [
     {"title": "The buyer releases the money", "detail": "The service pays the seller. A problem? It decides a dispute."},
 ]
 
-# Each provider, as it describes itself. `note` is what older app builds
-# show under the name; the rest is what the escrow screen and Zeno's
-# walkthrough use:
-#   pay      how the buyer pays in
-#   start    how a deal is set up on it
-#   release  how the buyer lets the money go to the seller
-#   payout   how the seller receives it, said to the seller
-#   dispute  what happens when something goes wrong, a sentence of its own
-#   fees / limits  as published - or "check" where nothing is
-PROVIDERS = [
-    {
-        "id": "econfirm",
-        "name": "E-Confirm",
-        "url": "https://econfirm.co.ke",
-        "note": "M-Pesa escrow for buyers and sellers: the money is held until both of you confirm.",
-        "tagline": "M-Pesa escrow for most deals",
-        "best_for": "Most deals paid by M-Pesa, up to KES 500,000.",
-        "pay": "an M-Pesa prompt on your phone (STK push)",
-        "fees": "A commission on top of the amount, shown in its calculator before you pay.",
-        "limits": "It takes KES 100 to 500,000 a deal.",
-        "start": "Tap Start Escrow, enter the amount and the deal's details, and follow its steps.",
-        "release": "approve the release with the one-time code E-Confirm sends you. Never share that code with anyone - the seller included.",
-        "payout": "E-Confirm pays you by M-Pesa once the release is approved.",
-        "dispute": "The money stays held, and E-Confirm's dispute team decides whether it is refunded.",
-        "company": "Confirm Diligence Solutions Ltd",
-    },
-    {
-        "id": "escrowkenya",
-        "name": "Escrow Kenya",
-        "url": "https://escrowkenya.com",
-        "note": "Escrow with an account and an invoice; pay by M-Pesa or bank. Not the same company as Kenya Escrow.",
-        "tagline": "Bigger deals, cars and brokers",
-        "best_for": "Bigger deals, cars, and deals with a broker in the middle - it takes bank transfers too.",
-        "pay": "the Pay Now button on its invoice - an M-Pesa prompt, the paybill printed on the invoice, or a bank transfer (PesaLink)",
-        "fees": "3% of the price (at least KES 200, at most KES 15,000); vehicles 1.5% (at least KES 1,500). You choose who pays it - buyer, seller, or half each.",
-        "limits": "M-Pesa carries up to KES 250,000 a payment; above that, pay by bank transfer.",
-        "start": "Create an account and fill in the order form: the item, the price, and the other person's email and phone. They get an email and an SMS to accept the deal.",
-        "release": "approve the release from your Escrow Kenya account.",
-        "payout": "you withdraw it to M-Pesa or a bank - usually within about 20 minutes during support hours.",
-        "dispute": "The money stays held while Escrow Kenya looks at what each of you shows it.",
-        "company": "",
-    },
-    {
-        "id": "kenyaescrow",
-        "name": "Kenya Escrow",
-        "url": "https://www.kenyaescrow.com",
-        "note": "M-Pesa escrow with no account to create: your number is checked by SMS. Not the same company as Escrow Kenya.",
-        "tagline": "Quick M-Pesa escrow, no sign-up",
-        "best_for": "A quick deal with no sign-up; it also holds car payments until the logbook is transferred.",
-        "pay": "M-Pesa",
-        "fees": "It says paying in by M-Pesa is free, with a small fee for holding the money and for disputes - check it for your amount before you pay.",
-        "limits": "Check its limit for your amount on the site.",
-        "start": "Start a deal with the amount and the details. It checks your phone number with a Safaricom SMS - there's no account to create.",
-        "release": "mark the order complete - Kenya Escrow pays the seller straight away.",
-        "payout": "you're paid as soon as the buyer marks the order complete.",
-        "dispute": "Contact Kenya Escrow before the order is marked complete - it holds the money while the dispute is settled.",
-        "company": "",
-    },
-    {
-        "id": "lipasafe",
-        "name": "Lipasafe",
-        "url": "https://lipasafe.co.ke",
-        "note": "M-Pesa escrow for goods and services; every user is ID-checked.",
-        "tagline": "Everyone ID-checked",
-        "best_for": "Goods and services - a fundi's job too - with everyone ID-checked.",
-        "pay": "M-Pesa - the money is locked in escrow, not sent to the seller",
-        "fees": "Check its fee for your amount on the site before you pay.",
-        "limits": "Check its limit for your amount on the site.",
-        "start": "Sign up and verify your ID (Lipasafe checks every user), then create the deal with the amount and the other person's details.",
-        "release": "confirm on Lipasafe that you got it - the money goes to the seller's M-Pesa at once.",
-        "payout": "the money goes to your M-Pesa as soon as the buyer confirms.",
-        "dispute": "Lipasafe's dispute team steps in - upload anything that shows what was agreed.",
-        "company": "",
-    },
-    {
-        "id": "shikilia",
-        "name": "Shikilia",
-        "url": "https://www.shikilia.co.ke",
-        "note": "Escrow that runs on WhatsApp: pay by M-Pesa, confirm delivery with a QR code.",
-        "tagline": "Escrow on WhatsApp",
-        "best_for": "Deals arranged on WhatsApp - it works with any WhatsApp number.",
-        "pay": "an M-Pesa prompt on your phone; the seller gets a WhatsApp message that the money is held",
-        "fees": "No monthly fee - a fee per deal, shown before you pay.",
-        "limits": "Check its limit for your amount on the site.",
-        "start": "Start the deal on Shikilia with your WhatsApp number - it's free to register.",
-        "release": "confirm delivery with the QR code Shikilia sends you on WhatsApp.",
-        "payout": "you're paid out once the buyer confirms delivery.",
-        "dispute": "Shikilia says it settles disputes within 48 hours, and refunds the buyer if the seller goes silent.",
-        "company": "",
-    },
-]
+def providers() -> list[dict]:
+    """The providers BROKA lists, in the flat shape older app builds read
+    (id, name, url, note, tagline, best_for, pay, fees, limits, start,
+    release, payout, dispute, company), plus status and review_label. From
+    the catalogue as last loaded; suspended, rejected and draft providers
+    are not in it."""
+    return [projection.legacy_view(r) for r in catalogue.listed(catalogue.current_records())]
 
-PROVIDERS_BY_ID = {p["id"]: p for p in PROVIDERS}
 
 DISCLAIMER = (
-    "These are independent services. BROKA doesn't run them, isn't paid by "
-    "them, and can't get money back from them. Fees and limits are as each "
-    "one publishes them - check on its own site before you pay."
+    "Broka does not operate these escrow services and does not hold, receive or release your "
+    "money. The services are provided independently by their respective operators. Broka does "
+    "not guarantee their performance or independently control their funds. Review the "
+    "provider's current fees, conditions, refund policy and dispute procedures before paying."
 )
 
 ZENO_HELP = (
@@ -183,7 +105,7 @@ def safe_payment_info() -> dict:
         "advice": ADVICE,
         "escrow_rules": ESCROW_RULES,
         "how_escrow_works": HOW_ESCROW_WORKS,
-        "providers": PROVIDERS,
+        "providers": providers(),
         "zeno_help": ZENO_HELP,
         "disclaimer": DISCLAIMER,
     }
@@ -205,9 +127,9 @@ def require_in_app_payments() -> None:
 
 def _provider_lines() -> str:
     return "\n".join(
-        f"  - {p['name']} ({p['url']}): {p['best_for']} Pay in: {p['pay']}. Fees: {p['fees']} "
-        f"Limits: {p['limits']}"
-        for p in PROVIDERS
+        f"  - {p['name']} ({p['url']}): Pay in: {p['pay']}. Fees: {p['fees']} Limits: {p['limits']}."
+        + ("" if p["verified"] else " (Broka has not finished reviewing it: say so when you name it.)")
+        for p in providers()
     )
 
 
@@ -247,3 +169,14 @@ def ai_payment_policy() -> str:
         return "" if settings.auctions_enabled else (
             "\n\nAUCTIONS: BROKA has no auctions right now - never offer, suggest or describe one.")
     return _ai_policy()
+
+
+def fraud_prevention_policy() -> str:
+    """Zeno's fraud-prevention instructions, with the providers it may talk
+    about and the only facts it may state, built from the catalogue now.
+
+    Separate from ai_payment_policy() on purpose: that one is about WHO
+    HOLDS THE MONEY and goes away when BROKA takes payments again; this one
+    is about not being robbed, and is true in every configuration. It is
+    appended after the payment policy wherever Zeno is prompted."""
+    return fraud_guidance.fraud_policy(catalogue.current_records())

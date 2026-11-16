@@ -10,9 +10,16 @@ done", and the next step when they say so. Questions in between go to the
 model, which is given the step they are on (service.py).
 
 No model call, like the guides: every step is written here from what each
-provider publishes about itself (safe_payment.PROVIDERS), so the answer is
-the same every time and true - a model asked to explain an escrow service
-it has never used invents a paybill number.
+provider publishes about itself (the escrow_directory catalogue), so the
+answer is the same every time and true - a model asked to explain an escrow
+service it has never used invents a paybill number. Where the catalogue has
+no fact (how a deal starts, how a dispute is opened) the step says to follow
+the provider's own instructions; it never fills the gap.
+
+Only providers BROKA lists are walked through. A provider it has suspended,
+or one the user names that is not on the list, gets a plain "not on Broka's
+list" answer instead of being silently swapped for a similarly named one
+(Kenya Escrow and Escrow Kenya are different websites).
 
 STATELESS, LIKE EVERY ZENO TURN. The app sends the transcript; where the
 user is comes from Zeno's own last walkthrough message in it, whose first
@@ -28,7 +35,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from api.domains.pricing.safe_payment import PROVIDERS, PROVIDERS_BY_ID
+from api.domains.escrow_directory import aliases, catalogue, projection
 
 BUYING, SELLING = "buying", "selling"
 
@@ -39,16 +46,6 @@ _STEP = re.compile(r"^Step (\d+) of (\d+) [·\-] (Buying|Selling) with (.+?)\s*$
 # waiting for, so the answer can be read against it.
 _ASK_ROLE = "are you buying or selling?"
 _ASK_PROVIDER = re.compile(r"Which escrow service will you and the (seller|buyer) use\?")
-
-# What people call each provider. Longest first: "escrow kenya" must not
-# be read as "kenya escrow" - they are different companies.
-_ALIASES: list[tuple[str, str]] = sorted([
-    ("e-confirm", "econfirm"), ("econfirm", "econfirm"), ("e confirm", "econfirm"),
-    ("escrow kenya", "escrowkenya"), ("escrowkenya", "escrowkenya"),
-    ("kenya escrow", "kenyaescrow"), ("kenyaescrow", "kenyaescrow"),
-    ("lipasafe", "lipasafe"), ("lipa safe", "lipasafe"),
-    ("shikilia", "shikilia"),
-], key=lambda a: -len(a[0]))
 
 # "Done - what's next?" is the chip under every step; the rest is how
 # people say it, typed or spoken.
@@ -79,7 +76,23 @@ _START = re.compile(
     r"(?:paying (?:with|through|via)\s+|buying (?:with|through|via)\s+|selling (?:with|through|via)\s+|"
     r"getting paid (?:with|through|via)\s+)?"
     r"(?:an? |the )?(?P<what>.+?)(?: work)?$")
-_ESCROW_WORDS = re.compile(r"\bescrow\b|e-?confirm|escrow ?kenya|kenya ?escrow|lipa ?safe|shikilia")
+
+
+def _names_a_provider(text: str) -> bool:
+    return bool(aliases.mentions(text, _records()))
+
+
+class _EscrowWords:
+    """`_ESCROW_WORDS.search(text)`: the word "escrow", or any provider the
+    catalogue knows by name - computed from the catalogue, not typed here."""
+    _WORD = re.compile(r"\bescrow\b")
+
+    def search(self, text: str):
+        return self._WORD.search(text or "") or (_names_a_provider(text or "") or None)
+
+
+_ESCROW_WORDS = _EscrowWords()
+
 # Asked as a plain question about paying safely - the opener chips and
 # the escrow screen's buttons send these.
 _PLAIN_START = re.compile(
@@ -90,16 +103,42 @@ _PLAIN_START = re.compile(
 _SELLER_HINT = re.compile(r"\bsell(?:ing|er)?\b|get(?:ting)? paid|receive (?:the )?(?:money|payment)")
 
 
-# Whole words only: as a bare substring "e confirm" is in "please confirm",
-# and a user saying it mid-walkthrough was switched to E-Confirm.
-_ALIAS_RES = [(re.compile(rf"(?<![a-z]){re.escape(alias)}(?![a-z])"), pid) for alias, pid in _ALIASES]
+def _records() -> list[dict]:
+    """Every provider the catalogue knows, listed or not, as of now."""
+    return catalogue.current_records()
+
+
+def _listed() -> list[dict]:
+    """The providers BROKA lists, each as the flat dict the steps read."""
+    return [projection.legacy_view(r) for r in catalogue.listed(_records())]
 
 
 def _provider_in(text: str) -> Optional[dict]:
-    for pattern, pid in _ALIAS_RES:
-        if pattern.search(text):
-            return PROVIDERS_BY_ID[pid]
-    return None
+    """The LISTED provider [text] names, or None. Whole words, longest name
+    first (aliases.py); a provider that is not listed is not returned."""
+    listed_ids = {r["id"] for r in catalogue.listed(_records())}
+    hit = aliases.first_mention(text, [r for r in _records() if r["id"] in listed_ids])
+    return projection.legacy_view(hit) if hit else None
+
+
+def _unlisted_in(text: str) -> Optional[dict]:
+    """A provider [text] names that BROKA does not list (suspended, rejected)."""
+    listed_ids = {r["id"] for r in catalogue.listed(_records())}
+    hit = aliases.first_mention(text, [r for r in _records() if r["id"] not in listed_ids and r["status"] != "draft"])
+    return hit
+
+
+def not_listed_reply(record: dict) -> dict:
+    """What Zeno says when the user asks about a provider BROKA does not list."""
+    name, domain = record["display_name"], record["identity"]["canonical_domain"]
+    notice = record.get("public_notice") or (
+        f"{name} ({domain}) is not on Broka's list, so I can't walk you through using it.")
+    return {
+        "reply": (f"{notice}\n\nIf you were sent a link to a provider that isn't on Broka's list, don't "
+                  "pay on it. Pick one of the listed providers instead, and open its official website "
+                  "yourself."),
+        "suggestions": [p["name"] for p in _listed()] + ["Help me choose"],
+    }
 
 
 def _steps(p: dict, role: str) -> list[tuple[str, str]]:
@@ -123,14 +162,18 @@ def _steps(p: dict, role: str) -> list[tuple[str, str]]:
             open_it,
             ("Set up the deal", p["start"]),
             (f"Pay {name}, not the seller",
-             f"Pay in with {p['pay']}. Before you enter your PIN, check it names {name} and shows the "
-             f"agreed amount - if it shows a person's name, stop and tell me. {p['limits']}"),
+             f"Pay through {name}'s own checkout, by {p['pay']}. Before you approve the M-Pesa prompt, "
+             f"check it names {name}, shows the agreed amount and says what it is for - if it shows a "
+             "person's name, stop and tell me. Never share your PIN, an OTP or a password with "
+             f"anyone, and never pay a personal number someone gives you in chat. Limits: {p['limits']}."),
             ("The seller delivers - you check",
              f"Tell the seller it's paid; they can see on {name} that the money is held. When the item "
              "reaches you, or you collect it, check it properly: it works, it's what you agreed, "
              "nothing is missing."),
             ("Release the money",
-             f"Happy with it? Then {p['release']} That's the deal done - leave the seller a review on BROKA."),
+             f"Only once it is what you agreed. {p['release']} Release it through {name}'s own website "
+             "or app, never to someone who asks you to release it for them, and never share a "
+             "release code or PIN. Then leave the seller a review on BROKA."),
             ("If something is wrong",
              f"Don't release the money. {p['dispute']} Show {name} the BROKA chat and photos "
              "of the problem. BROKA doesn't hold the money, so it's their call - you can still report "
@@ -150,7 +193,8 @@ def _steps(p: dict, role: str) -> list[tuple[str, str]]:
          "Deliver it or hand it over exactly as agreed, and keep proof - a delivery note, photos, the "
          "courier's receipt."),
         ("Get paid",
-         f"The buyer confirms on {name}. Then {p['payout']}"),
+         f"The buyer confirms on {name}, and you are paid {p['payout']} Don't hand over anything more "
+         "because someone says an agent will pay you later."),
         ("If the buyer doesn't confirm",
          f"Contact {name}. {p['dispute']} Show them the BROKA chat and your proof of delivery. Tell me "
          "if you get stuck."),
@@ -187,29 +231,47 @@ def _ask_role() -> dict:
 
 def _ask_provider(role: str) -> dict:
     other = "seller" if role == BUYING else "buyer"
-    lines = "\n".join(f"• {p['name']}: {p['best_for'][0].lower() + p['best_for'][1:]}" for p in PROVIDERS)
+    lines = "\n".join(f"• {p['name']}: {p['best_for'][0].lower() + p['best_for'][1:]}" for p in _listed())
     return {
         "reply": (f"Which escrow service will you and the {other} use? What each is best at:\n{lines}\n\n"
                   f"If the {other} already uses one of these, that's often easiest. None of them is run "
                   "by BROKA."),
-        "suggestions": [p["name"] for p in PROVIDERS] + ["Help me choose"],
+        "suggestions": [p["name"] for p in _listed()] + ["Help me choose"],
     }
 
 
 def _help_choose(role: str) -> dict:
+    """How the listed providers differ, from what the catalogue records -
+    limits, whether an account is needed, what each publishes about its fee.
+    It does not say which is "best": that depends on the deal, and BROKA has
+    not reviewed them far enough to rank them (the comparison screen only
+    ranks verified, complete pricing). A fact the catalogue lacks is not
+    mentioned."""
     other = "seller" if role == BUYING else "buyer"
+    lines = []
+    for r in catalogue.listed(_records()):
+        c = r["conditions"]
+        bits = [projection.limits_summary(c)]
+        if c.get("registration_required") is False:
+            bits.append("no account needed")
+        elif c.get("registration_required") is True:
+            bits.append("account needed")
+        if c.get("kyc_required") is True:
+            bits.append("ID checks")
+        bits.append(projection.fee_summary(r).rstrip("."))
+        review = "" if r["status"] == "approved" else " (not yet verified by Broka)"
+        lines.append(f"• {r['display_name']}{review}: " + "; ".join(bits))
+    comparison = "\n".join(lines) if lines else "• No providers are available right now."
     return {
-        "reply": ("A quick way to pick:\n"
-                  "• Paying by M-Pesa: E-Confirm (KES 100 to 500,000 a deal - though one M-Pesa "
-                  "payment carries at most KES 250,000).\n"
-                  "• Over KES 250,000, a car, or a broker in the middle: Escrow Kenya - it takes bank "
-                  "transfers.\n"
-                  "• No time to sign up: Kenya Escrow.\n"
-                  "• You want everyone ID-checked: Lipasafe.\n"
-                  "• You arranged it all on WhatsApp: Shikilia.\n"
-                  "• Land: no escrow app - do an official search on Ardhisasa and pay through an advocate.\n\n"
+        "reply": ("Here is how the providers on Broka's list differ, from what each publishes:\n"
+                  f"{comparison}\n\n"
+                  "I can't say which is cheapest unless every figure is published and verified - "
+                  "the escrow comparison screen shows that where it can. Your amount and the kind "
+                  "of deal matter more than a general ranking. Land and cars: no M-Pesa escrow "
+                  "carries those, so do the official search first (Ardhisasa for land, NTSA for a "
+                  "logbook) and pay through a bank or an advocate.\n\n"
                   f"Which escrow service will you and the {other} use?"),
-        "suggestions": [p["name"] for p in PROVIDERS],
+        "suggestions": [p["name"] for p in _listed()],
     }
 
 
@@ -221,7 +283,7 @@ def _where(history: list[dict]) -> Optional[dict]:
     for text in reversed(zeno):
         m = _STEP.search(text)
         if m:
-            p = next((x for x in PROVIDERS if x["name"] == m.group(4)), None)
+            p = next((x for x in _listed() if x["name"] == m.group(4)), None)
             if p is not None:
                 return {"kind": "step", "provider": p, "role": m.group(3).lower(),
                         "index": int(m.group(1)) - 1}
@@ -276,6 +338,10 @@ def turn(text: str, history: list[dict]) -> Optional[dict]:
             chosen = _provider_in(text)
             if chosen is not None and len(text.split()) <= 6:
                 return _step_reply(chosen, BUYING, 0)
+        if kind in ("role", "provider", "step") and len(text.split()) <= 6:
+            gone = _unlisted_in(text)
+            if gone is not None and _provider_in(text) is None:
+                return not_listed_reply(gone)
         if kind in ("provider", "step"):
             role = where["role"]
             chosen = _provider_in(text)
@@ -303,7 +369,12 @@ def turn(text: str, history: list[dict]) -> Optional[dict]:
         return start(SELLING if _SELLER_HINT.search(text) else None)
     m = _START.match(text)
     if m and _ESCROW_WORDS.search(m.group("what")):
-        return start(_role_of(text), _provider_in(m.group("what")))
+        chosen = _provider_in(m.group("what"))
+        if chosen is None:
+            gone = _unlisted_in(m.group("what"))
+            if gone is not None:
+                return not_listed_reply(gone)
+        return start(_role_of(text), chosen)
     return None
 
 

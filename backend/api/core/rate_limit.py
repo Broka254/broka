@@ -296,6 +296,21 @@ call_events_limiter        = _make_limiter("call_events",        limit=30, windo
 # users behind carrier-grade NAT, common on Kenyan mobile data.
 call_ws_preauth_limiter    = _make_limiter("call_ws_preauth",    limit=30, window_seconds=60)
 
+# The escrow provider directory's public reads (GET /escrow-providers...),
+# keyed by the caller's address (client_ip). They need no sign-in - a buyer
+# reads them before deciding to deal - so the address is all there is. Cheap
+# to serve; the cap only stops one address hammering the calculator. Generous,
+# because a carrier-grade NAT puts many real people behind one address.
+escrow_directory_limiter = _make_limiter(
+    "escrow_directory", limit=2000 if _settings.is_test else 120, window_seconds=60)
+
+# Scam reports, their evidence uploads and restriction appeals, keyed by the
+# signed-in user. A person who has been defrauded files a report and a few
+# screenshots; ten an hour is plenty, and the cap stops a script filling the
+# review queue (and the database, with evidence) on someone else's account.
+scam_report_limiter = _make_limiter(
+    "scam_report", limit=1000 if _settings.is_test else 10, window_seconds=3600)
+
 # Feedback & complaints (POST /feedback), keyed by authenticated user.
 # A person files a handful a day at most; the cap stops scripted flooding
 # of the admin triage queue without blocking a frustrated user retrying.
