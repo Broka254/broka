@@ -1881,7 +1881,7 @@ async def _apply_optional_statements(conn, statements) -> None:
         await conn.execute(text(prepared))
 
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 SCHEMA_REVISIONS = (
     (1, "legacy_schema_adoption"),
     (2, "durable_payment_intents_and_callbacks"),
@@ -1934,6 +1934,13 @@ SCHEMA_REVISIONS = (
     # to hand out - so the revision makes a replica wait for the explicit
     # release step instead.
     (17, "message_delivery_tracking"),
+    # The escrow provider directory (api/models/escrow_provider.py) and scam
+    # reports with their private evidence, protective restrictions and
+    # appeals (api/models/scam_report.py). New tables only, from
+    # create_all(); the revision keeps a replica from serving the directory
+    # or the report endpoints against a database that does not have them,
+    # which would otherwise answer every request with a 500.
+    (18, "escrow_provider_directory_and_scam_reports"),
 )
 
 # Tables/columns that must exist before an API process is safe to serve
@@ -2195,6 +2202,9 @@ async def _init_db_impl():
         ("api.models.legal", ("LegalAcceptance",)),
         ("api.models.feedback", ("UserFeedback",)),
         ("api.models.admin_report", ("AdminReport",)),
+        ("api.models.escrow_provider", ("EscrowProviderRow", "EscrowProviderRevision")),
+        ("api.models.scam_report", ("ScamReportDetail", "ScamReportEvidence",
+                                    "AccountRestriction", "RestrictionAppeal")),
         (
             "api.models.service_communication",
             (

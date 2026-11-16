@@ -577,6 +577,26 @@ class Settings:
         "DCR_ENABLED", "false"
     ).strip().lower() in ("1", "true", "yes", "on"))
 
+    # ── Escrow provider directory (domains/escrow_directory) ──────────────────
+    # The websites a provider record may point at. A deployment setting, not
+    # data: an administrator can edit what a provider's page says through
+    # the API, but cannot make the app link to a domain nobody put here. Add
+    # a domain only after checking the provider's own site and terms; a
+    # look-alike domain on this list is how a buyer is sent to a fake escrow
+    # site (links.py). Plain lower-case domains, no "www.", comma-separated.
+    escrow_provider_domains: tuple = field(default_factory=lambda: tuple(
+        d.strip().lower() for d in os.getenv(
+            "ESCROW_PROVIDER_DOMAINS",
+            "econfirm.co.ke,kenyaescrow.com,lipasafe.co.ke,shikilia.co.ke,escrowkenya.com",
+        ).split(",") if d.strip()))
+    # How long a provider's checked pricing counts as current, and the rest
+    # of its record (identity, terms, protection). Past that the app says
+    # the information is out of date and stops ranking it (freshness.py).
+    escrow_pricing_max_age_days: int = field(default_factory=lambda: max(1, int(os.getenv(
+        "ESCROW_PRICING_MAX_AGE_DAYS", "30"))))
+    escrow_record_max_age_days: int = field(default_factory=lambda: max(1, int(os.getenv(
+        "ESCROW_RECORD_MAX_AGE_DAYS", "90"))))
+
     # ── Verified badge (routers/verify.py) ───────────────────────────────────
     # Off for now (2026-10-09): the badge isn't sold. POST /verify/purchase
     # answers 409 VERIFIED_BADGE_OFF, with a message an older app build

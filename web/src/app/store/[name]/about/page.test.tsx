@@ -19,7 +19,11 @@ vi.mock('next/navigation', () => ({
   },
 }))
 
-const api = vi.hoisted(() => ({ getStore: vi.fn(), getStoreReviews: vi.fn() }))
+const api = vi.hoisted(() => ({
+  getStore: vi.fn(),
+  getStoreReviews: vi.fn(),
+  getEscrowDirectory: vi.fn().mockResolvedValue({ providers: [], disclaimer: '', notices: [] }),
+}))
 vi.mock('@/lib/api', () => api)
 
 const { default: StoreDetailsPage } = await import('./page')

@@ -84,13 +84,25 @@ void main() {
     expect(urls, [Uri.parse('https://www.kenyaescrow.com')]);
   });
 
-  testWidgets('without the server, the services and the core advice still show', (tester) async {
+  // It used to list five providers by name "so they still show" - a list baked
+  // into the app, which named a provider BROKA has since suspended and cannot
+  // be corrected on a phone that does not update. Without the server the app
+  // now says the list is unavailable and keeps the generic advice.
+  testWidgets('without the server, the core advice shows - and no provider list, which could be stale', (tester) async {
     await tester.pumpWidget(const MaterialApp(home: Scaffold(body: SafePaymentView(info: null))));
     expect(find.textContaining('check the item works before you pay'), findsOneWidget);
-    // By name and address: fees come from the server or not at all.
-    expect(find.text('Escrow services'), findsOneWidget);
-    expect(find.text('E-Confirm'), findsOneWidget);
-    expect(find.text('Shikilia'), findsOneWidget);
+    expect(find.byKey(const Key('providers-unavailable')), findsOneWidget);
+    for (final name in ['E-Confirm', 'eConfirm', 'Escrow Kenya', 'Kenya Escrow', 'Lipasafe', 'Shikilia']) {
+      expect(find.text(name), findsNothing, reason: '$name must come from the server, never from the app');
+    }
+    expect(find.textContaining('could not be loaded'), findsOneWidget);
+  });
+
+  test('the offline fallback carries no providers, and the notice is the required wording', () {
+    expect(SafePaymentInfo.offline.providers, isEmpty);
+    expect(SafePaymentInfo.offline.disclaimer, startsWith('Broka does not operate these escrow services'));
+    expect(SafePaymentInfo.offline.disclaimer, contains('does not hold, receive or release your money'));
+    expect(SafePaymentInfo.offline.disclaimer, contains('does not guarantee their performance'));
   });
 
   Future<void> scrollTo(WidgetTester tester, Finder f) =>
@@ -182,9 +194,13 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
 
       expect(find.text('Pay safely with escrow'), findsOneWidget);
-      expect(find.textContaining('Never use an escrow link'), findsOneWidget);
+      // The hero's button is at the top, so it is used first, before scrolling away.
       await tester.tap(find.text('Let Zeno guide me, step by step'));
       expect(asked, [zenoEscrowPrompt]);
+      // The Compare button now sits between the hero and the rules, which moved the
+      // rules past what the lazy list has built; they are still on this screen.
+      await scrollTo(tester, find.textContaining('Never use an escrow link'));
+      expect(find.textContaining('Never use an escrow link'), findsOneWidget);
 
       await scrollTo(tester, find.text('Open E-Confirm'));
       await tester.ensureVisible(find.text('Open E-Confirm'));
@@ -199,11 +215,20 @@ void main() {
       expect(find.textContaining('independent'), findsWidgets);
     });
 
-    testWidgets('offline, the services still show by name', (tester) async {
+    testWidgets('offline, it says the list is unavailable instead of showing a stale one', (tester) async {
       await tester.pumpWidget(MaterialApp(home: EscrowServicesScreen(repository: _FakeSafePayment(null))));
       await tester.pump(const Duration(seconds: 1));
-      await scrollTo(tester, find.text('Lipasafe'));
-      expect(find.text('Lipasafe'), findsOneWidget);
+      await scrollTo(tester, find.byKey(const Key('providers-unavailable')));
+      expect(find.byKey(const Key('providers-unavailable')), findsOneWidget);
+      expect(find.text('Lipasafe'), findsNothing);
+      expect(find.text('Escrow Kenya'), findsNothing);
+    });
+
+    testWidgets('it leads to the comparison of fees, limits and protection', (tester) async {
+      await tester.pumpWidget(MaterialApp(home: EscrowServicesScreen(repository: _FakeSafePayment(full))));
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byKey(const Key('open-comparison')), findsOneWidget);
+      expect(find.text('Compare fees, limits and protection'), findsOneWidget);
     });
   });
 

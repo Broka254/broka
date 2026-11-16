@@ -133,9 +133,14 @@ class SafePaymentInfo {
         zenoHelp: j['zeno_help'] as String? ?? '',
       );
 
-  /// What the app shows when the server can't be reached: the services by
-  /// name and address only - their fees change, so those come from the
-  /// server or not at all - with the rules that matter most.
+  /// What the app shows when the server can't be reached: the rules that
+  /// matter most, and NO PROVIDERS. It used to list five by name and address,
+  /// "so they still show". A list baked into a release cannot be corrected on
+  /// a phone that does not update, and this one named a provider BROKA has
+  /// since suspended - on exactly the screen that tells people where to send
+  /// money. The screens say the list is unavailable instead, and the
+  /// comparison screen shows the last saved copy WITH its date and an
+  /// outdated warning (provider_directory_repository.dart).
   static const offline = SafePaymentInfo(
     inAppPayments: false,
     message: '',
@@ -143,18 +148,7 @@ class SafePaymentInfo {
       'Collecting in person? Meet in a busy public place and check the item works before you pay.',
       'Never send a deposit to "hold" an item, whatever the reason given.',
     ],
-    providers: [
-      EscrowProvider(name: 'E-Confirm', url: 'https://econfirm.co.ke',
-          note: 'M-Pesa escrow for buyers and sellers.'),
-      EscrowProvider(name: 'Escrow Kenya', url: 'https://escrowkenya.com',
-          note: 'Pay by M-Pesa or bank. Not the same company as Kenya Escrow.'),
-      EscrowProvider(name: 'Kenya Escrow', url: 'https://www.kenyaescrow.com',
-          note: 'M-Pesa escrow, no account to create. Not the same company as Escrow Kenya.'),
-      EscrowProvider(name: 'Lipasafe', url: 'https://lipasafe.co.ke',
-          note: 'M-Pesa escrow; every user is ID-checked.'),
-      EscrowProvider(name: 'Shikilia', url: 'https://www.shikilia.co.ke',
-          note: 'Escrow that runs on WhatsApp.'),
-    ],
+    providers: [],
     escrowRules: [
       'Open the escrow service yourself from this list. Never use an escrow link, paybill or '
           "'agent' the other person sends you - fake escrow sites are a common scam.",
@@ -168,8 +162,10 @@ class SafePaymentInfo {
       EscrowBeat('The buyer releases the money', 'The service pays the seller.'),
     ],
     zenoHelp: 'Not sure how? Zeno walks you through it, one step at a time.',
-    disclaimer: "These are independent services. BROKA doesn't run them, isn't paid by them, and "
-        "can't get money back from them - check their fees and terms before you pay.",
+    disclaimer: "Broka does not operate these escrow services and does not hold, receive or release your "
+        'money. The services are provided independently by their respective operators. Broka does not '
+        "guarantee their performance or independently control their funds. Review the provider's current "
+        'fees, conditions, refund policy and dispute procedures before paying.',
   );
 }
 
@@ -265,7 +261,7 @@ class SafePaymentView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final shown = info ?? SafePaymentInfo.offline;
-    final providers = shown.providers.isNotEmpty ? shown.providers : SafePaymentInfo.offline.providers;
+    final providers = shown.providers;
     final advice = shown.advice.isNotEmpty ? shown.advice : SafePaymentInfo.offline.advice;
     const body = TextStyle(color: BrokaColors.textMid, fontSize: 13, height: 1.45);
     return SafeArea(
@@ -303,6 +299,17 @@ class SafePaymentView extends StatelessWidget {
             const Text('Escrow services',
                 style: TextStyle(color: BrokaColors.textHigh, fontSize: 14, fontWeight: FontWeight.w800)),
             const SizedBox(height: 4),
+            if (providers.isEmpty)
+              const Padding(
+                key: Key('providers-unavailable'),
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Text(
+                  'The list of escrow services could not be loaded just now. BROKA does not keep one on your '
+                  "phone that could be out of date. Connect to the internet and try again - and don't use an "
+                  'escrow link someone sends you in its place.',
+                  style: body,
+                ),
+              ),
             for (final p in providers)
               ListTile(
                 contentPadding: EdgeInsets.zero,

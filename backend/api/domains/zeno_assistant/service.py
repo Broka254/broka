@@ -3,11 +3,19 @@ turn.
 
     message -> ESCROW WALKTHROUGH (one step at a time, no model) when the
                message starts one or answers one (escrow_walkthrough.py)
+            -> SCAM GUIDANCE (no model) when the message describes a known
+               scam pattern - a deposit to reserve, an OTP request, a
+               screenshot as proof - or asks what to check before paying
+               (fraud_guidance.py). Written answers: on this question
+               "usually right" is not good enough.
             -> FAST PATH (plain commands and how-to guides, no model)
             -> or MODEL (talk, and propose at most one action), given the
                user's own data for the topics the question is about
                -> if it asks for data it wasn't given (NEED_INFO): fetch it
                   and ask once more - never more than two model calls
+            -> GUARD: a model's reply that gives a phone, till or paybill
+               number, an unapproved web address, a made-up fee or an
+               unearned promise is replaced (fraud_guidance.guard_reply)
             -> CLEAN (closed vocabulary)  -> RESOLVE (whose conversation?)
             -> {reply, action}
 
@@ -37,7 +45,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import User
 from api.domains.ai_broker.service import AIBrokerService
-from . import contacts, escrow_walkthrough, guides, intents, knowledge, listing_context
+from api.domains.escrow_directory import catalogue
+from . import contacts, escrow_walkthrough, fraud_guidance, guides, intents, knowledge, listing_context
 
 logger = logging.getLogger(__name__)
 
@@ -153,11 +162,16 @@ _ABOUT_THEMSELF = re.compile(r"\b(?:my|mine|myself|yangu|wangu|changu|zangu|lang
 
 def is_free_turn(message: str, history: list[dict], image_base64: Optional[str] = None) -> bool:
     """A turn that is never one of the day's Zeno sessions: a step of the
-    escrow walkthrough, which no model answers (escrow_walkthrough.py).
-    Paying safely is not something to ration."""
+    escrow walkthrough, or a written answer about a scam pattern - neither
+    is answered by a model (escrow_walkthrough.py, fraud_guidance.py).
+    Paying safely, and being warned off a scam, are not things to ration: a
+    free account that had used its day's sessions must still be told that
+    "send a deposit to reserve it" is a scam."""
     if image_base64:
         return False
-    return escrow_walkthrough.turn(intents.normalise(message), history) is not None
+    text = intents.normalise(message)
+    return (escrow_walkthrough.turn(text, history) is not None
+            or fraud_guidance.reply_for(text) is not None)
 
 
 async def listing_access(db: AsyncSession, user_id: str, listing_id: str) -> str:
@@ -216,6 +230,26 @@ async def _first_name(db: AsyncSession, user_id: str) -> str:
     return (name or "").strip()
 
 
+def _guarded(reply: str, records: list[dict], message: str, has_image: bool) -> tuple[str, list[str]]:
+    """A model's [reply], made safe to show: refused if it breaks the rules
+    in fraud_guidance.guard_reply, and followed by the payment-screenshot
+    caution when the user sent a photo that is probably a payment (a model
+    can read what a screenshot says, not whether it is true)."""
+    safe, problems = fraud_guidance.guard_reply(reply, records)
+    if problems:
+        logger.warning("[zeno_assistant] reply replaced by the fraud guard: %s", ",".join(problems))
+    caution = fraud_guidance.image_caution(message, has_image)
+    if caution and caution not in safe:
+        safe = f"{safe}\n\n{caution}"
+    return safe, problems
+
+
+def _scam_turn(found: dict) -> dict:
+    """A written scam-guidance answer, in the shape of every other turn."""
+    return {"reply": found["reply"], "action": None, "source": "rules",
+            "suggestions": found.get("suggestions", []), "guidance": found["id"]}
+
+
 def _walkthrough_turn(walk: dict) -> dict:
     out = {"reply": walk["reply"], "action": None, "source": "rules",
            "suggestions": walk.get("suggestions", [])}
@@ -260,10 +294,21 @@ async def assistant_turn(
     #    the commands, because "next", "done" and "back" only mean anything
     #    against the step the user is on - and before the judgement check,
     #    which would send "which one should I use?" to the model.
+    # The providers BROKA lists change when an administrator suspends or
+    # approves one; a turn sees the catalogue as of the last 30 seconds
+    # (catalogue.refresh). Its own session read, closed before any model call.
+    from api.domains.escrow_directory import repository as directory
+    records = await catalogue.refresh(lambda: directory.load_stored(db))
+
     if not image_base64:
         walk = escrow_walkthrough.turn(intents.normalise(message), history)
         if walk is not None:
             return _walkthrough_turn(walk)
+        # Known scam patterns get a written answer, not a model's opinion.
+        # After the walkthrough, so "next" and "back" keep their meaning.
+        found = fraud_guidance.reply_for(intents.normalise(message))
+        if found is not None:
+            return _scam_turn(found)
 
     # Asked from a listing buyers can no longer see (removed, unpaid or
     # lapsed): say so, without a model reading nothing.
@@ -356,7 +401,13 @@ async def assistant_turn(
         return {"reply": _offline(language), "action": None, "source": "fallback"}
 
     used = {"facts": sorted(facts), "model_calls": calls}
-    reply = (turn.get("reply") or "").strip()
+    reply, blocked = _guarded((turn.get("reply") or "").strip(), records, message, bool(image_base64))
+    if blocked:
+        used["guarded"] = blocked
+        # A turn whose words had to be replaced is not one whose proposed
+        # action should run: it would be the model's say-so, on a turn the
+        # guard has just shown it cannot be trusted on.
+        return {"reply": reply, "action": None, "source": "model", **used}
     # The escrow guide is a conversation now, not a card: the model asking
     # for it starts the walkthrough, under whatever it said first.
     if action["type"] == "GUIDE" and action.get("guide") == "escrow":

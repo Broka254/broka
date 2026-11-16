@@ -1,3 +1,49 @@
+# Escrow providers compared from one reviewed directory, a fee calculator, and Zeno as a fraud-prevention assistant (2026-11-16)
+
+Asked for: buyers and sellers able to compare the independent escrow
+providers BROKA points at - fees, limits, payment methods, protection - with
+the real costs and risks visible; fee estimates only from a published formula;
+Zeno helping people avoid scams; and a way to report them. BROKA still runs no
+escrow and holds no money (`IN_APP_PAYMENTS_ENABLED` is off, unchanged). Read
+`ESCROW_PROVIDERS.md` for how it works and what is still unverified.
+
+- **One list, the API's.** `api/domains/escrow_directory/` is the catalogue:
+  identity, pricing (six disclosure states), conditions, protection and dispute
+  information, review state and dates. The hard-coded lists are gone from
+  `pricing/safe_payment.py`, the app's offline fallback, `web/src/lib/safety.ts`
+  and the static "escrow" guide card in `zeno_assistant/guides.py` (which listed
+  Escrow Kenya, the suspended site, as an option; it now names no provider and
+  opens the catalogue's screen). `GET /pricing/safe-payment`
+  is built from the catalogue so older app builds keep working.
+- **Nothing starts approved.** All four providers are `under_review` with no
+  verification date: the research was supplied, not re-checked (the build could
+  not reach any provider page). Escrow Kenya is seeded `suspended`. Approval needs
+  every check recorded; a fee edit needs its source and clears the checks it
+  makes untrue; an edit cannot verify itself; suspension is immediate.
+- **Fee calculator** (`fees.py`, `Decimal`, each charge rounded up to a whole
+  shilling): Kenya Escrow's 11 published bands; eConfirm's 1% commission shown
+  apart, with its payout reserve withheld as a total because its bands are not
+  loaded; Lipasafe and Shikilia get no number. "Cheapest" is claimed only for
+  providers whose pricing is complete, verified, current and approved.
+- **Links are the lock.** A provider's address must be https on exactly its own
+  domain, and the domain must be in `ESCROW_PROVIDER_DOMAINS`. The app and the
+  website re-check it and open it in the external browser.
+- **Zeno** answers known scam patterns in written words (no model, never rationed)
+  and checks what a model says: no invented number, fee, address or promise.
+- **Scam reports** (`api/domains/scam_reports/`): a complaint plus structured
+  details, three private screenshots, repeat detection that asks a person to look,
+  temporary protective restrictions an administrator applies and the person can
+  appeal. A report is never a verdict.
+- **App**: compare, detail (11 sections) and report screens, behind the existing
+  `paymentsShown` gate. Offline, the last saved answer is shown with its date, and
+  past two days nothing - there is no list in the app. "SAFEST" and "your money is
+  held" are removed from the callout.
+- **Existing tests changed on purpose**: the two Flutter assertions that the old
+  offline list showed provider names, the web test that read Python source, and
+  the walkthrough tests that used Escrow Kenya.
+- **Schema revision 18** (`escrow_provider_directory_and_scam_reports`): six new
+  tables. Run `python -m api.migrate` before deploying.
+
 # Delivered shows on the sender's screen; every incoming call is accounted for in the log (2026-11-15)
 
 Asked for: a message to an offline recipient went Sent, then straight to

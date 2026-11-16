@@ -26,6 +26,8 @@ import 'screens/home_screen.dart';
 import 'screens/sell_photos_screen.dart';
 import 'screens/broker_screen.dart';
 import 'features/safe_payment/escrow_services_screen.dart';
+import 'features/safe_payment/provider_comparison_screen.dart';
+import 'features/safe_payment/report_scam_screen.dart';
 import 'screens/auction_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/menu_screen.dart';
@@ -831,6 +833,14 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
         '/terms':            (_) => const TermsScreen(),
         '/privacy':          (_) => const PrivacyScreen(),
         '/escrow-services':  (_) => const EscrowServicesScreen(),
+        // Comparing providers' fees, limits and protection, and reporting a
+        // suspected scam (arguments: {providerId}). Both are reached only
+        // from screens that payments_shown.dart already hides.
+        '/escrow-compare':   (_) => const ProviderComparisonScreen(),
+        '/report-scam': (ctx) {
+          final args = ModalRoute.of(ctx)?.settings.arguments;
+          return ReportScamScreen(providerId: args is Map ? args['providerId'] as String? : null);
+        },
         '/receipt-history':  (_) => const ReceiptHistoryScreen(),
         '/store-explainer':  (_) => const StoreExplainerScreen(),
         '/selfie':           (_) => const SelfieCameraScreen(),

@@ -315,12 +315,14 @@ const _payWithEscrow = _Topic(
   'Pay safely with escrow',
   "BROKA doesn't take payments itself yet. An independent escrow service does the holding.",
   [
-    'With escrow, the buyer pays a neutral service, not the seller. The service holds the money '
-        'and pays the seller only once the buyer confirms they got what they paid for. If something '
-        'goes wrong, the service decides the dispute.',
-    'Kenya has several: E-Confirm, Escrow Kenya, Kenya Escrow, Lipasafe and Shikilia. They are '
-        "independent - BROKA doesn't run them and isn't paid by them - so check a service's fee "
-        'before you pay. Zeno walks you through whichever you choose.',
+    'With escrow, the buyer pays an independent service, not the seller. Under its own rules, the '
+        'service can hold the money until the buyer confirms they got what they paid for. If something '
+        'goes wrong, the service handles the dispute by its own process.',
+    // No provider is named here: this is fixed text inside the app, and a list of names in it cannot be
+    // corrected when a provider is suspended. The comparison screen has the current list.
+    "BROKA lists independent services and compares what each publishes. BROKA doesn't run them, isn't "
+        "paid by them and can't get money back from them, so check a service's fee and rules before you "
+        'pay. Zeno walks you through whichever you choose.',
     // The scam escrow invites: a "seller" who sends their own escrow link
     // runs the fake site it opens.
     'Open the service yourself, from BROKA\'s list. Never use an escrow link or number the other '

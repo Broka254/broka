@@ -5,6 +5,7 @@ import 'server-only'
 
 import { PAGE_SIZE, REVALIDATE_SECONDS } from './config'
 import { API_URL } from './server-config'
+import { directoryView, UNAVAILABLE, type DirectoryResponse, type EscrowDirectory } from './escrow-providers'
 import { PRICE_BANDS } from './catalogue'
 import type {
   ConditionKey,
@@ -96,4 +97,20 @@ const LISTING_ID = /^[A-Za-z0-9-]{1,64}$/
 export async function getListing(listingId: string): Promise<Listing | null> {
   if (!LISTING_ID.test(listingId)) return null
   return apiGet<Listing>(`/listings/${listingId}`, [`listing:${listingId}`])
+}
+
+/**
+ * The escrow providers BROKA lists (GET /escrow-providers). Never throws:
+ * when the API cannot answer, the page gets UNAVAILABLE - no providers, and
+ * still the required notice. It is deliberately NOT cached for long: a
+ * provider an administrator suspends must leave this site within the minute,
+ * and a stale list is the failure this fetch exists to avoid.
+ */
+export async function getEscrowDirectory(): Promise<EscrowDirectory> {
+  try {
+    const response = await apiGet<DirectoryResponse>('/escrow-providers', ['escrow-providers'], 60)
+    return response ? directoryView(response) : UNAVAILABLE
+  } catch {
+    return UNAVAILABLE
+  }
 }
