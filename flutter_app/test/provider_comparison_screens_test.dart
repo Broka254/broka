@@ -270,13 +270,15 @@ void main() {
 
     testWidgets('with no list there is a plain message - and no provider name from anywhere in the app', (tester) async {
       await _open(tester, _FakeRepo((_) => const Failure('Can\'t reach BROKA right now.')));
+      // The banner is near the top and the message is below the calculator and
+      // filters, so each is looked for where it is: top first, then scroll down.
+      expect(find.byKey(const Key('error-banner')), findsOneWidget);
+      expect(find.byKey(const Key('disclosure-box')), findsOneWidget, reason: 'the notice is shown even then');
       await _scrollTo(tester, find.byKey(const Key('no-list')));
       expect(find.byKey(const Key('no-list')), findsOneWidget);
-      expect(find.byKey(const Key('error-banner')), findsOneWidget);
       for (final name in ['eConfirm', 'E-Confirm', 'Kenya Escrow', 'Escrow Kenya', 'Lipasafe', 'Shikilia']) {
         expect(find.text(name), findsNothing, reason: name);
       }
-      expect(find.byKey(const Key('disclosure-box')), findsOneWidget, reason: 'the notice is shown even then');
     });
 
     testWidgets('a suspended provider\u2019s notice is shown, and it is not offered as a provider', (tester) async {
