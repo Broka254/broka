@@ -78,8 +78,29 @@ Future<void> _open(WidgetTester tester, _FakeRepo repo,
   await tester.pump(const Duration(seconds: 1));
 }
 
-Future<void> _scrollTo(WidgetTester tester, Finder f) =>
-    tester.scrollUntilVisible(f, 300, scrollable: find.byType(Scrollable).first);
+/// Scroll until [f] is on screen, from wherever the list is now.
+///
+/// These screens are lazy lists: a widget below the fold is not built, so a
+/// finder cannot see it until it is scrolled to. scrollUntilVisible only moves
+/// one way (the delta's sign), so a target ABOVE the current position was never
+/// found and the test died with "No element". Going back to the top first makes
+/// the helper correct whichever way the target lies. The scrollable is the one
+/// inside the screen, not an unrelated one (a dropdown or sheet may sit above).
+Future<void> _scrollTo(WidgetTester tester, Finder f) async {
+  final list = find.byType(Scrollable).first;
+  // Always from the top: "already built" is not "on screen" (the cache extent
+  // builds a little beyond the viewport), so testing for it would still leave
+  // a target above the viewport unreachable.
+  await tester.drag(list, const Offset(0, 100000));
+  await tester.pump();
+  await tester.scrollUntilVisible(f, 300, scrollable: list);
+  // scrollUntilVisible stops as soon as the widget is BUILT, and a lazy list
+  // builds a little beyond the viewport: the first version tapped a button at
+  // y=1496 on an 844px screen and nothing happened. ensureVisible brings it
+  // fully on screen, so a tap lands.
+  await tester.ensureVisible(f.first);
+  await tester.pump();
+}
 
 void main() {
   setUpAll(() => paymentsShown = true);
@@ -184,6 +205,7 @@ void main() {
       await _open(tester, _FakeRepo((q) => Success(_dir('directory_calc_5000.json'))));
       await tester.enterText(find.byKey(const Key('amount-field')), '5000');
       await tester.pump(const Duration(seconds: 1));
+      await _scrollTo(tester, find.byKey(const Key('ranking-withheld')));
       expect(find.byKey(const Key('ranking-withheld')), findsOneWidget);
       expect(find.byKey(const Key('ranking-claim')), findsNothing);
       expect(find.textContaining('Not enough comparable'), findsOneWidget);
@@ -195,6 +217,7 @@ void main() {
       await _open(tester, _FakeRepo((q) => Success(_dir('directory_ranked_5000.json'))));
       await tester.enterText(find.byKey(const Key('amount-field')), '5000');
       await tester.pump(const Duration(seconds: 1));
+      await _scrollTo(tester, find.byKey(const Key('ranking-claim')));
       expect(find.byKey(const Key('ranking-claim')), findsOneWidget);
       expect(find.textContaining('Lowest estimated total among providers with verified, complete pricing: eConfirm'), findsOneWidget);
     });
@@ -212,6 +235,7 @@ void main() {
         return Success(ProviderDirectory.tryParse(j, fetchedAt: _fetched)!);
       });
       await _open(tester, repo);
+      await _scrollTo(tester, find.byKey(const Key('filter-no-account')));
       await tester.tap(find.byKey(const Key('filter-no-account')));
       await tester.pump(const Duration(seconds: 1));
       expect(repo.asked.last.noAccount, isTrue);
@@ -226,6 +250,7 @@ void main() {
       final repo = _repoOf('directory_calc_5000.json');
       await _open(tester, repo);
       await tester.enterText(find.byKey(const Key('amount-field')), '5000');
+      await _scrollTo(tester, find.byKey(const Key('payout-till')));
       await tester.tap(find.byKey(const Key('payout-till')));
       await tester.pump(const Duration(seconds: 1));
       expect(repo.asked.last.payout, 'till');
@@ -245,6 +270,7 @@ void main() {
 
     testWidgets('with no list there is a plain message - and no provider name from anywhere in the app', (tester) async {
       await _open(tester, _FakeRepo((_) => const Failure('Can\'t reach BROKA right now.')));
+      await _scrollTo(tester, find.byKey(const Key('no-list')));
       expect(find.byKey(const Key('no-list')), findsOneWidget);
       expect(find.byKey(const Key('error-banner')), findsOneWidget);
       for (final name in ['eConfirm', 'E-Confirm', 'Kenya Escrow', 'Escrow Kenya', 'Lipasafe', 'Shikilia']) {
@@ -387,8 +413,11 @@ void main() {
 
     testWidgets('a legal operator that is not confirmed is labelled as such', (tester) async {
       await openDetail(tester, 'lipasafe');
-      expect(find.textContaining('Holda Fintech Technologies Limited'), findsOneWidget);
+      // Named twice on purpose: in the identity block, with its status, and in the
+      // sentence that says where the name came from. Both must say it is unconfirmed.
+      expect(find.textContaining('Holda Fintech Technologies Limited'), findsNWidgets(2));
       expect(find.textContaining('not yet verified by Broka', findRichText: true), findsWidgets);
+      expect(find.textContaining('has not yet confirmed this independently'), findsOneWidget);
       expect(find.textContaining('Operator confirmed by Broka'), findsNothing);
     });
   });
@@ -406,19 +435,38 @@ void main() {
       await tester.pump();
     }
 
+    /// Fill the form one field at a time, bringing each into view first: it is a
+    /// long lazy list, and a field that is not on screen is not built (the
+    /// first version called enterText on the description before it existed).
+    Future<void> fill(WidgetTester tester, {String? reason, String description = 'He asked me to send 2,000 to reserve it.'}) async {
+      await _scrollTo(tester, find.byKey(const Key('account-field')));
+      await tester.enterText(find.byKey(const Key('account-field')), '0712 345 678');
+      await _scrollTo(tester, find.byKey(const Key('description-field')));
+      await tester.enterText(find.byKey(const Key('description-field')), description);
+      await tester.pump();
+      if (reason != null) {
+        await _scrollTo(tester, find.byKey(const Key('reason-field')));
+        await tester.tap(find.byKey(const Key('reason-field')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));   // the menu route animates in
+        await tester.tap(find.text(reason).last);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+      }
+    }
+
     testWidgets('the send button waits for a reason, a subject and a description', (tester) async {
       await openForm(tester, _FakeReports());
-      FilledButton button() => tester.widget<FilledButton>(find.byKey(const Key('send-report')));
-      expect(button().onPressed, isNull);
-      await tester.enterText(find.byKey(const Key('account-field')), '0712 345 678');
-      await tester.enterText(find.byKey(const Key('description-field')), 'He asked me to send 2,000 to reserve it.');
-      await tester.pump();
-      expect(button().onPressed, isNull, reason: 'no reason chosen yet');
-      await tester.tap(find.byKey(const Key('reason-field')));
-      await tester.pump();
-      await tester.tap(find.text('Asked for a deposit to reserve an item').last);
-      await tester.pump();
-      expect(button().onPressed, isNotNull);
+      // The button ends a long lazy form: it is not built until it is scrolled to.
+      Future<FilledButton> button() async {
+        await _scrollTo(tester, find.byKey(const Key('send-report')));
+        return tester.widget<FilledButton>(find.byKey(const Key('send-report')));
+      }
+      expect((await button()).onPressed, isNull, reason: 'nothing filled in yet');
+      await fill(tester);
+      expect((await button()).onPressed, isNull, reason: 'no reason chosen yet');
+      await fill(tester, reason: 'Asked for a deposit to reserve an item');
+      expect((await button()).onPressed, isNotNull);
     });
 
     testWidgets('it never asks for a PIN, OTP or password, and says so', (tester) async {
@@ -433,13 +481,8 @@ void main() {
     testWidgets('sending files the report, then tells the person what it is and is not', (tester) async {
       final repo = _FakeReports();
       await openForm(tester, repo);
-      await tester.enterText(find.byKey(const Key('account-field')), '0712 345 678');
-      await tester.enterText(find.byKey(const Key('description-field')), 'He asked me to send 2,000 to reserve it.');
-      await tester.tap(find.byKey(const Key('reason-field')));
-      await tester.pump();
-      await tester.tap(find.text('Asked for a deposit to reserve an item').last);
-      await tester.pump();
-      await tester.ensureVisible(find.byKey(const Key('send-report')));
+      await fill(tester, reason: 'Asked for a deposit to reserve an item');
+      await _scrollTo(tester, find.byKey(const Key('send-report')));
       await tester.tap(find.byKey(const Key('send-report')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
@@ -454,13 +497,8 @@ void main() {
     testWidgets('a refusal is shown as the server\u2019s readable message', (tester) async {
       final repo = _FakeReports(fail: 'description: say what happened (at least a sentence).');
       await openForm(tester, repo);
-      await tester.enterText(find.byKey(const Key('account-field')), '0712 345 678');
-      await tester.enterText(find.byKey(const Key('description-field')), 'long enough text here');
-      await tester.tap(find.byKey(const Key('reason-field')));
-      await tester.pump();
-      await tester.tap(find.text('Something else').last);
-      await tester.pump();
-      await tester.ensureVisible(find.byKey(const Key('send-report')));
+      await fill(tester, reason: 'Something else', description: 'long enough text here');
+      await _scrollTo(tester, find.byKey(const Key('send-report')));
       await tester.tap(find.byKey(const Key('send-report')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));

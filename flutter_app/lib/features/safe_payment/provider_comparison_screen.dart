@@ -644,9 +644,16 @@ class _EstimateBox extends StatelessWidget {
     final e = estimate;
     Widget row(String label, String value, {bool bold = false}) => Padding(
           padding: const EdgeInsets.symmetric(vertical: 2),
-          child: Row(children: [
-            Expanded(child: Text(label, style: const TextStyle(color: BrokaColors.textMid, fontSize: 12))),
-            Text(value, style: TextStyle(color: BrokaColors.textHigh, fontSize: 12.5, fontWeight: bold ? FontWeight.w900 : FontWeight.w600)),
+          // Both sides are the server's strings, so neither may be assumed short:
+          // a plain Text for the value took its full width and, with "6.32% of
+          // what the seller receives" beside the label, overflowed a 304px card
+          // by 117px - on the very box that shows what a person will pay. The
+          // label keeps the larger share; the value wraps, right-aligned.
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(flex: 3, child: Text(label, style: const TextStyle(color: BrokaColors.textMid, fontSize: 12))),
+            const SizedBox(width: 8),
+            Flexible(flex: 4, child: Text(value, textAlign: TextAlign.right,
+                style: TextStyle(color: BrokaColors.textHigh, fontSize: 12.5, fontWeight: bold ? FontWeight.w900 : FontWeight.w600))),
           ]),
         );
     final rows = <Widget>[];

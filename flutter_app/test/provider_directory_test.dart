@@ -19,7 +19,6 @@ import 'dart:io';
 
 import 'package:broka/core/cache/screen_cache.dart';
 import 'package:broka/core/cache/cache_store.dart';
-import 'package:broka/core/network/api_client.dart';
 import 'package:broka/core/utils/result.dart';
 import 'package:broka/features/safe_payment/provider_directory.dart';
 import 'package:broka/features/safe_payment/provider_directory_repository.dart';
@@ -185,7 +184,11 @@ void main() {
       expect(e.commission, 50);
       expect(e.hasTotal, isFalse);
       expect(e.totalBuyerPayment, isNull);
-      expect(e.needsPayoutDestination, isTrue);
+      // Not "true": the server asks where the seller is paid only for a charge that
+      // depends on it, and eConfirm's reserve bands are not loaded, so there is no
+      // such charge yet (the fixture is real server output). It turns true when
+      // the bands are loaded.
+      expect(e.needsPayoutDestination, isFalse);
     });
 
     test('Lipasafe and Shikilia get no number at all', () {

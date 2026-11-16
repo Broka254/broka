@@ -194,9 +194,13 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
 
       expect(find.text('Pay safely with escrow'), findsOneWidget);
-      expect(find.textContaining('Never use an escrow link'), findsOneWidget);
+      // The hero's button is at the top, so it is used first, before scrolling away.
       await tester.tap(find.text('Let Zeno guide me, step by step'));
       expect(asked, [zenoEscrowPrompt]);
+      // The Compare button now sits between the hero and the rules, which moved the
+      // rules past what the lazy list has built; they are still on this screen.
+      await scrollTo(tester, find.textContaining('Never use an escrow link'));
+      expect(find.textContaining('Never use an escrow link'), findsOneWidget);
 
       await scrollTo(tester, find.text('Open E-Confirm'));
       await tester.ensureVisible(find.text('Open E-Confirm'));
