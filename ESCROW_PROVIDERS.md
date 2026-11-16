@@ -228,11 +228,14 @@ API: with no list it says so rather than showing a stale one.
    (Jeno-tech Solutions, Jo-Jo Mani Investment Ltd, Travel Pay) and the one
    responsible for the escrow transaction is unresolved. Lipasafe: Holda Fintech
    Technologies Limited, from its terms, unconfirmed.
-4. **Kenya Escrow's upper bands.** Up to KSh 50,000 each band's fixed charge makes the
-   fee continuous across the boundary. Above it four bands sit KSh 10-15 above the
-   continuous value (50,001-100,000: +14; 100,001-150,000: +15; 150,001-200,000: +10;
-   200,001-240,000: +15). That may be deliberate M-Pesa step costs or a transcription
-   slip. The numbers are shipped exactly as supplied; check them against the live page.
+4. **Kenya Escrow's bands do not all meet.** At the first amount of each band, take that
+   band's own formula minus the previous band's formula there (KSh, unrounded). The
+   bands from 1,001 to 50,000 meet (differences of -0.01 to 0.00). Six boundaries do not:
+   101 (+9.00), 501 (+0.96), 50,001 (+14.00), 100,001 (+15.00), 150,001 (+10.00) and
+   200,001 (+14.98). That may be deliberate M-Pesa step costs or a transcription slip.
+   The numbers are shipped exactly as supplied; check every one against the live page
+   before approving. (The earlier version of this note said the bands met up to 50,000;
+   that was wrong for 101 and 501.)
 5. **Whether any provider charges more** (dispute or holding fees). Until
    `additional_fees_may_apply` is confirmed `false`, a provider is never ranked.
    Earlier BROKA research mentioned a dispute fee at Kenya Escrow.
