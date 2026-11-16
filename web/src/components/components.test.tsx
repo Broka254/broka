@@ -309,7 +309,7 @@ describe('StoreDetails', () => {
     expect(within(safety).getByText('Pay the store directly.')).toBeTruthy()
     expect(within(safety).getByText('See it before you pay.')).toBeTruthy()
     expect(safety.textContent).toContain('Never send a deposit to "hold" an item.')
-    expect(safety.textContent).toContain('They are not run by BROKA.')
+    expect(safety.textContent).toContain('They are not run by BROKA, and protection depends on each one\'s terms.')
     // The old advice sent buyers to "BROKA escrow" and away from the seller.
     expect(safety.textContent).not.toMatch(/pay only through BROKA|held in escrow|never send money to a seller/i)
     // ...and the escrow services themselves are there to pick from.
@@ -618,7 +618,8 @@ describe('Checkout', () => {
     expect(within(screen.getByText('Payment').parentElement!).getByText('Escrow, or the store directly')).toBeTruthy()
     expect(screen.queryByText('Buyer protection')).toBeNull()
     expect(document.body.textContent).not.toMatch(/BROKA holds the money|held safely|escrow protected/i)
-    expect(document.body.textContent).toContain('They are not run by BROKA.')
+    // The checkout page carries the escrow box, whose own lead says so.
+    expect(document.body.textContent).toContain('They are not run by BROKA, and each is only as protective as its own terms say.')
   })
   it('elsewhere, says checkout is in the Android app - never an APK on an iPhone', () => {
     setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Safari/604.1')
