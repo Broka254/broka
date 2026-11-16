@@ -9,7 +9,8 @@ import { storeView } from '@/lib/storefront'
 import type { ImageSizes, Store, StoreReviews } from '@/lib/types'
 
 import { cart } from '@/lib/cart'
-import { ESCROW_PROVIDERS, ESCROW_SERVICES, PAYING_SAFELY } from '@/lib/safety'
+import { directoryView, REQUIRED_NOTICE, UNAVAILABLE } from '@/lib/escrow-providers'
+import { ESCROW_SERVICES, PAYING_SAFELY } from '@/lib/safety'
 
 import { AddToCart } from './AddToCart'
 import { AppButton, withStoreChat } from './AppButton'
@@ -763,12 +764,38 @@ describe('Opening the app', () => {
   })
 })
 
+// What GET /escrow-providers returns, as far as the box reads it (a trimmed copy
+// of backend/tests/test_escrow_directory_api.py's real response shape).
+const apiProvider = (over: Record<string, unknown> = {}) => ({
+  id: 'kenyaescrow',
+  name: 'Kenya Escrow',
+  status: 'under_review',
+  review_label: 'Under review: not yet verified by Broka',
+  website_url: 'https://kenyaescrow.com/',
+  canonical_domain: 'kenyaescrow.com',
+  summaries: {
+    fees: 'Fee depends on the amount: a percentage plus a fixed charge, in 11 published bands',
+    limits: 'KSh 50 to KSh 240,000 (the amount the seller receives)',
+    requirements: 'No account required. ID checks not documented.',
+  },
+  freshness: { warnings: ["BROKA has not yet verified this provider's pricing."] },
+  not_to_be_confused_with: [{ name: 'Escrow Kenya', domain: 'escrowkenya.com' }],
+  ...over,
+})
+const apiResponse = (providers: unknown[] = [apiProvider()], extra: Record<string, unknown> = {}) =>
+  directoryView({ providers, disclosures: { main: REQUIRED_NOTICE }, ...extra })
+
 describe('Pay with escrow', () => {
-  it("lists every escrow service with a link to its own site - a pointer, not BROKA's endorsement", () => {
-    render(<EscrowBox />)
+  it("lists every provider the API sent with a link to its own site - a pointer, not BROKA's endorsement", () => {
+    const directory = apiResponse([
+      apiProvider(),
+      apiProvider({ id: 'econfirm', name: 'eConfirm', website_url: 'https://econfirm.co.ke/', canonical_domain: 'econfirm.co.ke',
+        not_to_be_confused_with: [] }),
+    ])
+    render(<EscrowBox directory={directory} />)
     const box = screen.getByTestId('escrow-box')
     const links = within(box).getAllByRole('link')
-    expect(links.map((a) => a.getAttribute('href'))).toEqual(ESCROW_PROVIDERS.map((p) => p.url))
+    expect(links.map((a) => a.getAttribute('href'))).toEqual(['https://kenyaescrow.com/', 'https://econfirm.co.ke/'])
     for (const a of links) {
       expect(a.getAttribute('href')).toMatch(/^https:\/\//)
       expect(a.getAttribute('target')).toBe('_blank')
@@ -776,23 +803,58 @@ describe('Pay with escrow', () => {
     }
     // The rule a fake escrow site depends on breaking, and that they're not BROKA's.
     expect(box.textContent).toContain('Never use an escrow link')
-    expect(box.textContent).toContain("BROKA doesn't run them")
+    expect(box.textContent).toContain('Broka does not operate these escrow services')
     expect(box.textContent).toContain('Zeno')
   })
 
-  it("is the same list the app shows from the server (backend safe_payment.py)", () => {
-    const backend = readFileSync(resolve(process.cwd(), '../backend/api/domains/pricing/safe_payment.py'), 'utf8')
-    const urls = [...backend.matchAll(/"url": "(https:[^"]+)"/g)].map((m) => m[1])
-    expect(urls).toEqual(ESCROW_PROVIDERS.map((p) => p.url))
+  it('says a provider is unreviewed, and which similarly named website it is not', () => {
+    render(<EscrowBox directory={apiResponse()} />)
+    const box = screen.getByTestId('escrow-box')
+    expect(within(box).getByTestId('escrow-warning').textContent).toContain('not yet verified')
+    expect(box.textContent).toContain('Not the same company as Escrow Kenya (escrowkenya.com).')
+  })
+
+  it('shows the required notice verbatim, and never calls a provider safe or guaranteed', () => {
+    render(<EscrowBox directory={apiResponse()} />)
+    const text = screen.getByTestId('escrow-box').textContent ?? ''
+    expect(text).toContain(REQUIRED_NOTICE)
+    expect(text).not.toMatch(/guaranteed|fully safe|100% safe|Broka approved|risk[- ]free/i)
+  })
+
+  it('with no list it says so, instead of showing a stale one - and still carries the notice', () => {
+    render(<EscrowBox directory={UNAVAILABLE} />)
+    const box = screen.getByTestId('escrow-box')
+    expect(within(box).getByTestId('escrow-unavailable').textContent).toContain('could not be loaded')
+    expect(within(box).queryAllByRole('link')).toHaveLength(0)
+    expect(box.textContent).toContain(REQUIRED_NOTICE)
+    expect(box.textContent).not.toMatch(/econfirm|kenyaescrow|lipasafe|shikilia|escrowkenya/i)
+  })
+
+  it('never lists a provider it was not given - no copy of the list lives in this site', () => {
+    const files = (readdirSync(resolve(process.cwd(), 'src'), { recursive: true }) as string[])
+      .filter((f) => /\.tsx?$/.test(f) && !f.includes('.test.') && !f.endsWith('escrow-providers.ts'))
+    const offenders = files.filter((f) =>
+      /escrowkenya\.com|kenyaescrow\.com|econfirm\.co\.ke|lipasafe\.co\.ke|shikilia\.co\.ke/.test(
+        readFileSync(resolve(process.cwd(), 'src', f), 'utf8').replace(/\/\/.*$/gm, '')),
+    )
+    expect(offenders).toEqual([])
   })
 
   it('stands out on the cart page, before the steps', () => {
     setUserAgent(ANDROID_UA)
     cart.add('s1', lineOf(card('p1')))
     render(<CheckoutView storeId="s1" storeName="Clanix" storePath="/store/clanix" cartPath="/store/clanix/cart"
-      storeUrl="https://broka.co.ke/store/clanix" />)
+      storeUrl="https://broka.co.ke/store/clanix" escrow={apiResponse()} />)
     expect(screen.getByTestId('escrow-box')).toBeTruthy()
-    expect(screen.getAllByRole('link', { name: /E-Confirm/ })).toHaveLength(1)
+    expect(screen.getAllByRole('link', { name: /Kenya Escrow/ })).toHaveLength(1)
+  })
+
+  it('the cart still renders, with the notice, when the escrow list is not passed', () => {
+    setUserAgent(ANDROID_UA)
+    cart.add('s1', lineOf(card('p1')))
+    render(<CheckoutView storeId="s1" storeName="Clanix" storePath="/store/clanix" cartPath="/store/clanix/cart"
+      storeUrl="https://broka.co.ke/store/clanix" />)
+    expect(screen.getByTestId('escrow-unavailable')).toBeTruthy()
   })
 })
 

@@ -21,6 +21,7 @@ import { PAYING_SAFELY } from '@/lib/safety'
 import type { StoreView } from '@/lib/storefront'
 import type { StoreReviews } from '@/lib/types'
 
+import type { EscrowDirectory } from '@/lib/escrow-providers'
 import { EscrowBox } from './EscrowBox'
 import { Stars } from './Stars'
 import styles from './store.module.css'
@@ -29,8 +30,11 @@ export function StoreDetails({
   view,
   reviews = null,
   reviewsFailed = false,
+  escrow,
 }: {
   view: StoreView
+  /** The escrow providers, fetched by the page. */
+  escrow?: EscrowDirectory
   /** The shop's buyer reviews; null when the API sent none. */
   reviews?: StoreReviews | null
   /** The reviews request failed - say so rather than claim there are none. */
@@ -426,7 +430,7 @@ export function StoreDetails({
             </li>
           ))}
         </ul>
-        <EscrowBox />
+        <EscrowBox directory={escrow} />
       </section>
     </div>
   )

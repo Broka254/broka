@@ -23,7 +23,7 @@ import { TrustChips } from '@/components/TrustChips'
 import { VisitBeacon } from '@/components/VisitBeacon'
 import shopStyles from '@/components/shop.module.css'
 import styles from '@/components/store.module.css'
-import { getListing, getStore, getStoreListings } from '@/lib/api'
+import { getEscrowDirectory, getListing, getStore, getStoreListings } from '@/lib/api'
 import { filtersQuery, toProductCard } from '@/lib/catalogue'
 import { clip, conditionLabel, formatPrice } from '@/lib/format'
 import { campaignToken, productPath, storeCartPath, storePath, storeShopPath, viaTag } from '@/lib/links'
@@ -106,6 +106,7 @@ export default async function ProductPage({ params, searchParams }: Props) {
     .map((l) => toProductCard(l, store.slug, API_URL))
   const card = toProductCard(listing, store.slug, API_URL)
   const cartPath = storeCartPath(store.slug)
+  const escrow = await getEscrowDirectory()
 
   return (
     <StorefrontShell>
@@ -162,7 +163,7 @@ export default async function ProductPage({ params, searchParams }: Props) {
                 <strong>{SEE_FIRST.lead}</strong> {PAY_LINE} {NO_DEPOSIT}
               </p>
             </div>
-            {view.available && <EscrowBox compact />}
+            {view.available && <EscrowBox compact directory={escrow} />}
 
             {listing.description?.trim() && (
               <section className={shopStyles.descr} aria-labelledby="descr-title">

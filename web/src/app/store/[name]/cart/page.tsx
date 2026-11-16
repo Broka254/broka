@@ -9,7 +9,7 @@ import { StoreFooter } from '@/components/StoreFooter'
 import { StoreHeader } from '@/components/StoreHeader'
 import { StorefrontShell } from '@/components/StorefrontShell'
 import shop from '@/components/shop.module.css'
-import { getStore } from '@/lib/api'
+import { getEscrowDirectory, getStore } from '@/lib/api'
 import { storeCartPath } from '@/lib/links'
 import { storeView } from '@/lib/storefront'
 
@@ -29,6 +29,7 @@ export default async function CartPage({ params }: Props) {
   const view = storeView(store)
   // A paused store sells nothing; its page says so.
   if (!store.is_active) redirect(view.path)
+  const escrow = await getEscrowDirectory()
   return (
     <StorefrontShell>
       <StoreHeader view={view} active="cart" />
@@ -39,6 +40,7 @@ export default async function CartPage({ params }: Props) {
           storePath={view.path}
           cartPath={storeCartPath(store.slug)}
           storeUrl={view.url}
+          escrow={escrow}
         />
       </main>
       <StoreFooter view={view} />

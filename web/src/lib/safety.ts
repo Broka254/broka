@@ -15,9 +15,12 @@
 //
 // For launch (2026-10-08) escrow comes first: a store's buyer is often in
 // another town and can't see the item before paying, so every page that
-// takes a buyer towards paying shows Kenya's escrow services (EscrowBox.tsx,
-// ESCROW_PROVIDERS below), and that Zeno, in the app, walks them through
-// one step by step.
+// takes a buyer towards paying shows the escrow services BROKA lists
+// (EscrowBox.tsx), and that Zeno, in the app, walks them through one step by
+// step. THE LIST ITSELF IS NOT HERE (2026-11): it is the API's, fetched by
+// each page (lib/escrow-providers.ts). A copy typed in here could not be
+// corrected without a deploy, could not say a provider was suspended, and
+// still named escrowkenya.com as an active service.
 //
 // What is still true is still said where it was: delivery or pickup is
 // agreed with the store, and Zeno carries questions and offers between buyer
@@ -45,7 +48,7 @@ export const SEE_FIRST: Advice = {
 
 export const ESCROW_SERVICES: Advice = {
   lead: 'A deal at a distance?',
-  text: 'Pay through an independent escrow service: it keeps the money until you have the item, then pays the store. They are not run by BROKA.',
+  text: 'Pay through an independent escrow service: under its own rules, it can hold the payment until you have the item. They are not run by BROKA, and protection depends on each one\'s terms.',
 }
 
 // Land and cars are not escrow deals: an M-Pesa payment tops out at
@@ -59,42 +62,11 @@ export const LAND_AND_CARS: Advice = {
 /** The advice in full: the store's details page. */
 export const PAYING_SAFELY: readonly Advice[] = [PAY_DIRECT, ESCROW_SERVICES, SEE_FIRST, LAND_AND_CARS]
 
-/** One escrow service, as it describes itself. */
-export interface EscrowProvider {
-  name: string
-  url: string
-  note: string
-}
-
-// Kenya's escrow services: the list and addresses the app shows from the
-// server (backend/api/domains/pricing/safe_payment.py PROVIDERS). A test
-// reads that file and fails if the two drift apart. Fees and limits stay on
-// each service's own site - they change, and a stale fee here would be a
-// promise nobody keeps. Escrow Kenya and Kenya Escrow are two companies.
-export const ESCROW_PROVIDERS: readonly EscrowProvider[] = [
-  { name: 'E-Confirm', url: 'https://econfirm.co.ke', note: 'M-Pesa escrow for most deals, KES 100 to 500,000.' },
-  {
-    name: 'Escrow Kenya',
-    url: 'https://escrowkenya.com',
-    note: 'Bigger deals and cars; M-Pesa or bank. Not the same company as Kenya Escrow.',
-  },
-  {
-    name: 'Kenya Escrow',
-    url: 'https://www.kenyaescrow.com',
-    note: 'M-Pesa escrow, no account to create. Not the same company as Escrow Kenya.',
-  },
-  { name: 'Lipasafe', url: 'https://lipasafe.co.ke', note: 'M-Pesa escrow; every user is ID-checked.' },
-  { name: 'Shikilia', url: 'https://www.shikilia.co.ke', note: 'Escrow that runs on WhatsApp.' },
-]
-
 /** The rule a fake escrow site depends on breaking. */
 export const OPEN_IT_YOURSELF =
   "Open the escrow service yourself from this list. Never use an escrow link, paybill or 'agent' the store sends you - fake escrow sites are a common scam."
 
 export const ZENO_ESCROW = 'Never used escrow? Zeno, in the BROKA app, walks you through it one step at a time.'
-
-export const ESCROW_DISCLAIMER =
-  "These are independent services. BROKA doesn't run them, isn't paid by them, and can't get money back from them - check a service's fee on its own site before you pay."
 
 /** The perks strip's lines about paying (a title, and the line under it);
  *  the first title is the store footer's tag too. */

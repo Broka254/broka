@@ -16,7 +16,7 @@ import { StorefrontShell } from '@/components/StorefrontShell'
 import { VisitBeacon } from '@/components/VisitBeacon'
 import shop from '@/components/shop.module.css'
 import styles from '@/components/store.module.css'
-import { getStore, getStoreReviews } from '@/lib/api'
+import { getEscrowDirectory, getStore, getStoreReviews } from '@/lib/api'
 import { absoluteUrl, campaignToken, storeCartPath, storeDetailsPath, viaTag } from '@/lib/links'
 import { storeDescription, storePreviewImage, storeView } from '@/lib/storefront'
 import type { StoreReviews } from '@/lib/types'
@@ -72,6 +72,7 @@ export default async function StoreDetailsPage({ params, searchParams }: Props) 
   } catch {
     reviewsFailed = true
   }
+  const escrow = await getEscrowDirectory()
   return (
     <StorefrontShell>
       <StoreHeader view={view} active="about" />
@@ -82,7 +83,7 @@ export default async function StoreDetailsPage({ params, searchParams }: Props) 
           <span aria-current="page">About</span>
         </nav>
         <h1 className={styles.detailsTitle}>Store details</h1>
-        <StoreDetails view={view} reviews={reviews} reviewsFailed={reviewsFailed} />
+        <StoreDetails view={view} reviews={reviews} reviewsFailed={reviewsFailed} escrow={escrow} />
         <VisitBeacon storeId={store.id} via={via} campaign={campaign} />
       </main>
       <StoreFooter view={view} />

@@ -24,6 +24,7 @@ import { absoluteUrl, androidAppLink } from '@/lib/links'
 import { LAND_AND_CARS, PAY_DIRECT, SEE_FIRST } from '@/lib/safety'
 
 import { QtyStepper } from './AddToCart'
+import type { EscrowDirectory } from '@/lib/escrow-providers'
 import { EscrowBox } from './EscrowBox'
 import { Icon } from './Icon'
 import styles from './shop.module.css'
@@ -40,12 +41,15 @@ export function CheckoutView({
   storePath,
   cartPath,
   storeUrl,
+  escrow,
 }: {
   storeId: string
   storeName: string
   storePath: string
   cartPath: string
   storeUrl: string
+  /** The escrow providers, fetched by the page (a client component cannot fetch them). */
+  escrow?: EscrowDirectory
 }) {
   const lines = useCart(storeId)
   const android = useIsAndroid()
@@ -184,7 +188,7 @@ export function CheckoutView({
         </ol>
         {/* Escrow, before anything else about paying: most buyers of a
             store are not where the store is (EscrowBox.tsx). */}
-        <EscrowBox compact />
+        <EscrowBox compact directory={escrow} />
         <p className={styles.stepsNote}>
           <strong>{LAND_AND_CARS.lead}</strong> {LAND_AND_CARS.text}
         </p>
