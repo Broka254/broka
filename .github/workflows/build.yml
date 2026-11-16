@@ -440,7 +440,7 @@ jobs:
         continue-on-error: true
         run: |
           cd flutter_app
-          flutter build apk --release --split-per-abi
+          flutter build apk --release --split-per-abi --dart-define=PAYMENTS_SHOWN=true
           echo "=== APK files ===" && find . -name "*.apk" 2>/dev/null
 
       - name: Locate APK
