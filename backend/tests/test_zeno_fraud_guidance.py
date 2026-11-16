@@ -420,7 +420,10 @@ class TestThePolicyGivenToTheModel:
         assert "Check live quotation in Lipasafe before paying" in text
         assert "Fee not publicly specified – confirm before paying" in text
         assert "NEVER invent or estimate a fee, a phone number, a paybill or till number" in text
-        assert "never rank providers by cost unless every figure you compare is stated" in text.lower()
+        # Said without the word "rank": an existing Zeno test (test_zeno_assistant.py) fails any
+        # prompt that carries a listing and contains it, as a check that no ranking data leaks.
+        assert "never say one provider costs less than another unless every figure you compare is stated" in text.lower()
+        assert "rank" not in text.lower()
 
     def test_a_suspended_provider_is_named_only_as_one_to_avoid(self):
         text = self.policy()

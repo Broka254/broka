@@ -244,7 +244,10 @@ class TestEvidenceIsPrivate:
         (base64.b64encode(b"<html><script>alert(1)</script>").decode(), 415),
         (base64.b64encode(b"%PDF-1.7 stuff").decode(), 415),
         ("not base64 !!!", 422),
-        (base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 1_600_000).decode()[:2_000_000], 413),
+        # One byte over the 1,500,000-byte limit. Built from a byte count, not by cutting
+        # encoded text: the first version sliced the base64 and landed exactly ON the limit,
+        # which is (correctly) accepted, so it tested nothing.
+        (base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * (1_500_000 + 1 - 8)).decode(), 413),
     ])
     async def test_only_real_images_within_the_size_limit_are_stored(self, client, payload, status):
         reporter = await _user()
@@ -252,6 +255,16 @@ class TestEvidenceIsPrivate:
         r = await client.post(f"/scam-reports/{report['id']}/evidence", headers=_auth(reporter),
                               json={"content_base64": payload})
         assert r.status_code == status, r.text
+
+    @pytest.mark.asyncio
+    async def test_a_file_exactly_at_the_size_limit_is_kept(self, client):
+        """The limit is "more than 1,500,000 bytes is refused": a file of exactly that is kept."""
+        reporter = await _user()
+        report = await _file(client, reporter, reported_account_ref="0700000008")
+        exactly = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * (1_500_000 - 8)).decode()
+        r = await client.post(f"/scam-reports/{report['id']}/evidence", headers=_auth(reporter),
+                              json={"content_base64": exactly})
+        assert r.status_code == 201 and r.json()["size_bytes"] == 1_500_000, r.text
 
     @pytest.mark.asyncio
     async def test_a_report_holds_at_most_three_files(self, client):
