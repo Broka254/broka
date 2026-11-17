@@ -158,7 +158,9 @@ class TestSubmission:
     @pytest.mark.asyncio
     async def test_a_buyer_without_the_app_submits_an_order(self, client):
         _, seller_token, store_id = await _seller(client)
-        lid = await _listing(client, seller_token, store_id, price=12500)
+        # A stated quantity: a listing without one is a single item, and two
+        # of it is refused (stock.request_limit).
+        lid = await _listing(client, seller_token, store_id, price=12500, quantity=5)
         _, buyer_token = await _buyer(client)
         order = await _order(client, buyer_token, store_id, lid, quantity=2, note="Call when near")
         assert order["status"] == "submitted"
@@ -337,7 +339,7 @@ class TestLifecycle:
     @pytest.mark.asyncio
     async def test_the_full_journey_to_completed(self, client):
         _, seller_token, store_id = await _seller(client)
-        lid = await _listing(client, seller_token, store_id, price=1500)
+        lid = await _listing(client, seller_token, store_id, price=1500, quantity=5)
         _, buyer_token = await _buyer(client)
         order = await _order(client, buyer_token, store_id, lid, quantity=2)
         oid = order["id"]
@@ -857,20 +859,25 @@ class TestNotifications:
             data = kwargs.get("data") or {}
             if data.get("type") != "store_order":
                 return await real(user_id, **kwargs)
-            calls.append((user_id, data["event"]))
+            calls.append((user_id, data["event"], data["order_id"]))
             return 1
+
+        def this_order():
+            # Only this order's pushes. The sweep below also sends whatever
+            # earlier tests in the session left pending - which is its job.
+            return [(user, event) for user, event, order_id in calls if order_id == oid]
 
         monkeypatch.setattr(push_devices, "push_user", accepted)
         oid = (await _order(client, buyer_token, store_id, lid))["id"]
         await _post(client, seller_token, f"/orders/{oid}/accept")
-        assert calls == [(seller_id, "submitted"), (buyer_id, "seller_accepted")]
+        assert this_order() == [(seller_id, "submitted"), (buyer_id, "seller_accepted")]
         async with db_module.AsyncSessionLocal() as db:
             ids = (await db.execute(select(StoreOrderNotification.id).where(
                 StoreOrderNotification.order_id == oid))).scalars().all()
         # A second delivery attempt and a sweep find nothing left to send.
         await notify.deliver(ids)
         await notify.retry_pending()
-        assert len(calls) == 2
+        assert len(this_order()) == 2
         async with db_module.AsyncSessionLocal() as db:
             states = (await db.execute(select(StoreOrderNotification.push_state).where(
                 StoreOrderNotification.order_id == oid))).scalars().all()
