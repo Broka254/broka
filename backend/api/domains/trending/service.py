@@ -80,12 +80,15 @@ class TrendingService:
         # (domains/listings/service.py) so trending results carry the same
         # image/verified/price fields as everywhere else in the API,
         # rather than a second, thinner listing JSON shape.
+        from api.domains.listings import inventory
         from api.domains.listings.service import load_listing_media
         assets = await load_listing_media(self.db, page, sellers_by_id.values())
+        # What is left of counted stock, as every other list says it.
+        counted = await inventory.tracked_counts(self.db, page)
         return [
             ListingService._listing_dict(
                 l, seller=sellers_by_id.get(l.seller_id), assets=assets, card=True,
-                lean=lean,
+                lean=lean, counted=counted.get(l.id),
             )
             for l in page
         ]

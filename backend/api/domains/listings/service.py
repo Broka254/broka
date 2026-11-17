@@ -23,22 +23,10 @@ from . import validation as rules
 from .location import canonical_county, listing_point, tidy_place
 from .handover import handover, is_deliverable
 from .paid import fee_applies, fee_state, is_live, live_clause
-from .stock import is_stocked, units_taken, units_total
+from . import inventory
+from .inventory import Inventory
+from .stock import is_stocked
 from .validation import load_attributes
-
-
-def _tracked(listing) -> bool:
-    """The seller counts this product's stock (Listing.stock_tracked) and
-    has said how many there are - the same rule as store_orders/stock.py."""
-    return (bool(getattr(listing, "stock_tracked", False))
-            and getattr(listing, "quantity", None) is not None)
-
-
-def _tracked_left(listing) -> Optional[int]:
-    """Tracked units not held by an accepted store order; None untracked."""
-    if not _tracked(listing):
-        return None
-    return max(int(listing.quantity or 0) - int(getattr(listing, "stock_reserved", 0) or 0), 0)
 
 
 def _public_time_left(listing) -> dict:
@@ -616,6 +604,10 @@ class ListingService:
         for field in self._DRAFT_TERMS:
             if field not in data or data[field] is None and field in ("name", "price"):
                 continue
+            if field == "quantity" and inventory.is_tracked(listing):
+                # Counted stock is the stock controls' to set, against what
+                # is promised (store_orders/service.set_stock) - not a replay.
+                continue
             value = data[field]
             if field == "price_negotiable":
                 value = value is not False
@@ -647,7 +639,10 @@ class ListingService:
         )).scalar_one_or_none()
         store = await self.db.get(Store, listing.store_id) if listing.store_id else None
         assets = await load_listing_media(self.db, [listing], [seller])
-        return self._owner_listing_dict(listing, seller=seller, store=store, assets=assets)
+        # A replay can come after its owner started counting the stock.
+        counted = (await inventory.tracked_counts(self.db, [listing])).get(listing.id)
+        return self._owner_listing_dict(listing, seller=seller, store=store, assets=assets,
+                                        counted=counted)
 
     @staticmethod
     async def _check_create_rate(seller_id: str) -> None:
@@ -819,14 +814,13 @@ class ListingService:
         """
         status = getattr(listing.status, "value", listing.status)
         left = None
-        tracked = _tracked(listing)
+        tracked = False
         if is_stocked(listing):
-            taken, _ = await units_taken(self.db, listing.id)
-            left = max(units_total(listing) - taken, 0)
-            if tracked:
-                # Counted stock: what is on hand, less what accepted store
-                # orders hold and what chat deals hold (store_orders/stock.py).
-                left = max((_tracked_left(listing) or 0) - taken, 0)
+            # The shared count (inventory.py): chat deals and accepted store
+            # orders both, exactly as a deal or an order is decided.
+            counted = await inventory.count(self.db, listing)
+            left = counted.available
+            tracked = counted.tracked
         reported = getattr(listing, "sold_out_reported_at", None)
         sold_out = (status in (ListingStatus.pending.value, ListingStatus.completed.value)
                     or left == 0 or reported is not None)
@@ -1102,6 +1096,9 @@ class ListingService:
         # star average comes from reviews, never the User.rating default.
         from api.domains.reviews.stats import seller_review_figures
         seller_reviews = await seller_review_figures(self.db, sellers_by_id.keys())
+        # What is left of counted stock, chat deals included: one query, and
+        # only when the page has a counted product (inventory.tracked_counts).
+        counted = await inventory.tracked_counts(self.db, candidates)
 
         for listing in candidates:
             d = self._listing_dict(
@@ -1109,6 +1106,7 @@ class ListingService:
                 store=stores_by_id.get(listing.store_id),
                 assets=assets, card=True, lean=lean,
                 seller_review=seller_reviews.get(listing.seller_id, (0, None)),
+                counted=counted.get(listing.id),
             )
             if viewer_lat is not None and viewer_lng is not None:
                 dist = round_distance_km(haversine_km(viewer_lat, viewer_lng, listing.lat, listing.lng))
@@ -1233,11 +1231,13 @@ class ListingService:
         assets = await load_listing_media(self.db, rows, sellers.values())
         from api.domains.reviews.stats import seller_review_figures
         seller_reviews = await seller_review_figures(self.db, sellers.keys())
+        counted = await inventory.tracked_counts(self.db, rows)
         return [
             self._listing_dict(
                 l, seller=sellers.get(l.seller_id),
                 store=stores.get(l.store_id), assets=assets, card=True,
                 seller_review=seller_reviews.get(l.seller_id, (0, None)),
+                counted=counted.get(l.id),
             )
             for l in rows
         ]
@@ -1275,10 +1275,11 @@ class ListingService:
             stores = {s.id: s for s in (await self.db.execute(
                 select(Store).where(Store.id.in_(store_ids)))).scalars().all()}
         assets = await load_listing_media(self.db, rows, [seller] if seller else [])
+        counted = await inventory.tracked_counts(self.db, rows)
         out = []
         for l in rows:
             d = self._listing_dict(l, seller=seller, store=stores.get(l.store_id),
-                                   assets=assets, card=True)
+                                   assets=assets, card=True, counted=counted.get(l.id))
             d.update({
                 "sold_out": True,
                 "reported_sold_out": True,
@@ -1528,7 +1529,9 @@ class ListingService:
         seller = (await self.db.execute(select(User).where(User.id == listing.seller_id))).scalar_one_or_none()
         # _get_owned_listing_or_403 above established ownership.
         assets = await load_listing_media(self.db, [listing], [seller])
-        return self._owner_listing_dict(listing, seller=seller, store=store, assets=assets)
+        counted = (await inventory.tracked_counts(self.db, [listing])).get(listing.id)
+        return self._owner_listing_dict(listing, seller=seller, store=store, assets=assets,
+                                        counted=counted)
 
     async def remove_listing_store(self, listing_id: str, requester_id: str) -> dict:
         """Inverse of set_listing_store - returns the listing to a
@@ -1541,7 +1544,9 @@ class ListingService:
         seller = (await self.db.execute(select(User).where(User.id == listing.seller_id))).scalar_one_or_none()
         # Ownership established by _get_owned_listing_or_403.
         assets = await load_listing_media(self.db, [listing], [seller])
-        return self._owner_listing_dict(listing, seller=seller, store=None, assets=assets)
+        counted = (await inventory.tracked_counts(self.db, [listing])).get(listing.id)
+        return self._owner_listing_dict(listing, seller=seller, store=None, assets=assets,
+                                        counted=counted)
 
     async def get_own_listing(self, listing_id: str, requester_id: str) -> dict:
         """The seller's own listing, including the fields buyers never see.
@@ -1557,7 +1562,9 @@ class ListingService:
         )).scalar_one_or_none()
         store = await self.db.get(Store, listing.store_id) if listing.store_id else None
         assets = await load_listing_media(self.db, [listing], [seller])
-        return self._owner_listing_dict(listing, seller=seller, store=store, assets=assets)
+        counted = (await inventory.tracked_counts(self.db, [listing])).get(listing.id)
+        return self._owner_listing_dict(listing, seller=seller, store=store, assets=assets,
+                                        counted=counted)
 
     async def delete_listing(self, listing_id: str, requester_id: str) -> dict:
         """Take the seller's listing off BROKA for good.
@@ -1628,7 +1635,7 @@ class ListingService:
     @staticmethod
     def _owner_listing_dict(
         listing: Listing, seller: Optional[User] = None, store: Optional[Store] = None,
-        assets: Optional[dict] = None,
+        assets: Optional[dict] = None, counted: Optional[Inventory] = None,
     ) -> dict:
         """The seller's own view of their listing. NEVER for a public route.
 
@@ -1644,7 +1651,8 @@ class ListingService:
         serializer is the only one it can reach by name.
         """
         return {
-            **ListingService._listing_dict(listing, seller=seller, store=store, assets=assets),
+            **ListingService._listing_dict(listing, seller=seller, store=store, assets=assets,
+                                           counted=counted),
             # The seller's secret walk-away price. Public responses carry
             # has_reserve/reserve_met instead - see the note in
             # _listing_dict and lifecycle.public_state.
@@ -1661,6 +1669,9 @@ class ListingService:
             # Units accepted store orders hold (store_orders/stock.py) - the
             # seller's own figure; buyers see only what is left.
             "stock_reserved": int(getattr(listing, "stock_reserved", 0) or 0),
+            # On hand, and what chat deals hold and sold, from the shared
+            # count (inventory.py) - what the stock controls show and set.
+            **inventory.owner_fields(counted),
         }
 
     @staticmethod
@@ -1668,7 +1679,7 @@ class ListingService:
         listing: Listing, seller: Optional[User] = None, store: Optional[Store] = None,
         assets: Optional[dict] = None, card: bool = False,
         seller_review: tuple[int, Optional[float]] = (0, None),
-        lean: bool = False,
+        lean: bool = False, counted: Optional[Inventory] = None,
     ) -> dict:
         """PUBLIC listing payload. Anything added here is world-readable.
 
@@ -1784,10 +1795,11 @@ class ListingService:
             # this product's stock; what is left to order (null when they
             # don't - the store then confirms availability on each order,
             # which is never "out of stock"); and the seller's pause on new
-            # orders for it. Units held by chat deals are taken off on the
-            # single-listing read (_availability), not on every card.
-            "stock_tracked": _tracked(listing),
-            "available_quantity": _tracked_left(listing),
+            # orders for it. "Left" is the shared count (inventory.py): units
+            # in chat deals and in accepted orders both taken off. Every list
+            # passes `counted` for its tracked listings (tracked_counts).
+            "stock_tracked": inventory.is_tracked(listing),
+            "available_quantity": inventory.card_available(listing, counted),
             "temporarily_unavailable": bool(getattr(listing, "temporarily_unavailable", False)),
             "price_negotiable": getattr(listing, "price_negotiable", True) is not False,
             "delivery_available": listing.delivery_available,

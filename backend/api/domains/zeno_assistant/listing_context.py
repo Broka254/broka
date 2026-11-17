@@ -182,7 +182,8 @@ async def _seller_lines(db: AsyncSession, seller: Optional[User], seller_id: str
 
 
 async def _availability_lines(db: AsyncSession, listing: Listing, status: str) -> list[str]:
-    from api.domains.listings.stock import is_stocked, units_left, units_total
+    from api.domains.listings import inventory
+    from api.domains.listings.stock import is_stocked
 
     lines = []
     reported = getattr(listing, "sold_out_reported_at", None)
@@ -194,11 +195,14 @@ async def _availability_lines(db: AsyncSession, listing: Listing, status: str) -
     if status != "active":
         lines.append(f"Listing status: {status} - it may no longer be available")
     elif is_stocked(listing):
-        total = units_total(listing)
-        left = await units_left(db, listing)
+        # The shared count (listings/inventory.py): what a deal or a store
+        # order would actually be allowed to take.
+        counted = await inventory.count(db, listing)
+        left = counted.available
+        total = counted.on_hand if counted.tracked else counted.total
         if left <= 0:
-            lines.append("Availability: sold out - every unit is sold or in a deal under way")
-        elif total > 1:
+            lines.append("Availability: sold out - every unit is sold or promised to a deal or an order")
+        elif (total or 0) > 1:
             lines.append(f"Units left: {left} of {total}")
     return lines
 

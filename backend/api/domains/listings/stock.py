@@ -27,6 +27,10 @@ which catches every other way a deal ends - refunds, cancellations, payouts
 
 Auctions are left alone: one item, sold through its own lifecycle
 (domains/auctions/lifecycle.py), which already sets these statuses itself.
+
+Units left to sell are counted in one place for chat deals and store orders
+alike - listings/inventory.py - and a store product whose stock its seller
+counts is never hidden by stock (status_for).
 """
 from __future__ import annotations
 
@@ -61,6 +65,12 @@ def _holding_deal():
     if deals_hold_stock():
         return Deal.status.not_in(_RELEASING_STATUSES)
     return Deal.status == DealStatus.released
+
+
+def holding_deal():
+    """SQL: a deal whose units are off sale - for the shared count
+    (listings/inventory.py)."""
+    return _holding_deal()
 
 # A deal in one of these holds its units. Refunded and cancelled deals gave
 # them back; "negotiating" is not an agreement (every Deal row is created at
@@ -101,16 +111,25 @@ async def units_taken(db: AsyncSession, listing_id: str) -> tuple[int, int]:
 
 
 async def units_left(db: AsyncSession, listing: Listing) -> int:
-    taken, _ = await units_taken(db, listing.id)
-    return max(units_total(listing) - taken, 0)
+    """Units a buyer could still be sold, by the shared count
+    (listings/inventory.py): chat deals and accepted store orders both."""
+    from . import inventory
+    return (await inventory.count(db, listing)).available
 
 
 def status_for(listing: Listing, taken: int, sold: int) -> Optional[ListingStatus]:
     """The status stock says a direct listing should have, or None when it
-    isn't stock's to decide."""
+    isn't stock's to decide.
+
+    A product whose stock its seller counts (Listing.stock_tracked) is never
+    hidden by stock: it is a shelf the seller restocks, so with none left it
+    stays listed and says "Out of stock" (listings/inventory.py), whichever
+    channel took the last unit - a chat deal or a store order."""
     current = getattr(listing.status, "value", listing.status)
     if not is_stocked(listing) or current not in {s.value for s in _STOCK_STATUSES}:
         return None
+    if bool(getattr(listing, "stock_tracked", False)) and getattr(listing, "quantity", None) is not None:
+        return ListingStatus.active
     total = units_total(listing)
     if sold >= total:
         return ListingStatus.completed
@@ -151,6 +170,11 @@ async def sync_listing_stock(db: AsyncSession, now=None) -> int:
             (Listing.status.in_((ListingStatus.pending, ListingStatus.completed)))
             | ((Listing.status == ListingStatus.active) & taken_q.c.taken.is_not(None)),
         )
+        # Updated in id order, the order every other path takes listing
+        # locks in (listings/inventory.py): this one transaction holds each
+        # row it changes until it commits, and a store order action holding
+        # two of the same listings must not be waiting on it in reverse.
+        .order_by(Listing.id)
     )).all()
 
     changed = 0

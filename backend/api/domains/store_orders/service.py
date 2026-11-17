@@ -47,6 +47,8 @@ from sqlalchemy.orm.exc import StaleDataError
 
 from api.core.config import settings
 from api.database import Listing, ListingStatus, ListingType, User
+from api.domains.listings import inventory
+from api.domains.listings.stock import status_for
 from api.models.store import Store
 from api.models.store_order import (
     StoreOrder, StoreOrderEvent, StoreOrderItem, StoreOrderNotification,
@@ -329,8 +331,9 @@ async def submit(
         name = listing.name if listing is not None else "A product in your cart"
         if problem:
             raise order_error(409, "ORDER_ITEM_UNAVAILABLE", f"{name} {problem}.", listing_id=item.listing_id)
-        held = await stock.deal_units(db, listing.id) if stock.is_tracked(listing) else 0
-        limit = stock.request_limit(listing, held)
+        # A cap, not an allocation: nothing is reserved until the store
+        # accepts, which counts again under the listing's lock (_offer).
+        limit = stock.request_limit(listing, await inventory.count(db, listing))
         if limit <= 0:
             raise order_error(409, "ORDER_ITEM_OUT_OF_STOCK", f"{name} is out of stock.",
                               listing_id=listing.id, available=0)
@@ -497,13 +500,15 @@ async def _listings_for(db: AsyncSession, items: list[StoreOrderItem]) -> dict[s
 # ── Stock on an order's items ─────────────────────────────────────────────
 
 async def _hold(db: AsyncSession, item: StoreOrderItem, listing: Optional[Listing], target: int) -> None:
-    """Make this line hold exactly `target` reserved units."""
+    """Make this line hold exactly `target` reserved units. The caller has
+    locked `listing` (inventory.lock), so what is counted here - chat deals
+    and other orders alike - can't change before the reservation is written."""
     have = int(item.reserved_quantity or 0)
     if target > have:
-        held = await stock.deal_units(db, item.listing_id)
-        if not await stock.reserve(db, item.listing_id, target - have, held):
-            _, qty, reserved = await stock.current(db, item.listing_id)
-            left = max(int(qty or 0) - reserved - held, 0) + have
+        counted = await inventory.count(db, listing)
+        need = target - have
+        if counted.available < need or not await stock.reserve(db, item.listing_id, need, counted.in_deals):
+            left = counted.available + have
             raise order_error(
                 409, "ORDER_STOCK_SHORT",
                 (f"Only {left} of {item.name} in stock - offer {left} or fewer." if left
@@ -562,7 +567,11 @@ async def _offer(db: AsyncSession, order: StoreOrder, items: list[StoreOrderItem
         fee = order.delivery_fee_minor
     if fulfilment == lc.COLLECTION:
         fee = None
-    listings = await _listings_for(db, items)
+    # Locked before anything is counted, in id order: the lock a chat deal
+    # takes on the same listing (EscrowService.finalize_deal), so the two
+    # channels take units one after the other (listings/inventory.py).
+    # Untracked products too - their row is where tracking is switched on.
+    listings = await inventory.lock(db, [i.listing_id for i in items])
     for item in sorted(items, key=lambda i: i.listing_id):
         qty, price = offered[item.id]
         listing = listings.get(item.listing_id)
@@ -1099,7 +1108,8 @@ def _payment_view(order: StoreOrder, role: str, payment: Optional[StoreOrderPaym
     }
 
 
-def _item_view(item: StoreOrderItem, assets: dict, role: str, listing: Optional[Listing]) -> dict:
+def _item_view(item: StoreOrderItem, assets: dict, role: str,
+               counted: Optional[inventory.Inventory]) -> dict:
     from api.domains.media.service import asset_urls
 
     q, p = _current_offer(item)
@@ -1127,10 +1137,15 @@ def _item_view(item: StoreOrderItem, assets: dict, role: str, listing: Optional[
         "removed": q == 0,
     }
     if role == lc.SELLER:
+        # The shared count (listings/inventory.py): "free to order" is what
+        # the next acceptance - or a chat deal - may take, with units in
+        # chat deals taken off as well as other orders' reservations.
+        tracked = bool(counted is not None and counted.tracked)
         view.update({
-            "stock_tracked": bool(listing is not None and stock.is_tracked(listing)),
-            "stock_on_hand": listing.quantity if listing is not None and stock.is_tracked(listing) else None,
-            "stock_available": stock.available(listing) if listing is not None else None,
+            "stock_tracked": tracked,
+            "stock_on_hand": counted.on_hand if tracked else None,
+            "stock_available": counted.available if tracked else None,
+            "stock_committed_to_deals": counted.committed_to_deals if tracked else None,
             "reserved_quantity": int(item.reserved_quantity or 0),
             "stock_state": item.stock_state,
         })
@@ -1169,7 +1184,9 @@ async def view(db: AsyncSession, order: StoreOrder, role: str) -> dict:
         .order_by(StoreOrderEvent.created_at, StoreOrderEvent.id)
     )).scalars().all()
     assets = await load_assets(db, {i.image_asset_id for i in items if i.image_asset_id})
-    listings = await _listings_for(db, items) if role == lc.SELLER else {}
+    # The store's view counts each product's stock; the buyer's has none.
+    counted = (await inventory.counts(db, (await _listings_for(db, items)).values())
+               if role == lc.SELLER else {})
     now = datetime.utcnow()
     expires_in = (int((order.expires_at - now).total_seconds())
                   if order.expires_at is not None and order.status in lc.EXPIRABLE else None)
@@ -1187,7 +1204,7 @@ async def view(db: AsyncSession, order: StoreOrder, role: str) -> dict:
             "url": store_link(store.slug) if store else None,
         },
         "currency": order.currency,
-        "items": [_item_view(i, assets, role, listings.get(i.listing_id)) for i in items],
+        "items": [_item_view(i, assets, role, counted.get(i.listing_id)) for i in items],
         "totals": {
             "requested_subtotal_minor": order.requested_subtotal_minor,
             "seller_subtotal_minor": order.seller_subtotal_minor,
@@ -1380,53 +1397,174 @@ async def list_for_store(db: AsyncSession, store: Store, *, group: str = "open",
 
 # ── Inventory controls for the store's products ───────────────────────────
 
-async def set_stock(db: AsyncSession, store: Store, listing_id: str, *, tracked: Optional[bool],
-                    quantity: Optional[int], temporarily_unavailable: Optional[bool]) -> dict:
-    """The owner's stock switches for one product of this store (the router
-    has checked ownership). Turning tracking on needs a quantity; on-hand
-    can't be set below what accepted orders already hold."""
-    listing = (await db.execute(
-        select(Listing).where(Listing.id == listing_id).with_for_update()
-        .execution_options(populate_existing=True)
-    )).scalar_one_or_none()
+def _check_product(listing: Optional[Listing], store: Store) -> Listing:
     if (listing is None or listing.store_id != store.id or listing.seller_id != store.owner_id
             or (getattr(listing.status, "value", listing.status) == ListingStatus.cancelled.value
                 and listing.archived_at is None)):
         raise order_error(404, "LISTING_NOT_FOUND", "That product isn't in this store.")
     if getattr(listing.listing_type, "value", listing.listing_type) == ListingType.auction.value:
         raise order_error(400, "LISTING_IS_AUCTION", "Auctions sell one item through bidding; stock doesn't apply.")
-    want_tracked = listing.stock_tracked if tracked is None else bool(tracked)
-    new_quantity = listing.quantity if quantity is None else int(quantity)
-    if quantity is not None and not 0 <= new_quantity <= 1_000_000:
-        raise order_error(400, "STOCK_QUANTITY_INVALID", "Stock must be between 0 and 1,000,000.")
-    if want_tracked and new_quantity is None:
-        raise order_error(400, "STOCK_QUANTITY_REQUIRED", "Say how many you have to start tracking stock.")
-    if not want_tracked and quantity is not None and new_quantity < 1:
-        # Untracked, the quantity is what the listing says the seller has;
-        # the listing editor has never accepted 0 for that (validation.py).
-        raise order_error(400, "STOCK_QUANTITY_INVALID",
-                          "Turn stock tracking on to record that none are left, or mark it unavailable.")
-    reserved = int(listing.stock_reserved or 0)
-    if want_tracked and new_quantity < reserved:
-        raise order_error(
-            409, "STOCK_BELOW_RESERVED",
-            f"{reserved} of these are reserved by accepted orders. Set at least {reserved}, "
-            "or cancel those orders first.", reserved=reserved,
+    return listing
+
+
+def _line_quantity(item: StoreOrderItem) -> int:
+    """The units an accepted order's line is for: what the buyer confirmed,
+    or else what the store offered."""
+    if item.final_quantity is not None:
+        return int(item.final_quantity)
+    return _current_offer(item)[0]
+
+
+async def _unreserved_accepted(db: AsyncSession, listing_id: str) -> list[StoreOrderItem]:
+    """Lines of this product in orders the store accepted while it didn't
+    count stock - still to be handed over, holding no units."""
+    rows = (await db.execute(
+        select(StoreOrderItem)
+        .join(StoreOrder, StoreOrder.id == StoreOrderItem.order_id)
+        .where(
+            StoreOrderItem.listing_id == listing_id,
+            StoreOrder.status.in_(sorted(lc.HOLDS_STOCK)),
+            StoreOrderItem.reserved_quantity == 0,
         )
-    listing.stock_tracked = want_tracked
-    listing.quantity = new_quantity
+        .order_by(StoreOrderItem.order_id)
+        .execution_options(populate_existing=True)
+    )).scalars().all()
+    return [item for item in rows if _line_quantity(item) > 0]
+
+
+def _check_promised(on_hand: int, *, orders: int, deals: int) -> None:
+    """On hand can't go below what has been promised: units accepted orders
+    hold and units in chat deals still under way."""
+    floor = orders + deals
+    if on_hand >= floor:
+        return
+    if orders and deals:
+        message = (f"{floor} of these are promised: {orders} to accepted orders and {deals} "
+                   f"to chat deals still under way. Set at least {floor}.")
+    elif orders:
+        message = (f"{orders} of these are reserved by accepted orders. Set at least {orders}, "
+                   "or cancel those orders first.")
+    else:
+        message = f"{deals} of these are in chat deals still under way. Set at least {deals}."
+    raise order_error(409, "STOCK_BELOW_RESERVED", message,
+                      reserved=orders, in_deals=deals, minimum=floor)
+
+
+async def set_stock(db: AsyncSession, store: Store, listing_id: str, *, tracked: Optional[bool],
+                    quantity: Optional[int], temporarily_unavailable: Optional[bool]) -> dict:
+    """The owner's stock switches for one product of this store (the router
+    has checked ownership): whether its stock is counted, how many are on
+    hand, and a pause on new orders for it.
+
+    `quantity` means what the answer's `quantity` will show. Counted: the
+    units on hand, stored as on hand plus the units chat deals sold
+    (listings/inventory.py), and never below what is promised - accepted
+    orders and chat deals still under way. Not counted: the listing's
+    stated quantity, stored as given, as it always was - the cap on what a
+    buyer may ask for, which chat deals count against.
+
+    Switching counting off is refused while accepted orders hold units:
+    their handover is what takes those units off the stock, and with
+    counting off nothing would. Switching it on reserves the units of every
+    order the store accepted while it didn't count and hasn't handed over -
+    or is refused when on hand can't cover them - so those orders are
+    fulfilled from the count instead of being sold to someone else.
+
+    Locks: the orders being converted, then the listing - the order an
+    order action takes them in - so the two can't deadlock."""
+    if quantity is not None and not 0 <= int(quantity) <= 1_000_000:
+        raise order_error(400, "STOCK_QUANTITY_INVALID", "Stock must be between 0 and 1,000,000.")
+    peek = _check_product((await db.execute(
+        select(Listing).where(Listing.id == listing_id).execution_options(populate_existing=True)
+    )).scalar_one_or_none(), store)
+    starting = tracked is True and not peek.stock_tracked
+    locked_orders: set[str] = set()
+    if starting:
+        locked_orders = {i.order_id for i in await _unreserved_accepted(db, listing_id)}
+        if locked_orders:
+            await db.execute(
+                select(StoreOrder.id).where(StoreOrder.id.in_(sorted(locked_orders)))
+                .order_by(StoreOrder.id).with_for_update()
+            )
+    listing = _check_product((await inventory.lock(db, [listing_id])).get(listing_id), store)
+    was_tracked = bool(listing.stock_tracked)
+    want_tracked = was_tracked if tracked is None else bool(tracked)
+    counted = await inventory.count(db, listing)
+
+    if want_tracked and not was_tracked:
+        convert = await _unreserved_accepted(db, listing_id)
+        if {i.order_id for i in convert} - locked_orders:
+            # An order was accepted between the look above and the locks:
+            # its row isn't locked, so it could move on while it is counted.
+            raise order_error(409, "STOCK_CHANGED",
+                              "An order for this product was answered at the same moment. Try again.")
+        needed = sum(_line_quantity(i) for i in convert)
+        if quantity is not None:
+            on_hand = int(quantity)
+        elif listing.quantity is not None:
+            on_hand = max(int(listing.quantity) - counted.sold_in_deals, 0)
+        else:
+            raise order_error(400, "STOCK_QUANTITY_REQUIRED", "Say how many you have to start tracking stock.")
+        _check_promised(on_hand, orders=counted.reserved + needed, deals=counted.committed_to_deals)
+        listing.stock_tracked = True
+        listing.quantity = counted.stored_quantity_for(on_hand)
+        listing.stock_reserved = counted.reserved + needed
+        for item in convert:
+            item.reserved_quantity = _line_quantity(item)
+            item.stock_state = "reserved"
+    elif want_tracked:
+        if quantity is not None:
+            _check_promised(int(quantity), orders=counted.reserved, deals=counted.committed_to_deals)
+            listing.quantity = counted.stored_quantity_for(int(quantity))
+    else:
+        if was_tracked and counted.reserved > 0:
+            raise order_error(
+                409, "STOCK_TRACKING_IN_USE",
+                f"{counted.reserved} of these are set aside for accepted orders, and come off your "
+                "stock when you hand them over. Hand over or cancel those orders before you stop "
+                "counting stock.",
+                reserved=counted.reserved,
+            )
+        if quantity is not None:
+            if int(quantity) < 1:
+                # Untracked, the quantity is what the listing says the seller
+                # has; the listing editor has never accepted 0 for that.
+                raise order_error(400, "STOCK_QUANTITY_INVALID",
+                                  "Turn stock tracking on to record that none are left, or mark it unavailable.")
+            listing.quantity = int(quantity)
+        elif was_tracked and int(listing.quantity or 0) < 1:
+            # Untracked, 0 would read as one (listings/stock.units_total): a
+            # unit nobody has would go back on sale.
+            raise order_error(400, "STOCK_QUANTITY_REQUIRED",
+                              "None are left. Set how many you have before you stop counting stock.")
+        # Without a new quantity the stored one stays: on hand plus what
+        # chat deals sold, which is what the untracked count reads.
+        listing.stock_tracked = False
+
     if temporarily_unavailable is not None:
         listing.temporarily_unavailable = bool(temporarily_unavailable)
+    after = inventory.recount(listing, counted)
+    # Whether stock keeps it listed (stock.status_for): a counted product
+    # never hides; one no longer counted follows its chat deals again.
+    target = status_for(listing, after.in_deals, after.sold_in_deals)
+    if target is not None:
+        listing.status = target
     await db.commit()
-    return stock_view(listing)
+    return stock_view(listing, after)
 
 
-def stock_view(listing: Listing) -> dict:
+def stock_view(listing: Listing, counted: inventory.Inventory) -> dict:
+    """A product's stock as its owner sees it, from the shared count - the
+    same figures as the store's product list (inventory.owner_fields)."""
+    tracked = counted.tracked
     return {
         "listing_id": listing.id,
-        "stock_tracked": bool(getattr(listing, "stock_tracked", False)),
-        "quantity": listing.quantity,
-        "stock_reserved": int(getattr(listing, "stock_reserved", 0) or 0),
-        "available_quantity": stock.available(listing),
+        "stock_tracked": tracked,
+        # On hand while counted; the stated quantity otherwise.
+        "quantity": counted.on_hand if tracked else listing.quantity,
+        "stock_reserved": counted.reserved,
+        # stock_on_hand, stock_committed_to_deals, stock_sold_through_deals.
+        **inventory.owner_fields(counted),
+        "available_quantity": counted.available if tracked else None,
         "temporarily_unavailable": bool(getattr(listing, "temporarily_unavailable", False)),
     }

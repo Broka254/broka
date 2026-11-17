@@ -1079,20 +1079,27 @@ class StoreService:
                 select(User).where(User.id.in_(seller_ids)))).scalars()
         } if seller_ids else {}
         assets = await load_listing_media(self.db, listings, list(sellers.values()))
+        # Counted stock as every decision counts it (listings/inventory.py):
+        # what the stock controls and the "Out of stock" note show is what a
+        # chat deal or an order acceptance would be allowed to take.
+        from api.domains.listings import inventory
+        counted = await inventory.tracked_counts(self.db, listings)
         items = []
         for listing in listings:
+            stock_count = counted.get(listing.id)
             item = ListingService._owner_listing_dict(
-                listing, seller=sellers.get(listing.seller_id), store=store, assets=assets)
+                listing, seller=sellers.get(listing.seller_id), store=store, assets=assets,
+                counted=stock_count)
             item["store_state"] = self._owner_state(listing, now, store_live)
             # Why this product isn't showing, or what would make it sell -
             # answered by the server so the app doesn't re-derive BROKA's
             # rules and drift from them.
-            item["health"] = self._product_health(listing, assets)
+            item["health"] = self._product_health(listing, assets, stock_count)
             items.append(item)
         return {"items": items, "counts": counts}
 
     @staticmethod
-    def _product_health(listing: Listing, assets: Optional[dict] = None) -> dict:
+    def _product_health(listing: Listing, assets: Optional[dict] = None, counted=None) -> dict:
         """The issues a seller can fix on a product, and nothing invented.
 
         Each issue names the screen that fixes it (`fix`), so the app can
@@ -1125,14 +1132,23 @@ class StoreService:
             issues.append({"code": "no_category", "label": "No category",
                            "fix": "category"})
         quantity = getattr(listing, "quantity", None)
-        if quantity is not None and int(quantity) <= 0:
+        if counted is not None and counted.tracked:
+            # The shared count (listings/inventory.py), as orders and chat
+            # deals are decided by it.
+            if (counted.on_hand or 0) <= 0:
+                issues.append({"code": "out_of_stock", "label": "Out of stock",
+                               "fix": "stock"})
+            elif counted.available <= 0:
+                # Every unit is promised: buyers see it as out of stock until
+                # those orders are handed over or released, or those chat
+                # deals end.
+                issues.append({
+                    "code": "all_reserved",
+                    "label": ("Every unit is promised to orders or chat deals"
+                              if counted.committed_to_deals else "Every unit is reserved by orders"),
+                    "fix": "stock"})
+        elif quantity is not None and int(quantity) <= 0:
             issues.append({"code": "out_of_stock", "label": "Out of stock",
-                           "fix": "stock"})
-        elif (getattr(listing, "stock_tracked", False) and quantity is not None
-              and int(quantity) - int(getattr(listing, "stock_reserved", 0) or 0) <= 0):
-            # Tracked, and every unit is held by accepted orders: buyers see
-            # it as out of stock until those are handed over or released.
-            issues.append({"code": "all_reserved", "label": "Every unit is reserved by orders",
                            "fix": "stock"})
         if getattr(listing, "temporarily_unavailable", False):
             issues.append({"code": "temporarily_unavailable",

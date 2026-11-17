@@ -63,6 +63,10 @@ UNSUCCESSFUL: FrozenSet[str] = frozenset({DECLINED, CANCELLED, EXPIRED})
 AWAITING_BUYER: FrozenSet[str] = frozenset({SELLER_PROPOSED_CHANGES, AWAITING_BUYER_CONFIRMATION})
 # The buyer has agreed the final details: the order is being fulfilled.
 IN_FULFILMENT: FrozenSet[str] = frozenset({CONFIRMED, PREPARING, READY_FOR_PICKUP, DISPATCHED, DELIVERED})
+# From the store's answer until handover: a tracked product's units are
+# reserved for the order (stock.py). Handover (delivered, or completed
+# without it) deducts them; ending without a sale releases them.
+HOLDS_STOCK: FrozenSet[str] = AWAITING_BUYER | (IN_FULFILMENT - {DELIVERED})
 # Statuses with a clock: the store must answer, or the buyer must confirm,
 # before `expires_at`.
 EXPIRABLE: FrozenSet[str] = frozenset({SUBMITTED, SELLER_PROPOSED_CHANGES, AWAITING_BUYER_CONFIRMATION})
