@@ -606,18 +606,26 @@ class _StoreOrderScreenState extends State<StoreOrderScreen> {
 
   Widget _amountRow(String label, String value, {bool strong = false, Key? key}) => Padding(
         padding: const EdgeInsets.only(bottom: 4),
-        child: Row(children: [
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Expanded(
+            flex: 3,
             child: Text(label,
                 style: TextStyle(
                     color: strong ? BrokaColors.textHigh : BrokaColors.textMid,
                     fontWeight: strong ? FontWeight.w800 : FontWeight.w500)),
           ),
-          Text(value,
-              key: key,
-              style: TextStyle(
-                  color: BrokaColors.textHigh,
-                  fontWeight: strong ? FontWeight.w800 : FontWeight.w600)),
+          const SizedBox(width: 12),
+          // A long value ("To be confirmed by the store") wraps under itself
+          // rather than pushing the label off a narrow phone or large text.
+          Flexible(
+            flex: 2,
+            child: Text(value,
+                key: key,
+                textAlign: TextAlign.right,
+                style: TextStyle(
+                    color: BrokaColors.textHigh,
+                    fontWeight: strong ? FontWeight.w800 : FontWeight.w600)),
+          ),
         ]),
       );
 

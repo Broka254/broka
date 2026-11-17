@@ -391,14 +391,19 @@ class _StorePerformanceSectionState extends State<StorePerformanceSection> {
             Padding(
               key: Key('order-rate-${r.key}'),
               padding: const EdgeInsets.only(bottom: 6),
-              child: Row(children: [
-                Expanded(child: Text(r.label,
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(flex: 3, child: Text(r.label,
                     style: const TextStyle(color: BrokaColors.textHigh, fontSize: 12.5))),
-                Text(
-                  r.percent == null
-                      ? '–'
-                      : '${r.numerator} of ${r.denominator} · ${r.percent!.toStringAsFixed(r.percent! % 1 == 0 ? 0 : 1)}%',
-                  style: const TextStyle(color: BrokaColors.textMid, fontSize: 12),
+                const SizedBox(width: 10),
+                Flexible(
+                  flex: 2,
+                  child: Text(
+                    r.percent == null
+                        ? '–'
+                        : '${r.numerator} of ${r.denominator} · ${r.percent!.toStringAsFixed(r.percent! % 1 == 0 ? 0 : 1)}%',
+                    textAlign: TextAlign.right,
+                    style: const TextStyle(color: BrokaColors.textMid, fontSize: 12),
+                  ),
                 ),
               ]),
             ),

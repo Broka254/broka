@@ -729,6 +729,7 @@ void main() {
 
       final report = find.byKey(const Key('order-report-seller_confirmed_receipt'));
       await tester.ensureVisible(report);
+      await tester.pumpAndSettle();
       await tester.tap(report);
       await tester.pumpAndSettle();
       expect(find.text('Record that you received the payment?'), findsOneWidget);
