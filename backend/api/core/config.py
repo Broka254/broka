@@ -30,6 +30,17 @@ def _client_ip_header_default() -> str:
     return "" if raw in ("", "none") else raw
 
 
+def _on_unless_production(name: str) -> bool:
+    """A switch that is on in development and test unless set, and off in
+    production unless set: a feature the development environment should
+    exercise, which a production deploy must not switch on by accident."""
+    raw = os.getenv(name)
+    if raw is not None and raw.strip():
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    env = os.getenv("ENV", os.getenv("ENVIRONMENT", "development")).lower()
+    return env not in ("production", "prod", "staging")
+
+
 def _parse_tiers(raw: str) -> tuple:
     """"50:100,50:80" -> ((50, 100), (50, 80)). A malformed pair is a typo in
     an env var: refusing to start says so, where skipping it would quietly
@@ -743,6 +754,32 @@ class Settings:
     mpesa_store_callback_url: str = field(default_factory=lambda: os.getenv(
         "MPESA_STORE_CALLBACK_URL", ""
     ).strip())
+
+    # ── Store orders (api/domains/store_orders/, STORE_ORDERS.md) ────────────
+    # A buyer sends a store an order request from the web storefront or the
+    # app; the store confirms it and fulfils it. BROKA records the order and
+    # what each side reports about paying - it never takes the payment.
+    # Unset: on in development and test, off in production until it is
+    # switched on there deliberately. While off, order endpoints answer 409
+    # ORDERS_OFF and the storefront keeps its handoff to the app.
+    store_orders_enabled: bool = field(
+        default_factory=lambda: _on_unless_production("STORE_ORDERS_ENABLED"))
+    # How long a store has to answer a new request before it expires.
+    store_order_seller_response_hours: int = field(default_factory=lambda: max(1, int(os.getenv(
+        "STORE_ORDER_SELLER_RESPONSE_HOURS", "72"
+    ))))
+    # How long the buyer has to confirm the store's offer. Tracked stock
+    # the store accepted stays reserved for exactly this long; then the
+    # offer lapses and the units are available again.
+    store_order_reservation_hours: int = field(default_factory=lambda: max(1, int(os.getenv(
+        "STORE_ORDER_RESERVATION_HOURS", "48"
+    ))))
+    # Open (unfinished) orders one buyer may have with one store at once.
+    # Real buyers rarely have more than two; the cap keeps one account from
+    # filling a seller's queue.
+    store_order_max_open_per_store: int = field(default_factory=lambda: max(1, int(os.getenv(
+        "STORE_ORDER_MAX_OPEN_PER_STORE", "5"
+    ))))
 
     # ── Founder intelligence and reports (api/core/intelligence.py,
     # api/core/admin_reports.py) ─────────────────────────────────────────────

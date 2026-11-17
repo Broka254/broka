@@ -41,6 +41,13 @@ export default async function CartPage({ params }: Props) {
           cartPath={storeCartPath(store.slug)}
           storeUrl={view.url}
           escrow={escrow}
+          ordering={{
+            // Store orders are BROKA's switch (STORE_ORDERS_ENABLED); an API
+            // from before them sends neither field, and keeps the handoff.
+            enabled: store.orders_enabled === true,
+            accepting: store.accepting_orders !== false,
+            pauseNote: store.orders_pause_note ?? null,
+          }}
         />
       </main>
       <StoreFooter view={view} />

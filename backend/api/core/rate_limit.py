@@ -316,3 +316,26 @@ scam_report_limiter = _make_limiter(
 # of the admin triage queue without blocking a frustrated user retrying.
 feedback_submit_limiter = _make_limiter(
     "feedback_submit", limit=1000 if _settings.is_test else 10, window_seconds=3600)
+
+# Store orders (api/domains/store_orders/router.py). Submissions are keyed
+# by the signed-in buyer AND by their address (client_ip): each one lands in
+# a seller's queue and buzzes their phone, so one account - or one script
+# cycling accounts - must not be able to flood a shop. Ten in ten minutes is
+# far past a real buyer checking out a few carts. Actions on existing
+# orders are cheaper and keyed by user only.
+store_order_submit_limiter = _make_limiter(
+    "store_order_submit", limit=1000 if _settings.is_test else 10, window_seconds=600)
+# The address half, wider: many phones on a Kenyan mobile network share one
+# public address, and each of them may be checking out.
+store_order_submit_ip_limiter = _make_limiter(
+    "store_order_submit_ip", limit=1000 if _settings.is_test else 40, window_seconds=600)
+store_order_action_limiter = _make_limiter(
+    "store_order_action", limit=1000 if _settings.is_test else 60, window_seconds=60)
+# Questions to a store from the web storefront (POST /stores/{id}/enquiries),
+# keyed by user and by address. Direct chat in the app has its own rules;
+# these are a buyer's first questions, and twelve in ten minutes is a long
+# conversation's opening, not a spam run.
+store_enquiry_limiter = _make_limiter(
+    "store_enquiry", limit=1000 if _settings.is_test else 12, window_seconds=600)
+store_enquiry_ip_limiter = _make_limiter(
+    "store_enquiry_ip", limit=1000 if _settings.is_test else 60, window_seconds=600)

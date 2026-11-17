@@ -394,6 +394,15 @@ class Store {
   final String? createdAt;
   final String? updatedAt;
 
+  /// Store orders (backend api/domains/store_orders/). [ordersEnabled] is
+  /// BROKA's switch (STORE_ORDERS_ENABLED): off - and on backends that
+  /// predate orders - the app shows no Orders tab and no stock controls.
+  /// [acceptingOrders] is the owner's own pause on new requests, with the
+  /// note buyers see meanwhile.
+  final bool ordersEnabled;
+  final bool acceptingOrders;
+  final String? ordersPauseNote;
+
   const Store({
     required this.id,
     required this.name,
@@ -441,6 +450,9 @@ class Store {
     this.hasLocation = false,
     this.createdAt,
     this.updatedAt,
+    this.ordersEnabled = false,
+    this.acceptingOrders = true,
+    this.ordersPauseNote,
   });
 
   factory Store.fromJson(Map<String, dynamic> json) {
@@ -500,6 +512,9 @@ class Store {
       hasLocation: json['has_location'] as bool? ?? false,
       createdAt: json['created_at'] as String?,
       updatedAt: json['updated_at'] as String?,
+      ordersEnabled: json['orders_enabled'] == true,
+      acceptingOrders: json['accepting_orders'] != false,
+      ordersPauseNote: json['orders_pause_note'] as String?,
     );
   }
 

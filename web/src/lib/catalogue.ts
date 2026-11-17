@@ -91,12 +91,23 @@ export interface ProductCardData {
   isAuction: boolean
   /** "New", "Used", "Refurbished", or null when the seller didn't say. */
   condition: string | null
-  /** How many can go in a cart: the listing's stock, one for a single item. */
+  /** How many can go in a cart: the listing's stock, one for a single item.
+   *  0 for tracked stock that has run out. */
   maxQuantity: number
   /** Exact public stock, null when the seller did not state a quantity. */
   quantity?: number | null
+  /** Orderable now, out of the stock the seller counts, or paused by the
+   *  seller. Untracked stock is never "out of stock". */
+  availability?: 'available' | 'out_of_stock' | 'paused'
   /** "Ends in 2d 3h" when the server says this listing is ending soon. */
   endsLabel?: string | null
+}
+
+/** Units left of stock the seller counts, or null when they don't count it. */
+function trackedLeft(listing: Listing): number | null {
+  return listing.stock_tracked === true && typeof listing.available_quantity === 'number'
+    ? Math.max(0, Math.floor(listing.available_quantity))
+    : null
 }
 
 /** Everything a product card shows, with image URLs resolved against the API. */
@@ -116,8 +127,15 @@ export function toProductCard(listing: Listing, storeSlug: string, apiUrl: strin
     place: placeLine(listing.location_subcounty, listing.location_county) ?? listing.location_name,
     isAuction: listing.listing_type === 'auction',
     condition: conditionLabel(listing.condition),
-    maxQuantity: Math.max(1, Math.floor(listing.quantity ?? 1)),
-    quantity: listing.quantity ?? null,
+    maxQuantity: trackedLeft(listing) ?? Math.max(1, Math.floor(listing.quantity ?? 1)),
+    // What the card says is in stock: what is left of counted stock, or
+    // what the seller said they have.
+    quantity: trackedLeft(listing) ?? listing.quantity ?? null,
+    availability: listing.temporarily_unavailable
+      ? 'paused'
+      : trackedLeft(listing) === 0 || listing.out_of_stock
+        ? 'out_of_stock'
+        : 'available',
     endsLabel: listing.time_left?.is_expiring_soon
       ? `Ends in ${listing.time_left.label.replace(/ left$/, '')}`
       : null,

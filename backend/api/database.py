@@ -673,6 +673,12 @@ class User(Base):
 class OtpPurpose(str, enum.Enum):
     registration   = "registration"
     login_recovery = "login_recovery"
+    # Signing in to an existing account with an SMS code (the web
+    # storefront's checkout, api/domains/auth/router.py /otp/sign-in/*).
+    # Its own purpose: a sign-in code can't register an account or reset a
+    # password, and neither of those codes signs anyone in. On PostgreSQL
+    # the enum type gets the value from the DO block in init_db's migrations.
+    sign_in        = "sign_in"
 
 
 class PhoneOtp(Base):
@@ -866,6 +872,23 @@ class Listing(Base):
     # revokes the report, so each report is texted once and a failed text
     # is retried by the sweep.
     sold_out_texted_at   = Column(DateTime, nullable=True)
+    # Store orders (api/domains/store_orders/stock.py, STORE_ORDERS.md).
+    #   stock_tracked   the seller counts this product: `quantity` is then
+    #                   the units on hand. Accepting an order reserves units
+    #                   against it, and handing an order over takes them
+    #                   off. False (every existing listing): `quantity` is
+    #                   what the seller said they have, informational, and
+    #                   the seller confirms availability on each order -
+    #                   untracked is never treated as zero.
+    #   stock_reserved  units held by accepted orders not handed over yet.
+    #                   Changed only by single conditional UPDATEs, so two
+    #                   acceptances can never reserve the same last unit.
+    #   temporarily_unavailable  the seller paused new orders for this
+    #                   product: still shown, labelled, but not orderable.
+    # Columns, not a ListingStatus, for the reason given at paid_until.
+    stock_tracked        = Column(Boolean, nullable=False, default=False)
+    stock_reserved       = Column(Integer, nullable=False, default=0)
+    temporarily_unavailable = Column(Boolean, nullable=False, default=False)
 
     __table_args__ = (
         Index("uq_listings_seller_client_ref", "seller_id", "client_ref", unique=True),
@@ -1796,6 +1819,25 @@ END $$
 """
 
 
+def _add_enum_value_sql(type_name: str, value: str) -> str:
+    """Postgres: give a native enum type (SQLAlchemy names it after the
+    Python enum class, lowercased) one more value. A no-op when the value
+    is already there - every fresh database, whose create_all made the type
+    from the Python enum - and when the type does not exist on this search
+    path. A DO block, so the SQLite run skips it (_portable_statement):
+    SQLite stores these enums as plain strings. PostgreSQL 12+ allows ADD
+    VALUE inside the migration's transaction; the value is usable once it
+    commits, and nothing in the migration itself uses it."""
+    return f"""
+DO $$
+BEGIN
+  IF to_regtype('{type_name}') IS NOT NULL THEN
+    ALTER TYPE {type_name} ADD VALUE IF NOT EXISTS '{value}';
+  END IF;
+END $$
+"""
+
+
 _ADD_COLUMN = re.compile(
     r"^\s*ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+ADD\s+COLUMN\s+"
     r"([A-Za-z_][A-Za-z0-9_]*)",
@@ -1881,7 +1923,7 @@ async def _apply_optional_statements(conn, statements) -> None:
         await conn.execute(text(prepared))
 
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 SCHEMA_REVISIONS = (
     (1, "legacy_schema_adoption"),
     (2, "durable_payment_intents_and_callbacks"),
@@ -1941,6 +1983,12 @@ SCHEMA_REVISIONS = (
     # or the report endpoints against a database that does not have them,
     # which would otherwise answer every request with a 500.
     (18, "escrow_provider_directory_and_scam_reports"),
+    # Store orders (api/models/store_order.py, create_all), the stock and
+    # availability columns on listings, the store's "taking orders" switch
+    # (the ALTERs below) and the sign_in OTP purpose (the DO block). A
+    # replica serving checkout against a database without them would fail
+    # every order, so it waits for the release step instead.
+    (19, "store_orders"),
 )
 
 # Tables/columns that must exist before an API process is safe to serve
@@ -2203,6 +2251,10 @@ async def _init_db_impl():
         ("api.models.feedback", ("UserFeedback",)),
         ("api.models.admin_report", ("AdminReport",)),
         ("api.models.escrow_provider", ("EscrowProviderRow", "EscrowProviderRevision")),
+        ("api.models.store_order", (
+            "StoreOrder", "StoreOrderItem", "StoreOrderEvent", "StoreOrderPayment",
+            "StoreOrderPaymentReport", "StoreOrderNotification",
+        )),
         ("api.models.scam_report", ("ScamReportDetail", "ScamReportEvidence",
                                     "AccountRestriction", "RestrictionAppeal")),
         (
@@ -2498,6 +2550,17 @@ async def _init_db_impl():
             # The seller was texted about that report (rev 16,
             # Listing.sold_out_texted_at).
             "ALTER TABLE listings ADD COLUMN sold_out_texted_at TIMESTAMP",
+            # Store orders (rev 19). Every existing listing starts untracked
+            # with nothing reserved and on sale, and every store starts
+            # taking orders: nothing a seller has today changes until they
+            # choose it (STORE_ORDERS.md).
+            "ALTER TABLE listings ADD COLUMN stock_tracked BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE listings ADD COLUMN stock_reserved INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE listings ADD COLUMN temporarily_unavailable BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE stores ADD COLUMN accepting_orders BOOLEAN NOT NULL DEFAULT TRUE",
+            "ALTER TABLE stores ADD COLUMN orders_pause_note VARCHAR(160)",
+            # Web sign-in codes (OtpPurpose.sign_in). PostgreSQL only.
+            _add_enum_value_sql("otppurpose", "sign_in"),
             # Units per deal (Deal.quantity). NULL on every existing deal:
             # each was for one unit.
             "ALTER TABLE deals ADD COLUMN quantity INTEGER",

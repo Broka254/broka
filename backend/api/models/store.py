@@ -166,6 +166,13 @@ class Store(Base):
     business_email_verified = Column(Boolean, default=False, nullable=False)
 
     is_active  = Column(Boolean, default=True, nullable=False)
+    # Store orders (api/domains/store_orders/): the owner can stop new order
+    # requests while the store stays open to browse and to message - away
+    # for a week, or out of stock on everything. Enforced when an order is
+    # submitted, not only hidden on the page. The note is shown to buyers
+    # ("Back on Monday").
+    accepting_orders  = Column(Boolean, default=True, nullable=False)
+    orders_pause_note = Column(String(160), nullable=True)
     # The store's own rating, 0-10, computed from its reviews, its own
     # reply time and how long it has traded (api/domains/stores/rating.py).
     # Deliberately a STORE number, not User.rating: a seller with two shops

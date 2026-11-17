@@ -18,9 +18,14 @@
 //   Settings  every part of the store, grouped, edited with the setup
 //             wizard's own pages; the link is shown but fixed
 //
+//   Orders    with store orders on (Store.ordersEnabled): the order requests
+//             buyers sent, by what happens next (store_orders_tab.dart);
+//             each opens with the actions it allows (store_order_screen.dart)
+//
 // Only real numbers are shown: visits and shares are counted by the
-// backend (api/domains/stores/stats.py). Orders and revenue appear once
-// checkout exists - not before, and never as placeholders.
+// backend (api/domains/stores/stats.py), and orders by the order records
+// (api/domains/store_orders/). A request is not a sale, and there is no
+// revenue figure: payment is arranged between buyer and store outside BROKA.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -49,9 +54,11 @@ import 'setup/store_setup_controller.dart';
 import 'store_billing_screen.dart';
 import 'marketing_studio_screen.dart';
 import 'store_edit_screen.dart';
+import 'store_orders_tab.dart';
 import 'widgets/broka_default_logo.dart';
 import 'widgets/store_performance.dart';
 import 'widgets/store_share_card.dart';
+import 'widgets/store_stock_sheet.dart';
 
 class MyStoreScreen extends StatefulWidget {
   const MyStoreScreen({
@@ -340,10 +347,15 @@ class _Dashboard extends StatelessWidget {
 
   static const _tabs = ['Overview', 'Products', 'Marketing', 'Settings'];
 
+  /// With store orders on, Orders sits before Settings: Products (1) and
+  /// Marketing (2), which the Overview opens by index, keep their places.
+  static const _tabsWithOrders = ['Overview', 'Products', 'Marketing', 'Orders', 'Settings'];
+
   @override
   Widget build(BuildContext context) {
+    final tabs = store.ordersEnabled ? _tabsWithOrders : _tabs;
     return DefaultTabController(
-      length: _tabs.length,
+      length: tabs.length,
       child: NestedScrollView(
         headerSliverBuilder: (context, _) => [
           // With _tabList's injector, keeps each tab's content below the
@@ -388,7 +400,7 @@ class _Dashboard extends StatelessWidget {
               ),
               bottom: PreferredSize(
                 preferredSize: const Size.fromHeight(_PillTabs.height),
-                child: _PillTabs(labels: _tabs, controller: DefaultTabController.of(context)),
+                child: _PillTabs(labels: tabs, controller: DefaultTabController.of(context)),
               ),
             ),
           ),
@@ -399,6 +411,8 @@ class _Dashboard extends StatelessWidget {
           _ProductsTab(store: store, repo: repo, listings: listings, share: share,
               filter: productFilter, onProductsChanged: onRefresh),
           MarketingStudioTab(store: store, repo: repo),
+          if (store.ordersEnabled)
+            StoreOrdersTab(store: store, repo: repo, onStoreChanged: onStoreChanged),
           _SettingsTab(
             store: store,
             repo: repo,
@@ -494,6 +508,9 @@ class _PillTabs extends StatelessWidget {
           animation: animation,
           builder: (context, _) => LayoutBuilder(builder: (context, box) {
             final w = box.maxWidth / labels.length;
+            // Five tabs (Orders on) on a narrow phone: a size that keeps
+            // "Marketing" whole. Four tabs keep the size they always had.
+            final fontSize = labels.length > 4 && w < 76 ? 12.0 : 13.5;
             final position = animation.value;
             return Stack(children: [
               Positioned(
@@ -524,7 +541,7 @@ class _PillTabs extends StatelessWidget {
                                 color: (position - i).abs() < 0.5
                                     ? Colors.white
                                     : BrokaColors.textMid,
-                                fontSize: 13.5,
+                                fontSize: fontSize,
                                 fontWeight: (position - i).abs() < 0.5
                                     ? FontWeight.w700
                                     : FontWeight.w500,
@@ -1505,7 +1522,7 @@ String _shortDate(DateTime utc) {
   return '${d.day} ${_months[d.month - 1]}';
 }
 
-enum _ProductAction { pay, price, improve, share, insights, view, remove }
+enum _ProductAction { pay, price, stock, improve, share, insights, view, remove }
 
 class _ProductsTab extends StatefulWidget {
   const _ProductsTab({
@@ -1716,7 +1733,8 @@ class _ProductsTabState extends State<_ProductsTab> {
       backgroundColor: BrokaColors.bgMid,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
-      builder: (_) => _ProductActionsSheet(product: product),
+      builder: (_) => _ProductActionsSheet(
+          product: product, ordersEnabled: widget.store.ordersEnabled),
     );
     if (action == null || !mounted) return;
     switch (action) {
@@ -1724,6 +1742,10 @@ class _ProductsTabState extends State<_ProductsTab> {
         await _pay(product);
       case _ProductAction.price:
         await _changePrice(product);
+      case _ProductAction.stock:
+        final saved = await showStoreStockSheet(context,
+            storeId: widget.store.id, product: product, repo: widget.repo);
+        if (saved != null && mounted) await _reload();
       case _ProductAction.improve:
         await showCopywriterSheet(
           context,
@@ -2009,6 +2031,7 @@ class _ProductsTabState extends State<_ProductsTab> {
               onSelect: () => _toggleSelected(p.id),
               onTap: () => _selecting ? _toggleSelected(p.id) : _openActions(p),
               onPay: p.needsPayment && p.priceEditable && !_selecting ? () => _pay(p) : null,
+              stockNote: widget.store.ordersEnabled ? storeStockNote(p) : null,
             ),
           if (_loading)
             const Padding(padding: EdgeInsets.all(20),
@@ -2288,9 +2311,14 @@ class _ProductRow extends StatelessWidget {
     this.selecting = false,
     this.selected = false,
     this.onSelect,
+    this.stockNote,
   });
   final StoreProduct product;
   final VoidCallback onTap;
+
+  /// "3 in stock", "Out of stock", "Paused for new orders" - store orders'
+  /// stock, when they are on and there is something to say.
+  final String? stockNote;
 
   /// "Pay" or "Renew" beside the product, when its fee needs paying.
   final VoidCallback? onPay;
@@ -2352,6 +2380,15 @@ class _ProductRow extends StatelessWidget {
                   _StatePill(label: p.state.label, color: color),
                   if (note != null)
                     Text(note, style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
+                  if (stockNote != null)
+                    Text(stockNote!,
+                        key: Key('stock-note-${p.id}'),
+                        style: TextStyle(
+                            color: p.outOfStock || p.temporarilyUnavailable
+                                ? BrokaColors.warning
+                                : BrokaColors.textMid,
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600)),
                 ]),
                 // The server's own checks, in its words: a product missing a
                 // photo, a category or a real description is the kind that
@@ -2398,14 +2435,23 @@ class _ProductRow extends StatelessWidget {
 
 /// What the owner can do with one product, depending on its state.
 class _ProductActionsSheet extends StatelessWidget {
-  const _ProductActionsSheet({required this.product});
+  const _ProductActionsSheet({required this.product, this.ordersEnabled = false});
   final StoreProduct product;
+
+  /// Store orders are on: the stock controls apply.
+  final bool ordersEnabled;
 
   @override
   Widget build(BuildContext context) {
     final p = product;
     final hidden = p.state == StoreProductState.hidden;
     final archived = p.state == StoreProductState.archived;
+    // Stock is for products a buyer can still order from the store; an
+    // auction sells one item through bidding.
+    final stockApplies = ordersEnabled &&
+        !archived &&
+        p.state != StoreProductState.sold &&
+        !p.listing.isAuction;
     Widget tile(_ProductAction action, IconData icon, String title,
             {String? subtitle, Color? color}) =>
         ListTile(
@@ -2457,6 +2503,9 @@ class _ProductActionsSheet extends StatelessWidget {
           if (p.priceEditable)
             tile(_ProductAction.price, Icons.sell_outlined, 'Change the price',
                 subtitle: 'Up to twice a week'),
+          if (stockApplies)
+            tile(_ProductAction.stock, Icons.inventory_2_outlined, 'Stock and availability',
+                subtitle: storeStockNote(p) ?? 'Not counted - you confirm availability on each order'),
           if (!archived)
             tile(_ProductAction.improve, Icons.auto_fix_high_rounded,
                 'Improve the copy with AI',
@@ -2683,6 +2732,27 @@ class _SettingsTabState extends State<_SettingsTab> {
   Store get store => widget.store;
 
   bool _deleting = false;
+  bool _savingOrders = false;
+
+  /// The owner's own switch for new order requests. Pausing asks what
+  /// buyers should be told; orders already sent carry on either way.
+  Future<void> _setAccepting(BuildContext context, bool on) async {
+    String? note;
+    if (!on) {
+      note = await askPauseOrdersNote(context);
+      if (note == null || !context.mounted) return;
+    }
+    setState(() => _savingOrders = true);
+    final result = await widget.repo.setAcceptingOrders(store.id, on, note: note);
+    if (!context.mounted) return;
+    setState(() => _savingOrders = false);
+    switch (result) {
+      case Success(:final data):
+        widget.onStoreChanged(data);
+      case Failure(:final message):
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
 
   Future<void> _edit(BuildContext context, StoreSetupStep step) =>
       _editStore(context, store, step, widget.onStoreChanged);
@@ -2780,7 +2850,28 @@ class _SettingsTabState extends State<_SettingsTab> {
 
     final photoCount = store.photoImages.isNotEmpty ? store.photoImages.length : store.photos.length;
     final status = store.liveOpenStatus;
+    final pauseNote = (store.ordersPauseNote ?? '').trim();
     return _tabList(context, key: const Key('settings-list'), children: [
+      if (store.ordersEnabled)
+        group('Orders', [
+          SwitchListTile(
+            key: const Key('accepting-orders-switch'),
+            value: store.acceptingOrders,
+            activeColor: BrokaColors.success,
+            onChanged: _savingOrders ? null : (on) => _setAccepting(context, on),
+            secondary: const Icon(Icons.receipt_long_outlined, color: _priceColor),
+            title: const Text('Taking new orders',
+                style: TextStyle(color: BrokaColors.textHigh, fontSize: 14.5,
+                    fontWeight: FontWeight.w600)),
+            subtitle: Text(
+                store.acceptingOrders
+                    ? 'Buyers can send you order requests from your store page.'
+                    : pauseNote.isEmpty
+                        ? 'Paused. Buyers can browse but not order.'
+                        : 'Paused. Buyers see: "$pauseNote"',
+                style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.35)),
+          ),
+        ]),
       group('Your business', [
         row(Icons.storefront_outlined, 'Store type',
             '${store.storeType.label} · ${store.storeType.description}',

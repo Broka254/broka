@@ -31,6 +31,11 @@ export const storeCartPath = (slug: string) => `${storePath(slug)}/cart`
 export const productPath = (slug: string, listingId: string) =>
   `${storePath(slug)}/p/${encodeURIComponent(listingId)}`
 
+/** Messages with the store on the website (store orders); with a product,
+ *  the conversation about that product. */
+export const storeMessagesPath = (slug: string, listingId?: string) =>
+  `${storePath(slug)}/messages${listingId ? `?product=${encodeURIComponent(listingId)}` : ''}`
+
 export const absoluteUrl = (path: string) => `${SITE_URL}${path}`
 
 /** The 1200x630 JPEG link preview of an image (see app/og/[file]/route.ts). */

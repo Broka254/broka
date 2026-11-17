@@ -79,6 +79,9 @@ from api.domains.auth.router       import router as auth_router
 from api.domains.listings.router   import router as listings_router
 from api.domains.stores.router import router as stores_router
 from api.domains.stores.web    import router as stores_web_router
+from api.domains.store_orders.router import (
+    orders_router as store_orders_router, stores_router as store_orders_owner_router,
+)
 from api.domains.showcase.router   import router as showcase_router, preview_router as showcase_preview_router
 from api.domains.categories.router import router as categories_router
 from api.domains.trending.router   import router as trending_router
@@ -306,6 +309,10 @@ app.include_router(auth_router,       prefix="/auth",       tags=["Auth v3"])
 app.include_router(listings_router,   prefix="/listings",   tags=["Listings v3"])
 app.include_router(stores_router,     prefix="/stores",     tags=["Stores"])
 app.include_router(stores_web_router, prefix="/store",      tags=["Store Public Page"])
+# Store orders (api/domains/store_orders/): the order itself at /orders, the
+# owner's order list, stock switches and web enquiries under /stores/{id}/.
+app.include_router(store_orders_router, prefix="/orders", tags=["Store orders"])
+app.include_router(store_orders_owner_router, prefix="/stores", tags=["Store orders"])
 app.include_router(showcase_router,   prefix="/listings",   tags=["AI Showcase"])
 app.include_router(showcase_preview_router, prefix="/showcase", tags=["AI Showcase"])
 app.include_router(categories_router, prefix="/categories", tags=["Categories"])

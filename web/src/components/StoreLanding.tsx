@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { storeCategoryTiles } from '@/components/CategoryPills'
 import { type ProductCardData, filtersQuery } from '@/lib/catalogue'
 import { categoryArtPath } from '@/lib/category-art'
-import { storeDetailsPath, storeShopPath } from '@/lib/links'
+import { storeDetailsPath, storeMessagesPath, storeShopPath } from '@/lib/links'
 import type { StoreCategory } from '@/lib/types'
 import type { StoreView } from '@/lib/storefront'
 
@@ -156,7 +156,14 @@ export function StoreLanding({
             <div className={styles.aboutActions}>
               <Link href={storeDetailsPath(store.slug)} className={styles.textLink}>Read the store story <span aria-hidden="true">↗</span></Link>
               {store.is_active && store.owner && (
-                <AppButton storeChat label="Message this store" className={styles.aboutChat} />
+                store.orders_enabled === true ? (
+                  // With store orders on, a question needs no app.
+                  <Link href={storeMessagesPath(store.slug)} className={styles.aboutChat} data-testid="message-store">
+                    Message this store
+                  </Link>
+                ) : (
+                  <AppButton storeChat label="Message this store" className={styles.aboutChat} />
+                )
               )}
             </div>
           </section>

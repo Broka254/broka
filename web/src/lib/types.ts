@@ -89,6 +89,15 @@ export interface Store {
   paid_until?: string | null
   time_left?: TimeLeft | null
   time_left_label?: string | null
+  /**
+   * Store orders (backend api/domains/store_orders/). `orders_enabled` is
+   * BROKA's switch: off (or absent, from an older API), the cart hands
+   * buyers to the app as before. `accepting_orders` is the owner's own
+   * pause on new requests, with the note buyers see.
+   */
+  orders_enabled?: boolean
+  accepting_orders?: boolean
+  orders_pause_note?: string | null
 }
 
 export interface OpeningHoursDay {
@@ -167,6 +176,23 @@ export interface Listing {
   seller_avg_deal_time_minutes?: number | null
   /** Whether a buyer can still buy it (single-listing read): not sold out or removed. */
   available?: boolean
+  /** Units not in a deal (single-listing read); null for auctions and untracked lots. */
+  units_left?: number | null
+  /** Every unit is sold or in a deal under way (single-listing read). */
+  sold_out?: boolean
+  /** A buyer reported it gone and the seller hasn't revoked that (single-listing read). */
+  reported_sold_out?: boolean
+  /**
+   * Stock the seller counts (store orders): when tracked, how many can
+   * still be ordered; null when untracked - the store then confirms
+   * availability on each order, which is never "out of stock".
+   */
+  stock_tracked?: boolean
+  available_quantity?: number | null
+  /** Tracked and none left right now (single-listing read). */
+  out_of_stock?: boolean
+  /** The seller paused new orders for it: shown, but not orderable. */
+  temporarily_unavailable?: boolean
   store_id: string | null
   store_slug: string | null
   store_name: string | null

@@ -261,17 +261,32 @@ class CampaignEvents {
   final List<String> measured;
   final List<String> notMeasured;
 
+  /// Store orders whose buyer came through this campaign's links, one count
+  /// per order (backend analytics.campaign_orders). Null from a backend
+  /// without store orders: the studio then shows no order figures at all.
+  /// None of them is a payment BROKA saw.
+  final ({int requests, int confirmed, int completed})? orders;
+
   const CampaignEvents({
     this.byKind = const {},
     this.byPlatform = const {},
     this.measured = const [],
     this.notMeasured = const [],
+    this.orders,
   });
 
   static CampaignEvents fromJson(Object? value) {
     if (value is! Map) return const CampaignEvents();
     int n(Object? v) => (v as num?)?.toInt() ?? 0;
+    final orders = value['orders'];
     return CampaignEvents(
+      orders: orders is Map
+          ? (
+              requests: n(orders['order_requests']),
+              confirmed: n(orders['confirmed_orders']),
+              completed: n(orders['completed_orders']),
+            )
+          : null,
       byKind: (value['by_kind'] as Map?)
               ?.map((k, v) => MapEntry(k.toString(), n(v))) ??
           const {},

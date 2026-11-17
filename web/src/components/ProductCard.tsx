@@ -42,6 +42,8 @@ export function ProductCard({
             {product.isAuction && <span className={`${styles.badge} ${styles.badgeAuction}`}>Auction</span>}
             {product.condition && <span className={styles.badge}>{product.condition}</span>}
             {product.endsLabel && <span className={`${styles.badge} ${styles.badgeEnding}`}>{product.endsLabel}</span>}
+            {product.availability === 'out_of_stock' && <span className={styles.badge}>Out of stock</span>}
+            {product.availability === 'paused' && <span className={styles.badge}>Unavailable for now</span>}
           </span>
         </div>
         <div className={styles.productBody}>
@@ -58,6 +60,10 @@ export function ProductCard({
         {product.isAuction ? (
           <Link href={product.href} className={styles.viewButton}>
             View auction
+          </Link>
+        ) : product.availability && product.availability !== 'available' ? (
+          <Link href={product.href} className={styles.viewButton}>
+            {product.availability === 'out_of_stock' ? 'Out of stock' : 'Unavailable for now'}
           </Link>
         ) : (
           <AddToCart storeId={storeId} product={product} />

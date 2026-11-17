@@ -1125,14 +1125,23 @@ class MarketingService:
             by_kind[kind] = by_kind.get(kind, 0) + n
             if platform:
                 by_platform[platform] = by_platform.get(platform, 0) + n
+        # Store orders whose buyer arrived through this campaign's tracked
+        # link (StoreOrder.campaign_id, set when the order was sent): one
+        # count per order, so a reloaded page or a resent request is never
+        # a second one. Requests, buyer-confirmed and completed are kept
+        # apart; none of them is a payment BROKA saw.
+        from api.domains.store_orders.analytics import campaign_orders
+        orders = await campaign_orders(self.db, campaign_id)
         return {
             "by_kind": by_kind,
             "by_platform": by_platform,
+            "orders": orders,
             # What these numbers are - and are not. The dashboard must not
             # turn a generated creative into an impression or a sale.
             "measured": [
                 "created", "generated", "downloaded", "shared",
                 "visit", "product_view",
+                "order_requests", "confirmed_orders", "completed_orders",
             ],
             "not_measured": [
                 "impressions", "reach", "advertising_spend", "sales", "revenue",

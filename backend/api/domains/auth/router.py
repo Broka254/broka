@@ -127,6 +127,25 @@ class RegisterIn(BaseModel):
     legal_acceptance: LegalAcceptanceIn
 
 
+class SignInCodeIn(BaseModel):
+    phone: str = Field(max_length=32)
+
+
+class SignInVerifyIn(BaseModel):
+    phone: str = Field(max_length=32)
+    code: str = Field(max_length=12)
+
+
+class SignInRegisterIn(BaseModel):
+    """A new buyer's account, made after /otp/sign-in/verify proved the
+    phone. Only a name and the same legal declarations as /register: no
+    password (they sign in with a code; "Forgot password" in the app sets
+    one if they want it) and no location (asked for where it is used)."""
+    phone_verify_token: str = Field(min_length=10, max_length=2048)
+    name: str = Field(min_length=2, max_length=80)
+    legal_acceptance: LegalAcceptanceIn
+
+
 class LoginIn(BaseModel):
     phone: str
     password: str
@@ -197,6 +216,67 @@ async def verify_otp(
     await otp_verify_limiter.check_and_record(_phone_key(body.phone))
     svc = AuthService(db)
     return await svc.verify_otp(body.phone, body.code, purpose=OtpPurpose.registration)
+
+
+@router.get("/legal/current")
+async def current_legal_documents():
+    """The document revisions a new account must accept, for clients that
+    don't ship them compiled in (the web storefront). Public: they are what
+    every signup screen shows."""
+    from api.core.legal_documents import AGE_DECLARATION_VERSION, PRIVACY, TERMS
+    return {
+        "terms": {"id": TERMS.document_id, "version": TERMS.version, "published": TERMS.published,
+                  "digest": TERMS.digest or None},
+        "privacy": {"id": PRIVACY.document_id, "version": PRIVACY.version,
+                    "published": PRIVACY.published, "digest": PRIVACY.digest or None},
+        "age_declaration_version": AGE_DECLARATION_VERSION,
+    }
+
+
+# ── Signing in with an SMS code (the web storefront's checkout) ──────────────
+# One flow for both kinds of person: an existing account signs in, a new
+# phone gets a verified-phone token to open a buyer account with. The same
+# limits as the registration code - per number and per address - and the
+# same answer about whether the number has an account, which /otp/request
+# already gives (409) and which the sign-in screen needs to say what's next.
+
+@router.post("/otp/sign-in/request")
+async def request_sign_in_code(
+    body: SignInCodeIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    ip = client_ip(request)
+    await otp_request_limiter.check_and_record(_phone_key(body.phone))
+    await otp_request_limiter.check_and_record(f"ip:{ip}")
+    return await AuthService(db).request_sign_in_code(body.phone)
+
+
+@router.post("/otp/sign-in/verify")
+async def verify_sign_in_code(
+    body: SignInVerifyIn,
+    db: AsyncSession = Depends(get_db),
+):
+    await otp_verify_limiter.check_and_record(_phone_key(body.phone))
+    return await AuthService(db).verify_sign_in_code(body.phone, body.code)
+
+
+@router.post("/otp/sign-in/register", status_code=201)
+async def register_after_sign_in_code(
+    body: SignInRegisterIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    await register_limiter.check_and_record(client_ip(request))
+    return await AuthService(db).register_with_verified_phone(
+        phone_verify_token=body.phone_verify_token,
+        name=body.name,
+        age_confirmed=body.legal_acceptance.age_confirmed,
+        terms_accepted=body.legal_acceptance.terms_accepted,
+        privacy_acknowledged=body.legal_acceptance.privacy_acknowledged,
+        terms_version=body.legal_acceptance.terms_version,
+        privacy_version=body.legal_acceptance.privacy_version,
+    )
 
 
 @router.post("/email/otp/request")

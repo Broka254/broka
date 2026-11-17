@@ -451,17 +451,91 @@ def build_advice(
     views_available: bool,
     product_views: int,
     products: int,
+    orders: Optional[dict] = None,
 ) -> Dict[str, List[dict]]:
     """Concrete, number-backed cards. No model call, no adjectives without
     a figure behind them — the rule `trust/seller_advice.py` follows, for
     the same reason: advice that cannot cite a number is decoration.
 
     At most three positives and four negatives; a wall of cards is skipped.
-    Negatives sort worst-first.
+    Negatives sort worst-first. `orders` is the orders block
+    (store_orders/analytics.orders_block); without it no order card is made.
     """
     pos: List[dict] = []
     neg: List[dict] = []
+    _store_cards(pos, neg, rating=rating, review_count=review_count,
+                 response_minutes=response_minutes, visits_now=visits_now,
+                 visits_before=visits_before, saves=saves, chats=chats,
+                 views_available=views_available, product_views=product_views,
+                 products=products)
+    # Order cards come after the store's own: at equal severity the older
+    # cards keep their places (the sort below is stable).
+    _order_cards(pos, neg, orders)
+    neg.sort(key=lambda c: -c["severity"])
+    return {"positives": pos[:3], "negatives": neg[:4]}
 
+
+def _order_cards(pos: List[dict], neg: List[dict], orders: Optional[dict]) -> None:
+    if orders and orders.get("enabled"):
+        pipe = orders.get("pipeline") or {}
+        kpis = orders.get("kpis") or {}
+        stale = int(pipe.get("stale_requests") or 0)
+        waiting = int(pipe.get("awaiting_store") or 0)
+        to_fulfil = int(pipe.get("to_fulfil") or 0)
+        requests_now = int((kpis.get("requests") or {}).get("value") or 0)
+        completed_now = int((kpis.get("completed") or {}).get("value") or 0)
+        if stale:
+            neg.append({
+                "code": "orders_waiting", "severity": 5,
+                "title": "Buyers are waiting for your answer",
+                "detail": f"{stale} order request{'s' if stale != 1 else ''} older than a day "
+                          "with no reply. Unanswered requests expire and the buyer moves on.",
+            })
+        elif waiting:
+            neg.append({
+                "code": "orders_new", "severity": 4,
+                "title": "New order requests to answer",
+                "detail": f"{waiting} waiting. Confirm what you have, or propose changes.",
+            })
+        if to_fulfil:
+            neg.append({
+                "code": "orders_to_fulfil", "severity": 3,
+                "title": "Confirmed orders to prepare",
+                "detail": f"{to_fulfil} confirmed order{'s' if to_fulfil != 1 else ''} "
+                          "waiting to be prepared or handed over.",
+            })
+        if completed_now:
+            pos.append({
+                "code": "orders_completed", "severity": 0,
+                "title": "Orders completed",
+                "detail": f"{completed_now} order{'s' if completed_now != 1 else ''} confirmed "
+                          f"received by buyers this period, from {requests_now} request"
+                          f"{'s' if requests_now != 1 else ''}.",
+            })
+        stuck = orders.get("not_converting") or []
+        if stuck and requests_now == 0 and stuck[0].get("views"):
+            neg.append({
+                "code": "views_no_orders", "severity": 1,
+                "title": "Looked at, but not ordered",
+                "detail": f"\"{stuck[0]['name']}\" has {stuck[0]['views']} views and no order "
+                          "requests this period. Check its price, photos and stock.",
+            })
+
+
+def _store_cards(
+    pos: List[dict], neg: List[dict], *,
+    rating: Optional[float],
+    review_count: int,
+    response_minutes: Optional[float],
+    visits_now: int,
+    visits_before: int,
+    saves: int,
+    chats: int,
+    views_available: bool,
+    product_views: int,
+    products: int,
+) -> None:
+    """The store's own cards (rating, replies, visits, conversations)."""
     if rating is not None:
         if rating >= 8.0:
             pos.append({
@@ -552,9 +626,6 @@ def build_advice(
                       "cannot be rated or found in category browsing.",
         })
 
-    neg.sort(key=lambda c: -c["severity"])
-    return {"positives": pos[:3], "negatives": neg[:4]}
-
 
 # ── The endpoint payload ────────────────────────────────────────────────────
 
@@ -610,6 +681,15 @@ async def insights_for(db: AsyncSession, store: Store, days: int = 7) -> dict:
     factor_series = await _rating_review_response_series(
         db, store, start, end, rating_block)
 
+    # Store orders: requests, acceptances, confirmations and completions,
+    # each counted when it happened, with cohort rates beside their
+    # numerators and denominators (store_orders/analytics.py).
+    from api.domains.store_orders import analytics as order_analytics
+    orders = await order_analytics.orders_block(
+        db, store, start=start, end=end, prev_start=prev_start, prev_end=prev_end,
+        product_views=product_views, views_available=views_available,
+    )
+
     advice = build_advice(
         rating=rating_block.get("rating"),
         review_count=int(rating_block.get("review_count") or 0),
@@ -621,6 +701,7 @@ async def insights_for(db: AsyncSession, store: Store, days: int = 7) -> dict:
         views_available=views_available,
         product_views=product_views,
         products=int(products or 0),
+        orders=orders,
     )
 
     return {
@@ -672,6 +753,7 @@ async def insights_for(db: AsyncSession, store: Store, days: int = 7) -> dict:
         },
         "sources": await _sources(db, store.id, start, end),
         "top_products": top,
+        "orders": orders,
         "advice": advice,
         "generated_at": datetime.utcnow().isoformat(),
     }

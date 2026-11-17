@@ -1051,3 +1051,34 @@ does not, check that both replicas logged `CHAT_RELAY_SUBSCRIBED`.
 
 Tests: `backend/tests/test_receipts_reach_the_sender.py`,
 `flutter_app/test/delivery_receipt_ladder_test.dart`.
+
+## Store order updates (2026-11-17)
+
+Every change to a store order notifies the other side: a new request to the
+store, the store's answer to the buyer, and every step after
+(`api/domains/store_orders/notify.py`, `STORE_ORDERS.md` §5).
+
+- **One outbox, which is also the feed.** `store_order_notifications` rows are
+  written in the transaction that changes the order, unique per (event,
+  recipient). `GET /orders/notifications` reads them as the person's order
+  updates; `POST /orders/notifications/read` marks them read (opening an
+  order does it).
+- **Pushed after the commit, claimed per row.** A conditional `UPDATE` claims a
+  row before its push is sent, so the request that made it and the 5-minute
+  sweep on another replica can't both send it. No transaction is open during
+  the FCM call. A transient failure stays `pending` for the sweep (5 tries,
+  24 hours); a person with no phone signed in is `no_device`.
+- **Payload**: `{type: store_order, order_id, status, event, role,
+  screen: store_order, title, body}`, channel `broka_updates`, tag
+  `store_order:<order_id>`, so each order has one notification on the phone
+  and the latest replaces the one before.
+- **The app**: a tap opens `/store-order` for that order (guests sign in
+  first); only the id is read from the payload, and the screen fetches the
+  order as this account may see it. In front, the app draws the update itself
+  (`showStoreOrderFromPush`), since FCM draws nothing then.
+
+### Not covered
+
+- A buyer who uses only the web storefront has no phone to push to. They see
+  updates on the order page, which re-reads every 30 seconds while open, and
+  in the feed.

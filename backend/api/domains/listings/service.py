@@ -27,6 +27,20 @@ from .stock import is_stocked, units_taken, units_total
 from .validation import load_attributes
 
 
+def _tracked(listing) -> bool:
+    """The seller counts this product's stock (Listing.stock_tracked) and
+    has said how many there are - the same rule as store_orders/stock.py."""
+    return (bool(getattr(listing, "stock_tracked", False))
+            and getattr(listing, "quantity", None) is not None)
+
+
+def _tracked_left(listing) -> Optional[int]:
+    """Tracked units not held by an accepted store order; None untracked."""
+    if not _tracked(listing):
+        return None
+    return max(int(listing.quantity or 0) - int(getattr(listing, "stock_reserved", 0) or 0), 0)
+
+
 def _public_time_left(listing) -> dict:
     """paid_until + countdown keys for _listing_dict (see time_left.py)."""
     from api.domains.listings.time_left import time_left
@@ -805,9 +819,14 @@ class ListingService:
         """
         status = getattr(listing.status, "value", listing.status)
         left = None
+        tracked = _tracked(listing)
         if is_stocked(listing):
             taken, _ = await units_taken(self.db, listing.id)
             left = max(units_total(listing) - taken, 0)
+            if tracked:
+                # Counted stock: what is on hand, less what accepted store
+                # orders hold and what chat deals hold (store_orders/stock.py).
+                left = max((_tracked_left(listing) or 0) - taken, 0)
         reported = getattr(listing, "sold_out_reported_at", None)
         sold_out = (status in (ListingStatus.pending.value, ListingStatus.completed.value)
                     or left == 0 or reported is not None)
@@ -816,6 +835,11 @@ class ListingService:
             "sold_out": sold_out,
             # A buyer said it's gone (sold_out.py); its seller can revoke it.
             "reported_sold_out": reported is not None,
+            # Tracked and none left: the shop is out of it for now, which a
+            # storefront says differently from "no longer for sale".
+            "out_of_stock": bool(tracked and left == 0 and status == ListingStatus.active.value
+                                 and reported is None),
+            "available_quantity": left if tracked else None,
             "available": status == ListingStatus.active.value and not sold_out,
         }
 
@@ -1634,6 +1658,9 @@ class ListingService:
             # (DELETE /listings/{id}/sold-out).
             "sold_out_reported_at": (listing.sold_out_reported_at.isoformat()
                                      if listing.sold_out_reported_at else None),
+            # Units accepted store orders hold (store_orders/stock.py) - the
+            # seller's own figure; buyers see only what is left.
+            "stock_reserved": int(getattr(listing, "stock_reserved", 0) or 0),
         }
 
     @staticmethod
@@ -1753,6 +1780,15 @@ class ListingService:
             # rows built in memory by code that predates the columns.
             "price_unit": listing.price_unit,
             "quantity": listing.quantity,
+            # Store orders (store_orders/stock.py). Whether the seller counts
+            # this product's stock; what is left to order (null when they
+            # don't - the store then confirms availability on each order,
+            # which is never "out of stock"); and the seller's pause on new
+            # orders for it. Units held by chat deals are taken off on the
+            # single-listing read (_availability), not on every card.
+            "stock_tracked": _tracked(listing),
+            "available_quantity": _tracked_left(listing),
+            "temporarily_unavailable": bool(getattr(listing, "temporarily_unavailable", False)),
             "price_negotiable": getattr(listing, "price_negotiable", True) is not False,
             "delivery_available": listing.delivery_available,
             "delivery_note": listing.delivery_note,

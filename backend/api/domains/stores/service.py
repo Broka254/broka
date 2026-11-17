@@ -1128,6 +1128,15 @@ class StoreService:
         if quantity is not None and int(quantity) <= 0:
             issues.append({"code": "out_of_stock", "label": "Out of stock",
                            "fix": "stock"})
+        elif (getattr(listing, "stock_tracked", False) and quantity is not None
+              and int(quantity) - int(getattr(listing, "stock_reserved", 0) or 0) <= 0):
+            # Tracked, and every unit is held by accepted orders: buyers see
+            # it as out of stock until those are handed over or released.
+            issues.append({"code": "all_reserved", "label": "Every unit is reserved by orders",
+                           "fix": "stock"})
+        if getattr(listing, "temporarily_unavailable", False):
+            issues.append({"code": "temporarily_unavailable",
+                           "label": "Paused - buyers can't order it", "fix": "stock"})
         fee = getattr(listing, "paid_until", None)
         from api.domains.listings.paid import fee_state
         if fee_state(listing).get("needs_payment"):
@@ -1451,6 +1460,14 @@ class StoreService:
             store.service_areas = service_areas_json
         if "delivery_note" in data:
             store.delivery_note = delivery_note
+        # The owner's pause on new order requests (store_orders/). Browsing,
+        # messages and orders already under way carry on; submit() refuses
+        # new ones while it is off. A null is "no change", not "paused".
+        if data.get("accepting_orders") is not None:
+            store.accepting_orders = bool(data["accepting_orders"])
+        if "orders_pause_note" in data:
+            note = (data.get("orders_pause_note") or "").strip()
+            store.orders_pause_note = note[:160] or None
 
         if "business_email" in data or "official_email" in data:
             owner = await self.db.get(User, requester_id)
@@ -2084,6 +2101,17 @@ class StoreService:
                 "rating_explanation": rating_block["explanation"]}
                if owner_view and "breakdown" in rating_block else {}),
             "is_active": active,
+            # Store orders (api/domains/store_orders/). `orders_enabled` is
+            # BROKA's switch (STORE_ORDERS_ENABLED) - off, the storefront
+            # keeps handing buyers to the app; `accepting_orders` is the
+            # owner's own pause on new requests, with the note buyers see.
+            # Both are enforced when an order is submitted.
+            "orders_enabled": bool(settings.store_orders_enabled),
+            "accepting_orders": bool(getattr(store, "accepting_orders", True)),
+            "orders_pause_note": (
+                None if getattr(store, "accepting_orders", True)
+                else getattr(store, "orders_pause_note", None)
+            ),
             # Owner's view only, and only while billing is on: the app
             # routes a fresh store to the billing screen on this being
             # non-null and not active.

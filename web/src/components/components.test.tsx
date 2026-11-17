@@ -160,6 +160,11 @@ describe('StoreLanding', () => {
     expect(screen.queryByText('New things are on the way.')).toBeNull()
   })
 
+  it('with store orders on, "Message this store" opens the conversation on the website, not the app', () => {
+    render(<StoreLanding view={storeView(shop({ orders_enabled: true }))} storeId="s1" products={[]} categories={[]} />)
+    expect(screen.getByRole('link', { name: 'Message this store' }).getAttribute('href')).toBe('/store/clanix/messages')
+  })
+
   it('uses real seller departments and a compact launch note when the shop has no products', () => {
     render(
       <StoreLanding
