@@ -84,7 +84,7 @@ class TrendingService:
         from api.domains.listings.service import load_listing_media
         assets = await load_listing_media(self.db, page, sellers_by_id.values())
         # What is left of counted stock, as every other list says it.
-        counted = await inventory.tracked_counts(self.db, page)
+        counted = await inventory.card_counts(self.db, page)
         return [
             ListingService._listing_dict(
                 l, seller=sellers_by_id.get(l.seller_id), assets=assets, card=True,

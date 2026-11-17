@@ -1083,7 +1083,7 @@ class StoreService:
         # what the stock controls and the "Out of stock" note show is what a
         # chat deal or an order acceptance would be allowed to take.
         from api.domains.listings import inventory
-        counted = await inventory.tracked_counts(self.db, listings)
+        counted = await inventory.card_counts(self.db, listings)
         items = []
         for listing in listings:
             stock_count = counted.get(listing.id)
