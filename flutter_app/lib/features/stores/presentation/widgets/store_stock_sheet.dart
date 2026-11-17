@@ -75,10 +75,20 @@ class _StoreStockSheetState extends State<StoreStockSheet> {
         setState(() => _problem = 'Say how many you have - 0 if none are left.');
         return;
       }
+      // What is promised can't be taken back by a lower count: units set
+      // aside for accepted orders, and units in chat deals under way. The
+      // server checks the same (and, when counting starts, adds orders the
+      // store accepted before it counted).
       final reserved = widget.product.stockReserved;
-      if (quantity < reserved) {
-        setState(() => _problem =
-            '$reserved of these are set aside for accepted orders. Set at least $reserved.');
+      final inDeals = widget.product.stockInDeals;
+      final promised = reserved + inDeals;
+      if (quantity < promised) {
+        setState(() => _problem = inDeals == 0
+            ? '$reserved of these are set aside for accepted orders. Set at least $reserved.'
+            : reserved == 0
+                ? '$inDeals of these are in chat deals still under way. Set at least $inDeals.'
+                : '$promised of these are promised: $reserved to accepted orders and $inDeals '
+                    'to chat deals. Set at least $promised.');
         return;
       }
     }
@@ -109,6 +119,9 @@ class _StoreStockSheetState extends State<StoreStockSheet> {
   Widget build(BuildContext context) {
     final p = widget.product;
     const hint = TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.4);
+    // Counting can't stop while accepted orders hold units: their handover
+    // is what takes the units off the stock (the server refuses it too).
+    final mustKeepCounting = p.stockTracked && p.stockReserved > 0;
     return SafeArea(
       child: Padding(
         // Above the keyboard while the quantity is typed.
@@ -138,12 +151,17 @@ class _StoreStockSheetState extends State<StoreStockSheet> {
               contentPadding: EdgeInsets.zero,
               value: _tracked,
               activeColor: BrokaColors.gold,
-              onChanged: _saving ? null : (on) => setState(() => _tracked = on),
+              onChanged: _saving || mustKeepCounting ? null : (on) => setState(() => _tracked = on),
               title: const Text('Count stock for this product',
                   style: TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.w600)),
-              subtitle: const Text(
-                  'Accepting an order sets units aside; they come off when the order is '
-                  'handed over, and go back if it ends without a sale.',
+              subtitle: Text(
+                  mustKeepCounting
+                      ? '${p.stockReserved} are set aside for accepted orders. Hand over or cancel '
+                          'those orders before you stop counting.'
+                      : 'Accepting an order sets units aside; they come off when the order is '
+                          'handed over, and go back if it ends without a sale. Chat deals take '
+                          'from the same count.',
+                  key: const Key('stock-tracked-note'),
                   style: hint),
             ),
             if (_tracked) ...[
@@ -160,6 +178,18 @@ class _StoreStockSheetState extends State<StoreStockSheet> {
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
                   child: Text('${p.stockReserved} set aside for accepted orders.', style: hint),
+                ),
+              if (p.stockInDeals > 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text('${p.stockInDeals} in chat deals still under way.',
+                      key: const Key('stock-in-deals'), style: hint),
+                ),
+              if (p.stockTracked && p.availableQuantity != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text('${p.availableQuantity} free for new orders and deals.',
+                      key: const Key('stock-available'), style: hint),
                 ),
             ] else
               Padding(
@@ -213,7 +243,9 @@ String? storeStockNote(StoreProduct p) {
   if (!p.stockTracked) return null;
   if (p.outOfStock) return 'Out of stock';
   final left = p.availableQuantity ?? 0;
-  return p.stockReserved > 0
-      ? '$left in stock to order · ${p.stockReserved} set aside'
-      : '$left in stock';
+  final promised = [
+    if (p.stockReserved > 0) '${p.stockReserved} set aside',
+    if (p.stockInDeals > 0) '${p.stockInDeals} in chat deals',
+  ];
+  return promised.isEmpty ? '$left in stock' : '$left in stock to order · ${promised.join(' · ')}';
 }

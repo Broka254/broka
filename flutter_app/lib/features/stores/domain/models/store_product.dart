@@ -69,18 +69,22 @@ class StoreProduct {
     this.stockTracked = false,
     this.stockQuantity,
     this.stockReserved = 0,
+    this.stockInDeals = 0,
     this.availableQuantity,
     this.temporarilyUnavailable = false,
   });
 
-  /// Store orders' stock (backend store_orders/stock.py). Tracked: the
-  /// owner counts it, [stockQuantity] is on hand, accepted orders hold
-  /// [stockReserved] of it and [availableQuantity] is what can still be
-  /// ordered. Untracked (every product until its owner chooses): the store
-  /// confirms availability on each order, which is never "out of stock".
+  /// Stock, as the backend counts it for store orders and chat deals alike
+  /// (backend listings/inventory.py). Tracked: the owner counts it,
+  /// [stockQuantity] is on hand, accepted orders hold [stockReserved] of
+  /// it, chat deals still under way hold [stockInDeals], and
+  /// [availableQuantity] is what a new order or deal may still take.
+  /// Untracked (every product until its owner chooses): the store confirms
+  /// availability on each order, which is never "out of stock".
   final bool stockTracked;
   final int? stockQuantity;
   final int stockReserved;
+  final int stockInDeals;
   final int? availableQuantity;
 
   /// The owner paused new orders for it: shown to buyers, not orderable.
@@ -151,8 +155,10 @@ class StoreProduct {
       ],
       json: j,
       stockTracked: j['stock_tracked'] == true,
-      stockQuantity: (j['quantity'] as num?)?.toInt(),
+      // On hand; a backend before the shared count sends only `quantity`.
+      stockQuantity: ((j['stock_on_hand'] ?? j['quantity']) as num?)?.toInt(),
       stockReserved: (j['stock_reserved'] as num?)?.toInt() ?? 0,
+      stockInDeals: (j['stock_committed_to_deals'] as num?)?.toInt() ?? 0,
       availableQuantity: (j['available_quantity'] as num?)?.toInt(),
       temporarilyUnavailable: j['temporarily_unavailable'] == true,
     );

@@ -592,7 +592,9 @@ class _StoreOrderScreenState extends State<StoreOrderScreen> {
             if (o.isSeller && i.stockTracked)
               Text(
                 'Stock: ${i.stockOnHand ?? 0} on hand, ${i.stockAvailable ?? 0} free to order'
+                '${(i.stockInDeals ?? 0) > 0 ? ', ${i.stockInDeals} in chat deals' : ''}'
                 '${i.reservedQuantity > 0 ? ', ${i.reservedQuantity} set aside for this order' : ''}',
+                key: Key('order-item-stock-${i.id}'),
                 style: const TextStyle(color: BrokaColors.textLow, fontSize: 11.5),
               ),
           ]),

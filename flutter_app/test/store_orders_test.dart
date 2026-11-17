@@ -236,7 +236,14 @@ Map<String, dynamic> _ordersSummary({bool accepting = true}) => {
     };
 
 /// One product as GET /stores/{id}/manage/listings returns it.
-Map<String, dynamic> _product({bool tracked = false, int? quantity, int reserved = 0, int? available}) => {
+Map<String, dynamic> _product(
+        {bool tracked = false,
+        int? quantity,
+        int reserved = 0,
+        int? available,
+        int? onHand,
+        int? inDeals}) =>
+    {
       'id': 'l1',
       'seller_id': 'u1',
       'name': 'Samsung A15',
@@ -256,6 +263,9 @@ Map<String, dynamic> _product({bool tracked = false, int? quantity, int reserved
       'listing_fee': {'status': 'free', 'live': true, 'paid_until': null, 'needs_payment': false},
       'stock_tracked': tracked,
       'stock_reserved': reserved,
+      // The shared count's own figures (backend listings/inventory.py).
+      if (onHand != null) 'stock_on_hand': onHand,
+      if (inDeals != null) 'stock_committed_to_deals': inDeals,
       'available_quantity': available,
       'temporarily_unavailable': false,
     };
@@ -378,6 +388,25 @@ void main() {
 
       final some = StoreProduct.fromJson(_product(tracked: true, quantity: 5, reserved: 2, available: 3));
       expect(storeStockNote(some), '3 in stock to order · 2 set aside');
+    });
+
+    test("a product's stock: units in chat deals are not in stock to order", () {
+      // quantity is stored as on hand plus what chat deals sold: 8 = 5 + 3.
+      final shared = StoreProduct.fromJson(
+          _product(tracked: true, quantity: 8, onHand: 5, reserved: 2, inDeals: 1, available: 2));
+      expect(shared.stockQuantity, 5);
+      expect(shared.stockInDeals, 1);
+      expect(storeStockNote(shared), '2 in stock to order · 2 set aside · 1 in chat deals');
+
+      final dealsOnly = StoreProduct.fromJson(
+          _product(tracked: true, quantity: 3, onHand: 3, inDeals: 3, available: 0));
+      expect(dealsOnly.outOfStock, isTrue);
+      expect(storeStockNote(dealsOnly), 'Out of stock');
+
+      // A backend from before the shared count sends quantity alone.
+      final older = StoreProduct.fromJson(_product(tracked: true, quantity: 4, available: 4));
+      expect(older.stockQuantity, 4);
+      expect(older.stockInDeals, 0);
     });
 
     test('a store without the orders switch shows no orders', () {
@@ -617,6 +646,43 @@ void main() {
           {'stock_tracked': true, 'quantity': 5, 'temporarily_unavailable': false});
     });
 
+    testWidgets("Products: what orders and chat deals were promised can't be counted away",
+        (tester) async {
+      final backend = await _openMyStore(tester, more: {
+        'GET /stores/s1/manage/listings': (_) => _json({
+              'items': [
+                _product(tracked: true, quantity: 8, onHand: 5, reserved: 2, inDeals: 1, available: 2),
+              ],
+              'counts': {'all': 1, 'live': 1, 'hidden': 0, 'in_deal': 0, 'sold': 0},
+            }),
+      });
+      await tester.tap(find.text('Products'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('store-product-l1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('product-action-stock')));
+      await tester.pumpAndSettle();
+
+      // On hand - not the stored quantity, which also counts what chat deals sold.
+      final field = tester.widget<TextField>(find.byKey(const Key('stock-quantity-field')));
+      expect(field.controller!.text, '5');
+      expect(find.byKey(const Key('stock-in-deals')), findsOneWidget);
+      expect(find.text('1 in chat deals still under way.'), findsOneWidget);
+      expect(find.text('2 free for new orders and deals.'), findsOneWidget);
+      // Counting can't stop while accepted orders hold units (the server refuses it too).
+      final tracking = tester.widget<SwitchListTile>(find.byKey(const Key('stock-tracked-switch')));
+      expect(tracking.onChanged, isNull);
+      expect(find.text('2 are set aside for accepted orders. Hand over or cancel those orders '
+          'before you stop counting.'), findsOneWidget);
+
+      await tester.enterText(find.byKey(const Key('stock-quantity-field')), '2');
+      await tester.tap(find.byKey(const Key('stock-save')));
+      await tester.pumpAndSettle();
+      expect(find.text('3 of these are promised: 2 to accepted orders and 1 to chat deals. '
+          'Set at least 3.'), findsOneWidget);
+      expect(backend.calls('PATCH', '/stores/s1/manage/listings/l1/stock'), isEmpty);
+    });
+
     testWidgets('no stock controls while store orders are off', (tester) async {
       await _openMyStore(tester, store: _storeJson(ordersEnabled: false));
       await tester.tap(find.text('Products'));
@@ -641,6 +707,20 @@ void main() {
       await tester.pumpAndSettle();
       return backend;
     }
+
+    testWidgets("the store's stock line takes chat deals off what is free", (tester) async {
+      final order = _order();
+      ((order['items'] as List).first as Map<String, dynamic>).addAll({
+        'stock_on_hand': 5,
+        'stock_available': 2,
+        'stock_committed_to_deals': 1,
+        'reserved_quantity': 2,
+        'stock_state': 'reserved',
+      });
+      await openOrder(tester, order);
+      expect(tester.widget<Text>(find.byKey(const Key('order-item-stock-i1'))).data,
+          'Stock: 5 on hand, 2 free to order, 1 in chat deals, 2 set aside for this order');
+    });
 
     testWidgets('declining needs a reason the buyer will see', (tester) async {
       final backend = await openOrder(tester, _order(), more: {
