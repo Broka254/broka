@@ -216,6 +216,86 @@ class AuthService:
             raise HTTPException(status_code=400, detail="Incorrect code")
         await self.repo.consume_otp(otp)
 
+    # ── Signing in with an SMS code ─────────────────────────────────────────
+    # The web storefront's checkout (POST /auth/otp/sign-in/*): a buyer who
+    # has never installed the app proves their number and is signed in - an
+    # existing account straight away, a new number after giving a name and
+    # accepting the Terms. Possession of the number is what a password reset
+    # already rests on (above), so this grants nothing that path does not;
+    # its codes are their own purpose (OtpPurpose.sign_in) so neither flow's
+    # code works in the other.
+
+    async def request_sign_in_code(self, phone: str) -> dict:
+        phone = _normalize_phone(phone)
+        if not re.fullmatch(r"\+[1-9][0-9]{8,14}", phone):
+            raise HTTPException(status_code=400, detail="Enter your phone number, like 0712 345 678.")
+        existing = await self.repo.get_by_phone(phone)
+        result = await self.request_otp(
+            phone, purpose=OtpPurpose.sign_in if existing else OtpPurpose.registration,
+        )
+        result["account_exists"] = existing is not None
+        return result
+
+    async def verify_sign_in_code(self, phone: str, code: str) -> dict:
+        phone = _normalize_phone(phone)
+        user = await self.repo.get_by_phone(phone)
+        if user is None:
+            # A new number: the code was a registration code. The token is
+            # what /otp/sign-in/register (or the app's /register) takes.
+            await self._consume_phone_otp(phone, code, OtpPurpose.registration)
+            return {"ok": True, "account_exists": False,
+                    "phone_verify_token": create_phone_verify_token(phone)}
+        await self._consume_phone_otp(phone, code, OtpPurpose.sign_in)
+        # The code just proved the number, for an account that may have
+        # skipped verifying it at signup.
+        user.phone_verified = True
+        user.last_seen = datetime.utcnow()
+        await self.db.commit()
+        token = create_access_token({"sub": user.id})
+        refresh_token = await self._issue_refresh_token(user.id)
+        await publish(UserLoggedIn(user_id=user.id))
+        return {
+            "ok": True,
+            "account_exists": True,
+            "access_token": token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer",
+            "user_id": user.id,
+            "name": user.name,
+            "phone": user.phone,
+            "account_type": user.account_type.value if user.account_type else "buyer",
+        }
+
+    async def register_with_verified_phone(
+        self, *, phone_verify_token: str, name: str,
+        age_confirmed: bool, terms_accepted: bool, privacy_acknowledged: bool,
+        terms_version: str, privacy_version: str,
+    ) -> dict:
+        """A buyer account for a number /otp/sign-in/verify just proved.
+
+        The same register() every signup goes through - legal acceptance
+        checked first and recorded with the account, the phone taken from
+        the signed token - with no password the person knows: a random one
+        is hashed and thrown away, so the account signs in with SMS codes
+        until its owner sets a password through "Forgot password". No
+        location either; it stays unset until a screen that uses it asks."""
+        clean_name = " ".join((name or "").split())
+        if len(clean_name) < 2:
+            raise HTTPException(status_code=400, detail="Enter your name.")
+        return await self.register(
+            name=clean_name,
+            password=secrets.token_urlsafe(32),
+            lat=None,
+            lng=None,
+            phone_verify_token=phone_verify_token,
+            account_type="buyer",
+            age_confirmed=age_confirmed,
+            terms_accepted=terms_accepted,
+            privacy_acknowledged=privacy_acknowledged,
+            terms_version=terms_version,
+            privacy_version=privacy_version,
+        )
+
     # ── Forgotten password: SMS code → new password ─────────────────────────
     # The phone number is the account, so a code sent to it is what proves
     # the person resetting is its owner. Codes for this are their own

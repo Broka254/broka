@@ -450,6 +450,10 @@ async def _periodic_sweep_loop(interval_seconds: int = 300) -> None:
                 except Exception as exc:
                     logger.error("[sweep] listing stock sync failed: %s", exc)
                 try:
+                    await task_store_order_sweep()
+                except Exception as exc:
+                    logger.error("[sweep] store order sweep failed: %s", exc)
+                try:
                     await task_notify_expiry_alerts({})
                 except Exception as exc:
                     logger.error("[sweep] expiry SMS sweep failed: %s", exc)
@@ -493,6 +497,22 @@ async def task_sync_listing_stock() -> int:
     from api.domains.listings.stock import sync_listing_stock
     async with AsyncSessionLocal() as db:
         return await sync_listing_stock(db)
+
+
+async def task_store_order_sweep(ctx: dict | None = None) -> None:
+    """Expire store orders whose store did not answer, or whose buyer did
+    not confirm, in time - giving back any stock they reserved - and send
+    the order pushes still pending (api/domains/store_orders/). Safe on
+    every replica at once: each expiry is re-checked under the order's row
+    lock, and each push is claimed before it is sent. Nothing here touches
+    money; store orders never hold any."""
+    from api.database import AsyncSessionLocal
+    from api.domains.store_orders import notify, service
+
+    async with AsyncSessionLocal() as db:
+        push_ids = await service.expire_due(db)
+    await notify.deliver(push_ids)
+    await notify.retry_pending()
 
 
 async def task_reconcile_econfirm_escrows(ctx: dict) -> None:

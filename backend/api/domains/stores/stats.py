@@ -416,6 +416,42 @@ async def record_share(
         return False
 
 
+MAX_CART_ADDS_PER_CLIENT = 60
+
+
+async def record_cart_add(
+    db: AsyncSession, store_id: str, listing_id: str, surface: str, source: str,
+    visitor: str, client: Optional[str] = None,
+) -> bool:
+    """Count a product going into a cart (kind "cart_add"), once per visitor
+    and product per window, at most MAX_CART_ADDS_PER_CLIENT per caller per
+    store per window, and only for a product of this store. Interest for the
+    order funnel (store_orders/analytics.py) - never a sale."""
+    try:
+        from api.database import Listing
+        belongs = (await db.execute(
+            select(Listing.id).where(Listing.id == listing_id, Listing.store_id == store_id)
+        )).first()
+        await db.commit()
+        if belongs is None:
+            return False
+        if not await seen.first_time(f"cart:{store_id}:{visitor}:{listing_id}", VISIT_WINDOW_SECONDS):
+            return False
+        if client is not None:
+            n = await seen.incr(f"cart_adds:{store_id}:{client}", VISIT_WINDOW_SECONDS)
+            if n > MAX_CART_ADDS_PER_CLIENT:
+                return False
+        await _increment(db, store_id, "cart_add", surface, source)
+        return True
+    except Exception:
+        logger.exception("[store_stats] could not record a cart addition for %s", store_id)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        return False
+
+
 # ── Reading ──────────────────────────────────────────────────────────────────
 
 async def live_visitors(store_id: str) -> int:

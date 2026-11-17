@@ -198,6 +198,18 @@ services:
                              # on (startup backfill; the opening fee is still owed).
       - key: MPESA_STORE_CALLBACK_URL
         sync: false          # Optional. Unset = /stores/billing/callback/<MPESA_CALLBACK_SECRET>
+      - key: STORE_ORDERS_ENABLED
+        sync: false          # Store orders (STORE_ORDERS.md). Unset here = OFF in production:
+                             # order endpoints answer 409 ORDERS_OFF and the storefront keeps
+                             # its handoff to the app. Set "true" only once the development
+                             # rollout has been reviewed. BROKA never takes the payment either way.
+      - key: STORE_ORDER_SELLER_RESPONSE_HOURS
+        value: "72"          # A new order request expires unanswered after this long.
+      - key: STORE_ORDER_RESERVATION_HOURS
+        value: "48"          # The buyer's time to confirm the store's offer; accepted tracked
+                             # stock stays reserved this long, then is released.
+      - key: STORE_ORDER_MAX_OPEN_PER_STORE
+        value: "5"           # Open orders one buyer may have with one store at once.
       - key: ADMIN_REPORTS_ENABLED
         value: "true"        # The sweep writes daily/weekly/monthly founder briefs once each
                              # period closes (api/core/admin_reports.py).

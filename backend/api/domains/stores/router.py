@@ -169,6 +169,10 @@ class StorePatch(BaseModel):
     official_email: Optional[str] = None
     logo_url: Optional[str] = None
     photos: Optional[List[str]] = None
+    # Store orders: pause new order requests without closing the store
+    # (Store.accepting_orders), and what buyers are told meanwhile.
+    accepting_orders: Optional[bool] = None
+    orders_pause_note: Optional[str] = Field(default=None, max_length=160)
 
 
 class StoreStatusIn(BaseModel):
@@ -217,6 +221,21 @@ class VisitIn(BaseModel):
 class ShareIn(BaseModel):
     channel: str = Field(max_length=32)
     surface: Literal["app", "web"] = "app"
+
+
+class CartEventIn(BaseModel):
+    """A product went into a cart (POST /stores/{id}/cart-events). Interest,
+    not a sale: counted for the owner's order funnel, once per visitor and
+    product per half hour, and never shown as an order."""
+    listing_id: str = Field(min_length=1, max_length=64)
+    surface: Literal["app", "web"] = "web"
+    via: Optional[str] = Field(default=None, max_length=512)
+    visitor: Optional[str] = Field(default=None, pattern=r"^[A-Za-z0-9_-]{8,64}$")
+
+    @field_validator("via")
+    @classmethod
+    def _short_via(cls, v: Optional[str]) -> Optional[str]:
+        return store_stats.short_via(v)
 
 
 class BulkListingActionIn(BaseModel):
@@ -704,6 +723,39 @@ async def record_share(
     await StoreService(db).get_row(store_id)
     counted = await store_stats.record_share(
         db, store_id, body.surface, store_stats.share_channel(body.channel), client=client,
+    )
+    return {"counted": counted}
+
+
+@router.post("/{store_id}/cart-events", status_code=202)
+async def record_cart_event(
+    store_id: str,
+    body: CartEventIn,
+    request: Request,
+    current_user: Optional[dict] = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db),
+):
+    """A product of this store was added to a cart, for the order funnel
+    in the owner's insights. Counted like a visit: once per visitor and
+    product per half hour, capped per caller, never the owner's own, never
+    a crawler's - and never as a sale."""
+    client = _client_key(request, current_user)
+    await store_counter_limiter.check_and_record(client)
+    store = await StoreService(db).get_row(store_id)
+    if current_user and current_user["id"] == store.owner_id:
+        return {"counted": False}
+    user_agent = request.headers.get("user-agent")
+    if body.surface == "web" and store_stats.is_bot(user_agent):
+        return {"counted": False}
+    if current_user:
+        visitor = f"u:{current_user['id']}"
+    elif body.visitor:
+        visitor = f"v:{body.visitor}"
+    else:
+        visitor = store_stats.anonymous_visitor_key(client_ip(request), user_agent)
+    counted = await store_stats.record_cart_add(
+        db, store_id, body.listing_id, body.surface, store_stats.visit_source(body.via),
+        visitor, client=client,
     )
     return {"counted": counted}
 
