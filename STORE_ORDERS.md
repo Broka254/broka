@@ -83,70 +83,78 @@ checks again.
 
 ## 3. Stock
 
-Opt-in per product (`listings.stock_tracked`). Every existing listing starts
-**untracked**, and untracked stock is never "out of stock": the store confirms
-availability on each order, and a buyer may ask for up to the listing's stated
-quantity (1 when none), the same cap as the cart.
-
-**One count for both ways a product sells.** A store product sells through
-store orders and through chat deals (`EscrowService.finalize_deal`). Both take
-units by the same count, `backend/api/domains/listings/inventory.py`:
+**Every product's units are counted**, by one count for both ways a store
+product sells: store orders and chat deals (`EscrowService.finalize_deal`).
+The count is `backend/api/domains/listings/inventory.py`:
 
 ```
-available = total - reserved - in deals        (never below 0)
+available = total - reserved - in deals - sold through orders   (never below 0)
 ```
 
-- `total`: tracked, `listings.quantity`; untracked, the stated quantity
-  (NULL or 0 reads as 1).
+- `total`: the listing's quantity. Counted stock (`listings.stock_tracked`)
+  uses it exactly. Otherwise it is the stated quantity, NULL or 0 reading as 1.
 - `reserved`: `listings.stock_reserved`, what accepted orders hold.
 - `in deals`: the units of chat deals that hold stock, by the chat rule
   (`listings/stock.units_taken`): while buyers pay through BROKA, every deal
   from agreement until refunded or cancelled, paid-out ones included; with
   payments off, paid-out ones only.
+- `sold through orders`: units store orders handed over
+  (`store_order_items.deducted_quantity`). Only a stated quantity subtracts
+  them, because counted stock had them taken off `quantity` at handover.
 
 Every path that takes units locks the listing row first (`inventory.lock`,
 `SELECT ... FOR UPDATE`, in id order), counts, then writes, in one
 transaction: `finalize_deal`, an order's acceptance or proposal, and the stock
 controls. Two requests from the two channels for the last unit run one after
 the other, and the second is refused. Before this, `finalize_deal` counted
-chat deals only and an acceptance counted chat deals before locking anything.
-
-Tracked (`stock_tracked`, `stock_reserved`):
+chat deals only, an acceptance counted chat deals before locking anything, and
+a product whose seller didn't count it reserved nothing.
 
 | Moment | Effect |
 |---|---|
-| Store accepts or proposes | Under the listing lock, counts and reserves the offered units (one conditional `UPDATE` as a second check). `ORDER_STOCK_SHORT` when chat deals and other orders left fewer. |
+| Store accepts or proposes | Under the listing lock, counts and reserves the offered units (one conditional `UPDATE` as a second check), for every product. `ORDER_STOCK_SHORT` when chat deals and other orders left fewer. |
 | Chat deal agreed | Under the same lock, refused when orders and other deals left fewer ("This listing is sold out." / "Only N left"). The deal's units are counted from its row; `quantity` is not touched. |
 | Declined, cancelled, rejected proposal, expired | Releases what the order held. |
-| Delivered or completed (whichever comes first) | Deducts from `quantity` and from reserved, once. |
+| Delivered or completed (whichever comes first) | Moves the units from reserved to sold, once: counted stock takes them off `quantity`; a stated quantity counts them from the order line. |
 | Chat deal refunded or cancelled | Its units count again (the chat rule, unchanged). |
 | Owner edits stock | `PATCH /stores/{id}/manage/listings/{listing_id}/stock`, below. |
 
-**On hand** is what the seller sees and sets: `quantity` less the units chat
-deals sold. A chat sale never changes `quantity`, so setting on hand to N
-stores `N + sold through chat deals`. The stock controls, the product list,
-the seller's order lines, the product page and every listing card show
-figures from the same count: `stock_on_hand`, `stock_reserved`,
-`stock_committed_to_deals` (chat deals not yet paid out),
-`stock_sold_through_deals`, `available_quantity` (what an order or a deal may
-take now). A tracked product is never hidden because of its stock. With
-nothing available it stays listed as "Out of stock".
+**Counted or not** is how the seller writes the stock down. It no longer
+decides whether orders take units.
+
+- **Counted** (`stock_tracked`): the seller keeps an on-hand number and
+  restocks it. On hand is `quantity` less the units chat deals sold, since a
+  chat sale never changes `quantity`, so setting on hand to N stores
+  `N + sold through chat deals`. With nothing available the product stays
+  listed as "Out of stock".
+- **Not counted** (every product until its owner chooses): the stated
+  quantity is everything the listing has, and every unit sold through either
+  channel counts against it. With every unit promised the listing goes
+  `pending`, and with every unit sold it goes `completed`, the way chat deals
+  always moved it. An order's acceptance, release and handover set this at
+  once (`inventory.settle_status`), and the 5-minute stock sweep counts
+  orders as well as deals.
+
+The stock controls, the product list, the seller's order lines, the product
+page and every store product card show figures from the same count:
+`available_quantity` (what an order or a deal may take now, for every store
+product), `stock_reserved`, `stock_committed_to_deals` (chat deals not yet
+paid out), `stock_sold_through_deals`, and `stock_on_hand` (counted stock
+only).
 
 The stock controls:
 
-- `quantity`: on hand while counted. It can't be set below what is promised,
-  accepted orders plus chat deals under way (`STOCK_BELOW_RESERVED`, with
-  `reserved`, `in_deals`, `minimum`). While not counted it is the stated
-  quantity, stored as given (at least 1).
-- Counting on: orders the store accepted while it didn't count, and hasn't
-  handed over, get their units reserved, or the change is refused when on
-  hand can't cover them (`STOCK_BELOW_RESERVED`). Without a quantity, on hand
-  starts at the stated quantity less what chat deals sold.
-- Counting off: refused while accepted orders hold units
-  (`STOCK_TRACKING_IN_USE`): their handover is what takes the units off, and
-  with counting off nothing would. With none left and no quantity given it is
-  refused too (`STOCK_QUANTITY_REQUIRED`), since untracked 0 reads as one.
-  Otherwise the stored quantity stays, so chat deals see the same units.
+- `quantity`: on hand while counted. Not counted, the stated quantity, stored
+  as given (at least 1). Neither can go below what is promised
+  (`STOCK_BELOW_RESERVED`, with `reserved`, `in_deals`, `sold`, `minimum`):
+  accepted orders plus chat deals under way, and for a stated quantity also
+  everything already sold.
+- Counting on or off changes how the units are written down, not how many are
+  left. Starting from a stated quantity, on hand is what neither channel sold.
+  Stopping, the stated quantity becomes on hand plus everything sold.
+  Reservations stay where they are in both directions, so orders under way
+  keep their units. Stopping with nothing left and no quantity given is
+  refused (`STOCK_QUANTITY_REQUIRED`), since a stated 0 reads as one.
 
 `temporarily_unavailable` pauses new orders for one product: it stays visible,
 labelled, not orderable. It doesn't stop chat deals.
@@ -248,8 +256,11 @@ page keeps the app handoff (the production default).
   the app shows, read from the existing negotiate history endpoints (no Zeno
   notes, no media addresses) and written through the rate-limited
   `POST /stores/{id}/enquiries` (12 per user, 60 per address, per 10 minutes).
-- Product pages say "Out of stock" (tracked, none left) or "not taking orders
-  for this product for now" (paused), separately from "no longer available".
+- Product pages say "Out of stock" (counted stock, none left) or "not taking
+  orders for this product for now" (paused), separately from "no longer
+  available" (sold, removed, or every unit of a stated quantity promised).
+  Cards and the cart cap use `available_quantity`, the shared count, for
+  every store product.
 - No "install the Android app" message on iPhone, iPad or desktop when orders
   are on: everything happens on the web.
 
@@ -266,7 +277,9 @@ page keeps the app handoff (the production default).
   seller's report. A buyer who opens their order in the app gets their own
   actions and chooses the payment arrangement on the web page.
 - **Products**: "Stock and availability" (count it, units on hand, pause new
-  orders), and a stock line on each row. **Settings**: "Taking new orders",
+  orders; not counted, what can be ordered now), and a stock line on each
+  counted row. The order screen shows each line's stock, counted or not.
+  **Settings**: "Taking new orders",
   with the note buyers see. **Insights**: an orders card. **Marketing
   Studio**: order counts per campaign.
 
@@ -295,8 +308,7 @@ header. Order codes: `ORDERS_OFF`, `IDEMPOTENCY_KEY_REQUIRED`,
 `ORDER_TOO_MANY_OPEN`, `STORE_ORDERS_PAUSED`, `STORE_NOT_OPEN`,
 `PAYMENT_PROVIDER_UNKNOWN`, `PAYMENT_ARRANGEMENT_LOCKED`,
 `PAYMENT_ALREADY_REPORTED`, `PAYMENT_REPORT_TOO_EARLY`. Stock codes:
-`STOCK_BELOW_RESERVED`, `STOCK_TRACKING_IN_USE`, `STOCK_QUANTITY_REQUIRED`,
-`STOCK_QUANTITY_INVALID`, `STOCK_CHANGED`.
+`STOCK_BELOW_RESERVED`, `STOCK_QUANTITY_REQUIRED`, `STOCK_QUANTITY_INVALID`.
 
 ## 10. Configuration and migration
 
@@ -321,6 +333,12 @@ release step; CI runs it twice on PostgreSQL 16):
 Every existing listing stays untracked and on sale, and every store keeps
 taking orders, until its owner changes them.
 
+The shared stock count (§3) needs no schema change: it reads
+`stock_reserved` and `store_order_items.deducted_quantity`, both from revision
+19. Orders accepted before it on a product its seller didn't count hold no
+units; they finish as they were. Production has never had store orders
+switched on, so that only concerns development and test databases.
+
 To switch on in production: set `STORE_ORDERS_ENABLED=true` on the API after
 the release step has migrated to revision 19. The web storefront needs no
 setting of its own; it follows the store payload.
@@ -342,17 +360,15 @@ On a development API (`STORE_ORDERS_ENABLED` on by default):
 5. The seller starts preparing, dispatches (or marks it ready for
    collection), records "I received the payment" if paid directly, and reports
    it delivered.
-6. The buyer confirms receipt: the order is completed, tracked stock is
-   deducted, and My Store's insights count one request and one completion.
+6. The buyer confirms receipt: the order is completed, its units are sold,
+   and My Store's insights count one request and one completion.
 7. Try the edges: a double tap on "Send order request" (one order), a second
-   buyer for the last tracked unit (`ORDER_STOCK_SHORT`), pausing new orders in
+   buyer for the last unit (`ORDER_STOCK_SHORT`), a chat deal for a unit an
+   accepted order holds ("This listing is sold out."), pausing new orders in
    Settings (the cart says so), and letting an offer lapse (units released).
 
 ## 12. Known limits
 
-- Untracked products have no shared count with chat deals: accepting an order
-  for one reserves nothing, so a chat deal can still be agreed for the same
-  unit. Counting the product's stock closes that.
 - An order past its deadline holds its units until it is marked expired, by
   the 5-minute sweep or when someone opens it.
 - With payments off, a deal paid before payments were switched off starts
