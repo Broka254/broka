@@ -33,6 +33,22 @@ summaries, app and web routes. CI regenerates it on every push to `main`.
 
 ---
 
+## Recent changes (2026-11-17)
+
+- **Store orders, without the app** (see `STORE_ORDERS.md`). With
+  `STORE_ORDERS_ENABLED` on (development and test by default; off in
+  production until set), a buyer on any phone, tablet or computer signs in
+  with an SMS code and sends a store an order request from its web cart. The
+  store accepts it or proposes changes, the buyer confirms the final details,
+  and the store prepares, dispatches or readies it; only the buyer completes
+  it. Prices and totals come from the server, submissions are idempotent, and
+  stock is counted only for products whose owner chooses to. The buyer pays
+  the store directly or through an independent escrow provider: **BROKA takes,
+  holds and verifies no payment**, and records each side's payment reports as
+  theirs. My Store gains an Orders tab, an order screen with confirmations,
+  stock controls, a pause on new orders, and an orders card in its insights;
+  buyers can message a store from its website.
+
 ## Recent changes (2026-09-25)
 
 A hardening pass after the repository review (`REPO_REVIEW.md` has the
@@ -248,8 +264,10 @@ web page with a browser visitor id) and share taps are counted per day in
 `store_daily_counts`, once per visitor per half hour, never for the owner
 or for crawlers; the owner reads them with `GET /stores/{id}/stats`. A business email is only saved once proven with
 an emailed code (`POST /stores/email/request-code`, `/stores/email/verify`),
-unless it's the owner's own verified account email. The phased plan,
-including checkout and the web storefront, is in `STORES_PLAN.md`.
+unless it's the owner's own verified account email. The phased plan is in
+`STORES_PLAN.md`; store orders, as built, are in `STORE_ORDERS.md`: order
+requests the store confirms, with payment arranged between buyer and store
+outside BROKA.
 
 ### Calling
 
@@ -516,7 +534,8 @@ storefront project's `*.vercel.app` address, and the same
 - [x] `flutter test` in CI
 - [x] Online stores: setup wizard with a fixed shareable link, My Store with visit stats (Online Stores phase 2)
 - [x] Online stores: storefront in the app and on the web, store links opening the app, link previews (Online Stores phase 3)
-- [ ] Online stores: stock, cart and checkout, seller tools (phases 4-5 of `STORES_PLAN.md`)
+- [x] Online stores: order requests from the web storefront, opt-in stock, the seller's Orders tab, payment reports (no payment taken by BROKA) - `STORE_ORDERS.md`, off in production until `STORE_ORDERS_ENABLED` is set
+- [ ] Online stores: orders from the app's own cart, pushes for web-only buyers, bulk stock edit
 - [ ] Consume the Redis event streams (events are written there but only handled in-process today)
 - [ ] Event sourcing for payments (Phase 3)
 - [ ] ML-based fraud models (Phase 4)

@@ -1,11 +1,21 @@
 # Online Stores — build plan (2026-09-23)
 
+> **Correction (2026-11-17): BROKA does not take payment for store orders.**
+> This plan proposed checkout with one M-Pesa payment into BROKA's escrow.
+> That is not what was built. Store orders (`STORE_ORDERS.md`) are order
+> requests: the store confirms them, the buyer confirms the final details, and
+> the buyer pays the store directly or through an independent escrow provider
+> they choose. BROKA records what each side reports about paying and never
+> receives, holds, verifies or releases the money. Passages below that say
+> otherwise are marked as superseded.
+
 A BROKA store is a small business's own mini e-commerce site: its own link
 (`https://broka.co.ke/store/clanix`) that the owner shares on TikTok,
 WhatsApp groups and Instagram, where anyone can browse the shop's products by
-category, add them to a cart and pay with M-Pesa, protected by BROKA's
-escrow, without installing the app. Store products keep appearing on BROKA's
-Home, search and categories like any other listing.
+category, add them to a cart and send the store an order request, without
+installing the app. Payment is between the buyer and the store, directly or
+through an independent escrow provider. Store products keep appearing on
+BROKA's Home, search and categories like any other listing.
 
 This plan replaces the current implementation, which was assessed on
 2026-09-23: the backend has a sound but thin foundation (store identity,
@@ -22,7 +32,7 @@ decision below.
 | # | Question | Decision |
 |---|---|---|
 | 1 | Where do link visitors shop? | A real **web storefront** at `broka.co.ke`, usable without the app. People who have the app are taken straight into it. |
-| 2 | What does the cart do? | **Cart + checkout at the listed prices.** Several items from one store, paid in **one M-Pesa payment** held in escrow. Every product keeps **"Make an offer"**, which goes through Zeno as today. Bundle negotiation comes later. |
+| 2 | What does the cart do? | **Cart + an order request at the listed prices.** Several items from one store in one order; the store confirms availability, quantities, prices and delivery, and the buyer confirms the final details. *(Superseded: this decision first said "paid in one M-Pesa payment held in escrow". BROKA takes no payment for store orders; see `STORE_ORDERS.md`.)* Every product keeps **"Make an offer"**, which goes through Zeno as today. Bundle negotiation comes later. |
 | 3 | Can visitors buy without an account? | They sign in **during checkout with phone + SMS code**. New numbers get a buyer account on the spot. |
 | 4 | Stock | Store products have a **stock count**. One listing sells many times and shows "Sold out" at zero. |
 | 5 | Who can open a store? | **Long-term sellers.** A short-term seller who taps "Open an online store" first switches to long-term by giving their business details. |
@@ -58,11 +68,11 @@ storefront draws the same effect in the browser.
   sizes. That gives link previews a real image, and product grids load
   thumbnails of about 20–30 KB instead of the full base64 photos (often a
   megabyte or more per product today).
-- **Payments reuse the escrow that already works.** An order becomes one
-  `Deal` funded through the existing E-Confirm path. E-Confirm's
-  transaction takes one amount and a description, so a multi-item order
-  needs no new payment integration. Release, disputes, timers and the
-  ledger all carry over.
+- *(Superseded.)* ~~Payments reuse the escrow that already works: an order
+  becomes one `Deal` funded through the existing E-Confirm path.~~ Store
+  orders create no `Deal` and no payment. The E-Confirm path above serves
+  chat deals only; a store order's payment is arranged between buyer and
+  store, and BROKA records reports of it (`STORE_ORDERS.md` §4).
 
 ---
 
@@ -374,6 +384,14 @@ disorganised:
 
 ### Phase 4 — Stock, cart, checkout, orders
 
+> **Built differently (2026-11-17): see `STORE_ORDERS.md`.** Orders are
+> requests the store confirms, with no payment step: no `Deal` per order, no
+> STK push, no escrow funding, release or refund by BROKA. Stock is opt-in per
+> product and reserved when the store accepts, not when the buyer orders. The
+> sign-in by SMS code, server-side prices, idempotent submission, httpOnly
+> session cookies and CSRF protection below were built as planned. The rest of
+> this phase is the original plan, kept for the record.
+
 **Backend**
 - `listings.stock_quantity`. NULL means a one-off item, exactly as today.
   - Placing an order reserves stock with a single compare-and-swap update
@@ -452,8 +470,10 @@ checkout going through the escrow that exists today until orders land:
   BROKA app" opens `/store/<name>/cart?items=<id>:<qty>,...` in the app,
   which reads each product again (only this store's, still for sale) and
   fills its own cart. iPhone and desktop visitors are told to finish on an
-  Android phone, never given the APK. **Still to build:** one payment for
-  the whole cart - the `orders` tables, `POST /orders` and the rest above.
+  Android phone, never given the APK. With store orders on
+  (`STORE_ORDERS_ENABLED`), the web cart sends the store an order request
+  instead, on every device (`STORE_ORDERS.md`); the app's cart still hands
+  off to deal rooms.
 - **Store page**: the store's name in lights (moving aurora, shimmer) in
   place of the logo square, the owner's online status, the seller's record,
   a More button for Store details, a perks strip (escrow, M-Pesa, delivery
@@ -469,8 +489,9 @@ checkout going through the escrow that exists today until orders land:
 
 ### Phase 5 — Seller tools and finish
 
-- Store stats screen: visits by day and by source, top products, orders
-  and revenue.
+- Store stats screen: visits by day and by source, top products, and orders
+  (requests, confirmations, completions - built, `STORE_ORDERS.md` §6). No
+  revenue figure: BROKA doesn't see store-order payments.
 - QR code poster for the shop counter (image to print or share).
 - Bulk add and bulk stock edit.
 - Store directory: filter by category and county.
@@ -491,12 +512,13 @@ checkout going through the escrow that exists today until orders land:
   - uploaded images are re-encoded and stripped of metadata;
   - uploads, name checks, OTP and orders are rate-limited;
   - prices always come from the server;
-  - order creation and payment are idempotent;
+  - order creation is idempotent (store orders take no payment);
   - web sessions use httpOnly cookies with CSRF protection;
   - reserved store names are refused.
 - **Compatibility:** app builds already installed keep working, with the
   base64 fields kept until the backfill finishes and a new build is out.
-  Checkout switches on with a `STORE_CHECKOUT_ENABLED` flag.
+  Store orders switch on with `STORE_ORDERS_ENABLED` (off in production
+  unless set).
 - **Docs:** each phase updates the README and this file.
 
 ---
@@ -508,22 +530,20 @@ checkout going through the escrow that exists today until orders land:
 | Before Phase 1 goes live | **Cloudflare R2**: create a bucket (e.g. `broka-media`), connect a public custom domain (e.g. `media.broka.co.ke`), and create an API token for it. Set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` and `MEDIA_PUBLIC_BASE_URL` on Render. Until then the database fallback works, so development isn't blocked. |
 | To put Phase 3's web store live | broka.co.ke is the BROKA website (the `broka-website` repository), which passes the storefront's paths on to it: `/store/*`, `/og/*`, `/api/stores/*`, `/.well-known/*` and its files under `/store-assets/*`. In Vercel, import this repo as a project with **Root Directory `web`** (Next.js is detected; Node 22 comes from `web/package.json`) and **no custom domain**: it keeps its own `*.vercel.app` address. Set `BROKA_API_URL`, `NEXT_PUBLIC_SITE_URL=https://broka.co.ke`, `STOREFRONT_API_KEY` (as on the API) and `STOREFRONT_PROXY_KEY` (a new random value, 32+ characters). Then in the website's Vercel project set `STOREFRONT_URL` to the storefront's address and the same `STOREFRONT_PROXY_KEY`, and redeploy it. Until `STOREFRONT_URL` is set, the website answers store links with its own store pages. |
 | For store links to open the app directly | An **Android release signing key**: App Links only verify against the key the app is signed with, and CI signs with a debug key until it has one. Add the keystore to the GitHub repo's Actions secrets as `ANDROID_KEYSTORE_BASE64` (`base64 -w0 release.jks`), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD`; CI's "Release signing key" step then signs with it. Put the key's SHA-256 fingerprint (`keytool -list -v -keystore release.jks`) in Vercel as `ANDROID_CERT_SHA256`. Keep the keystore backed up: an app signed with it can only be updated by builds signed with it. Until then the "Open" banner on Android still opens the app. If you ship iOS, your **Apple Team ID** (`APPLE_APP_IDS`). |
-| Before Phase 4 goes live | Ask **E-Confirm** whether buyer and seller email can be optional (it's required today). Decide on **Render's paid plan**: browsing is covered by the cached web pages, but checkout needs the backend awake. |
+| Before store orders go live | Set `STORE_ORDERS_ENABLED=true` on the API once the release step has migrated to schema revision 19 (`STORE_ORDERS.md` §10). Have the Terms reviewed (see §6). Decide on **Render's paid plan**: browsing is covered by the cached web pages, but sending an order needs the backend awake. *(The E-Confirm email question applied to the payment checkout this plan proposed; store orders don't use E-Confirm.)* |
 
 ---
 
 ## 6. Risks and open items
 
-- **E-Confirm needs both parties' emails** to create an escrow today. Until
-  they confirm otherwise:
-  - checkout asks the buyer for an email;
-  - a store without a business email (and whose owner has no account
-    email) shows "Add an email to accept payments" instead of "Buy now".
-- **E-Confirm's API details are still unverified** against their live
-  sandbox (noted in `backend/api/core/econfirm_client.py`). Phase 4 needs a
-  sandbox run before launch.
-- **Regulation**: taking payment for goods directly makes the Central Bank
-  of Kenya note in `ARCHITECTURE.md` more pressing. Check with counsel
-  before launch.
+- *(Superseded for store orders.)* The E-Confirm email requirement and the
+  unverified E-Confirm sandbox applied to the payment checkout this plan
+  proposed. Store orders take no payment, so neither blocks them; both still
+  matter for chat deals' escrow.
+- **Regulation**: BROKA does not take payment for store orders, which keeps
+  them out of the payment-holding question in `ARCHITECTURE.md`. The Terms
+  still say (§7) "Where BROKA offers escrow, the buyer's payment is held by
+  our licensed...", which a buyer could read as covering store orders. Have
+  counsel review that wording before store orders go live.
 - **Render free plan**: covered for browsing by the cached pages; not for
   checkout (see §5).

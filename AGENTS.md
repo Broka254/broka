@@ -157,6 +157,7 @@ server go in `web/src/lib/server-config.ts`, never behind `NEXT_PUBLIC_`.
 | Collecting BROKA's own charges (ZetuPay: fees, plans, boosts, badges) | `backend/api/domains/payments/`, `backend/api/core/zetupay.py`, `ZETUPAY.md` |
 | Auctions | `backend/api/domains/auctions/`, `AUCTIONS.md` |
 | Stores and the web storefront | `backend/api/domains/stores/`, `web/`, `STORES_PLAN.md` |
+| Store orders (order requests, stock, payment reports - BROKA takes no payment), web sign-in by SMS code | `backend/api/domains/store_orders/`, `web/src/lib/session.ts`, `web/src/app/api/stores/`, `flutter_app/lib/features/stores/presentation/store_order_screen.dart`, `STORE_ORDERS.md` |
 | Browsing by category, type of item and brand (Home's category cards, Zones, type screens, card artwork) | `flutter_app/lib/features/categories/` (`category_visual.dart`, `subcategory_visual.dart`, `presentation/subcategory_screen.dart`), `backend/api/domains/categories/seed.py` (`BRAND_SUGGESTIONS`) |
 | Images | `backend/api/domains/media/`, `backend/api/core/image_processing.py` |
 | Zeno (the AI broker) | `backend/api/routers/negotiate.py`, `backend/api/domains/ai_broker/`, `ZENO_ACTIONS.md` |
