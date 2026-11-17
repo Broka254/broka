@@ -598,21 +598,25 @@ class TestStock:
         for oid in (swept, read):
             await _post(client, seller_token, f"/orders/{oid}/accept")
         assert tuple(await _listing_row(lid)) == (3, 2)
-        past = datetime.utcnow() - timedelta(minutes=1)
-        async with db_module.AsyncSessionLocal() as db:
-            await db.execute(update(StoreOrder).where(StoreOrder.id.in_([swept, read]))
-                             .values(expires_at=past))
-            await db.commit()
+        async def lapse(order_id):
+            async with db_module.AsyncSessionLocal() as db:
+                await db.execute(update(StoreOrder).where(StoreOrder.id == order_id)
+                                 .values(expires_at=datetime.utcnow() - timedelta(minutes=1)))
+                await db.commit()
+
         # The sweep expires one...
+        await lapse(swept)
         async with db_module.AsyncSessionLocal() as db:
             push_ids = await service.expire_due(db)
         assert push_ids
-        # ...and opening the other finds it lapsed too, rather than showing
-        # an offer that can no longer be confirmed.
-        seen = await client.get(f"/orders/{read}", headers=_auth(buyer_token))
-        assert seen.json()["status"] == "expired"
         swept_view = await client.get(f"/orders/{swept}", headers=_auth(buyer_token))
         assert swept_view.json()["status"] == "expired"
+        assert tuple(await _listing_row(lid)) == (3, 1)
+        # ...and opening the other after its deadline finds it lapsed, rather
+        # than showing an offer that can no longer be confirmed.
+        await lapse(read)
+        seen = await client.get(f"/orders/{read}", headers=_auth(buyer_token))
+        assert seen.json()["status"] == "expired"
         assert tuple(await _listing_row(lid)) == (3, 0)
         r = await _post(client, buyer_token, f"/orders/{read}/confirm", {"revision": 1})
         assert r.status_code == 409
