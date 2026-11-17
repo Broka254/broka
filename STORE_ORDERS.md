@@ -88,17 +88,68 @@ Opt-in per product (`listings.stock_tracked`). Every existing listing starts
 availability on each order, and a buyer may ask for up to the listing's stated
 quantity (1 when none), the same cap as the cart.
 
-Tracked (`stock_tracked`, `quantity` = on hand, `stock_reserved`):
+**One count for both ways a product sells.** A store product sells through
+store orders and through chat deals (`EscrowService.finalize_deal`). Both take
+units by the same count, `backend/api/domains/listings/inventory.py`:
+
+```
+available = total - reserved - in deals        (never below 0)
+```
+
+- `total`: tracked, `listings.quantity`; untracked, the stated quantity
+  (NULL or 0 reads as 1).
+- `reserved`: `listings.stock_reserved`, what accepted orders hold.
+- `in deals`: the units of chat deals that hold stock, by the chat rule
+  (`listings/stock.units_taken`): while buyers pay through BROKA, every deal
+  from agreement until refunded or cancelled, paid-out ones included; with
+  payments off, paid-out ones only.
+
+Every path that takes units locks the listing row first (`inventory.lock`,
+`SELECT ... FOR UPDATE`, in id order), counts, then writes, in one
+transaction: `finalize_deal`, an order's acceptance or proposal, and the stock
+controls. Two requests from the two channels for the last unit run one after
+the other, and the second is refused. Before this, `finalize_deal` counted
+chat deals only and an acceptance counted chat deals before locking anything.
+
+Tracked (`stock_tracked`, `stock_reserved`):
 
 | Moment | Effect |
 |---|---|
-| Store accepts or proposes | Reserves the offered units with one conditional `UPDATE ... WHERE quantity - stock_reserved - <units held by chat deals> >= :units`. Two acceptances can't take the same last unit (`ORDER_STOCK_SHORT`). |
+| Store accepts or proposes | Under the listing lock, counts and reserves the offered units (one conditional `UPDATE` as a second check). `ORDER_STOCK_SHORT` when chat deals and other orders left fewer. |
+| Chat deal agreed | Under the same lock, refused when orders and other deals left fewer ("This listing is sold out." / "Only N left"). The deal's units are counted from its row; `quantity` is not touched. |
 | Declined, cancelled, rejected proposal, expired | Releases what the order held. |
-| Delivered or completed (whichever comes first) | Deducts from on hand and from reserved. |
-| Owner edits stock | `PATCH /stores/{id}/manage/listings/{listing_id}/stock`; on hand can't go below reserved (`STOCK_BELOW_RESERVED`). |
+| Delivered or completed (whichever comes first) | Deducts from `quantity` and from reserved, once. |
+| Chat deal refunded or cancelled | Its units count again (the chat rule, unchanged). |
+| Owner edits stock | `PATCH /stores/{id}/manage/listings/{listing_id}/stock`, below. |
+
+**On hand** is what the seller sees and sets: `quantity` less the units chat
+deals sold. A chat sale never changes `quantity`, so setting on hand to N
+stores `N + sold through chat deals`. The stock controls, the product list,
+the seller's order lines, the product page and every listing card show
+figures from the same count: `stock_on_hand`, `stock_reserved`,
+`stock_committed_to_deals` (chat deals not yet paid out),
+`stock_sold_through_deals`, `available_quantity` (what an order or a deal may
+take now). A tracked product is never hidden because of its stock. With
+nothing available it stays listed as "Out of stock".
+
+The stock controls:
+
+- `quantity`: on hand while counted. It can't be set below what is promised,
+  accepted orders plus chat deals under way (`STOCK_BELOW_RESERVED`, with
+  `reserved`, `in_deals`, `minimum`). While not counted it is the stated
+  quantity, stored as given (at least 1).
+- Counting on: orders the store accepted while it didn't count, and hasn't
+  handed over, get their units reserved, or the change is refused when on
+  hand can't cover them (`STOCK_BELOW_RESERVED`). Without a quantity, on hand
+  starts at the stated quantity less what chat deals sold.
+- Counting off: refused while accepted orders hold units
+  (`STOCK_TRACKING_IN_USE`): their handover is what takes the units off, and
+  with counting off nothing would. With none left and no quantity given it is
+  refused too (`STOCK_QUANTITY_REQUIRED`), since untracked 0 reads as one.
+  Otherwise the stored quantity stays, so chat deals see the same units.
 
 `temporarily_unavailable` pauses new orders for one product: it stays visible,
-labelled, not orderable.
+labelled, not orderable. It doesn't stop chat deals.
 
 ## 4. Payment records
 
@@ -243,7 +294,9 @@ header. Order codes: `ORDERS_OFF`, `IDEMPOTENCY_KEY_REQUIRED`,
 `ORDER_EXPIRED`, `ORDER_CHANGED`, `ORDER_REASON_REQUIRED`, `ORDER_OWN_STORE`,
 `ORDER_TOO_MANY_OPEN`, `STORE_ORDERS_PAUSED`, `STORE_NOT_OPEN`,
 `PAYMENT_PROVIDER_UNKNOWN`, `PAYMENT_ARRANGEMENT_LOCKED`,
-`PAYMENT_ALREADY_REPORTED`, `PAYMENT_REPORT_TOO_EARLY`, `STOCK_BELOW_RESERVED`.
+`PAYMENT_ALREADY_REPORTED`, `PAYMENT_REPORT_TOO_EARLY`. Stock codes:
+`STOCK_BELOW_RESERVED`, `STOCK_TRACKING_IN_USE`, `STOCK_QUANTITY_REQUIRED`,
+`STOCK_QUANTITY_INVALID`, `STOCK_CHANGED`.
 
 ## 10. Configuration and migration
 
@@ -297,13 +350,24 @@ On a development API (`STORE_ORDERS_ENABLED` on by default):
 
 ## 12. Known limits
 
-- A deal agreed in Zeno chat (`finalize_deal`) doesn't check units held by
-  accepted orders. Order reservations do count chat deals' units.
+- Untracked products have no shared count with chat deals: accepting an order
+  for one reserves nothing, so a chat deal can still be agreed for the same
+  unit. Counting the product's stock closes that.
+- An order past its deadline holds its units until it is marked expired, by
+  the 5-minute sweep or when someone opens it.
+- With payments off, a deal paid before payments were switched off starts
+  counting when it is paid out, outside the listing lock (the chat rule,
+  `listings/stock.deals_hold_stock`).
+- Pausing a product (`temporarily_unavailable`) stops new orders, not chat
+  deals.
 - Web-only buyers get no push notifications (the page and the feed show
   updates).
 - The app's own cart still hands each product to its deal room; in-app buyers
   order through the web storefront.
 - Terms §7 still says "Where BROKA offers escrow, the buyer's payment is held
-  by our licensed..." That sentence is about deal escrow, not store orders;
-  it needs legal review before store orders go live. It was not changed here,
-  because the Terms text is versioned and accepted.
+  by our licensed..." That sentence is about deal escrow, not store orders,
+  and the escrow directory store-order buyers choose from lists the same
+  company. A proposed wording, and the versioning steps to apply it, is in
+  `LEGAL_STORE_ORDERS_PROPOSAL.md` for legal review. The Terms are unchanged
+  (revision `2026-10-12`) until it is approved; store orders should not go
+  live in production before then.
