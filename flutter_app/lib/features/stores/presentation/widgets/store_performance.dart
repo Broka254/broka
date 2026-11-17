@@ -43,6 +43,7 @@ import '../../../../widgets/axis_line_chart.dart';
 import '../../../../widgets/factor_trend_chart.dart';
 import '../../data/repositories/stores_repository.dart';
 import '../../domain/models/store_insights.dart';
+import '../../domain/models/store_order.dart' show formatMinorKes;
 
 /// How often the card refreshes itself while the app is in front, at its
 /// quickest: the timer ticks this often and a tick refreshes only once
@@ -203,10 +204,15 @@ class _StorePerformanceSectionState extends State<StorePerformanceSection> {
         ),
       );
     }
+    final orders = data.orders;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       _ratingCard(data),
       const SizedBox(height: 14),
       _kpiGrid(data),
+      if (orders != null && orders.enabled) ...[
+        const SizedBox(height: 14),
+        _ordersCard(data, orders),
+      ],
       const SizedBox(height: 14),
       _trendCard(data),
       if (data.topProducts.isNotEmpty) ...[
@@ -327,6 +333,90 @@ class _StorePerformanceSectionState extends State<StorePerformanceSection> {
           ),
       ]);
     });
+  }
+
+  // ── Orders ────────────────────────────────────────────────────────────────
+
+  /// Store orders for the period: requests, the store's answers, the
+  /// buyers' confirmations and completions, each counted when it happened,
+  /// and the rates between them with the counts they are made of. No money
+  /// is presented as received: the one amount is the agreed total of
+  /// completed orders, and the card says it is not revenue.
+  Widget _ordersCard(StoreInsights d, StoreOrderInsights o) {
+    final items = <({String key, IconData icon, StoreKpi kpi, String label})>[
+      (key: 'kpi-order-requests', icon: Icons.receipt_long_outlined, kpi: o.requests,
+          label: 'Order requests'),
+      (key: 'kpi-order-accepted', icon: Icons.reply_rounded, kpi: o.accepted, label: 'Answered'),
+      (key: 'kpi-order-confirmed', icon: Icons.task_alt_rounded, kpi: o.confirmed,
+          label: 'Confirmed by buyers'),
+      (key: 'kpi-order-completed', icon: Icons.inventory_2_outlined, kpi: o.completed,
+          label: 'Received by buyers'),
+    ];
+    const small = TextStyle(color: BrokaColors.textMid, fontSize: 11.5, height: 1.4);
+    return _card(
+      key: const Key('store-orders-card'),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('Orders · last ${d.days} days',
+            style: const TextStyle(color: BrokaColors.textHigh, fontSize: 15,
+                fontWeight: FontWeight.w800)),
+        const SizedBox(height: 4),
+        Text(o.definitions['requests'] ?? 'Order requests buyers sent. A request is not a sale.',
+            style: small),
+        if (!o.accepting) ...[
+          const SizedBox(height: 4),
+          const Text('New orders are paused for your store.',
+              style: TextStyle(color: BrokaColors.warning, fontSize: 12)),
+        ],
+        const SizedBox(height: 10),
+        LayoutBuilder(builder: (context, box) {
+          final width = (box.maxWidth - 8) / 2;
+          return Wrap(spacing: 8, runSpacing: 8, children: [
+            for (final item in items)
+              SizedBox(
+                width: width,
+                child: _KpiTile(
+                  key: Key(item.key),
+                  icon: item.icon,
+                  value: item.kpi.value,
+                  label: item.label,
+                  change: item.kpi.changePercent,
+                  isNew: item.kpi.isNew,
+                ),
+              ),
+          ]);
+        }),
+        if (o.rates.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          for (final r in o.rates)
+            Padding(
+              key: Key('order-rate-${r.key}'),
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(children: [
+                Expanded(child: Text(r.label,
+                    style: const TextStyle(color: BrokaColors.textHigh, fontSize: 12.5))),
+                Text(
+                  r.percent == null
+                      ? '–'
+                      : '${r.numerator} of ${r.denominator} · ${r.percent!.toStringAsFixed(r.percent! % 1 == 0 ? 0 : 1)}%',
+                  style: const TextStyle(color: BrokaColors.textMid, fontSize: 12),
+                ),
+              ]),
+            ),
+          if (o.definitions['cohort_note'] != null)
+            Text(o.definitions['cohort_note']!, style: small),
+        ],
+        if (o.completedValueMinor > 0) ...[
+          const SizedBox(height: 10),
+          Text(
+            'Agreed value of the orders completed: ${formatMinorKes(o.completedValueMinor)}. '
+            "Payment is arranged between you and your buyers outside BROKA and isn't "
+            'verified, so this is not revenue.',
+            key: const Key('order-completed-value'),
+            style: small,
+          ),
+        ],
+      ]),
+    );
   }
 
   // ── Trend ─────────────────────────────────────────────────────────────────

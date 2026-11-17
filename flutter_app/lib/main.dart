@@ -61,6 +61,7 @@ import 'screens/verification_screen.dart';
 import 'screens/review_screen.dart';
 import 'features/premium/presentation/premium_screen.dart';
 import 'features/stores/presentation/my_store_screen.dart';
+import 'features/stores/presentation/store_order_screen.dart';
 import 'features/stores/presentation/setup/store_setup_screen.dart';
 import 'features/stores/presentation/store_home_screen.dart';
 import 'features/zeno_assistant/presentation/zeno_session_host.dart';
@@ -865,6 +866,15 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
         // lands on the setup wizard.
         '/create-store':     (_) => const StoreSetupScreen(),
         '/store-manage':     (_) => const MyStoreScreen(),
+        // One store order, for its store or its buyer (order pushes;
+        // arguments: {orderId}). Without an id, the store dashboard.
+        '/store-order':      (ctx) {
+          final args = ModalRoute.of(ctx)?.settings.arguments;
+          final id = args is Map ? args['orderId'] : args;
+          return id is String && id.isNotEmpty
+              ? StoreOrderScreen(orderId: id)
+              : const MyStoreScreen();
+        },
         // Arguments: {storeId} or {slug}, and optionally {via}.
         '/store-view':       (_) => const StoreHomeScreen(),
       },

@@ -66,7 +66,28 @@ class StoreProduct {
     this.needsPayment = false,
     this.paidUntil,
     this.issues = const [],
+    this.stockTracked = false,
+    this.stockQuantity,
+    this.stockReserved = 0,
+    this.availableQuantity,
+    this.temporarilyUnavailable = false,
   });
+
+  /// Store orders' stock (backend store_orders/stock.py). Tracked: the
+  /// owner counts it, [stockQuantity] is on hand, accepted orders hold
+  /// [stockReserved] of it and [availableQuantity] is what can still be
+  /// ordered. Untracked (every product until its owner chooses): the store
+  /// confirms availability on each order, which is never "out of stock".
+  final bool stockTracked;
+  final int? stockQuantity;
+  final int stockReserved;
+  final int? availableQuantity;
+
+  /// The owner paused new orders for it: shown to buyers, not orderable.
+  final bool temporarilyUnavailable;
+
+  /// Counted stock that has run out.
+  bool get outOfStock => stockTracked && (availableQuantity ?? 0) <= 0;
 
   final BrokaListing listing;
   final StoreProductState state;
@@ -129,6 +150,11 @@ class StoreProduct {
             StoreProductIssue.fromJson(raw.cast<String, dynamic>()),
       ],
       json: j,
+      stockTracked: j['stock_tracked'] == true,
+      stockQuantity: (j['quantity'] as num?)?.toInt(),
+      stockReserved: (j['stock_reserved'] as num?)?.toInt() ?? 0,
+      availableQuantity: (j['available_quantity'] as num?)?.toInt(),
+      temporarilyUnavailable: j['temporarily_unavailable'] == true,
     );
   }
 }

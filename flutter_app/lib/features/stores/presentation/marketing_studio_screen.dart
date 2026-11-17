@@ -1659,6 +1659,16 @@ class _MeasuredCard extends StatelessWidget {
           tile(Icons.download_rounded, '${events.downloads}', 'Images saved\nor sent'),
           tile(Icons.ios_share_rounded, '${events.shares}', 'Times you\nshared'),
         ]),
+        // Store orders from the campaign's links: requests are buyers
+        // asking, not sales, and none of these is a payment BROKA saw.
+        if (events.orders case final orders?) ...[
+          const SizedBox(height: 10),
+          Row(key: const Key('campaign-orders'), children: [
+            tile(Icons.receipt_long_outlined, '${orders.requests}', 'Order requests\nfrom links'),
+            tile(Icons.task_alt_rounded, '${orders.confirmed}', 'Confirmed\nby buyers'),
+            tile(Icons.inventory_2_outlined, '${orders.completed}', 'Received\nby buyers'),
+          ]),
+        ],
         const SizedBox(height: 12),
         const Divider(height: 1, color: BrokaColors.border),
         const SizedBox(height: 10),

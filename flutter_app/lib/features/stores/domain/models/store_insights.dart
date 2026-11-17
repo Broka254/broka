@@ -178,6 +178,9 @@ class StoreInsights {
   final List<StoreAdvice> positives;
   final List<StoreAdvice> negatives;
 
+  /// Store orders for the period; null from a backend without them.
+  final StoreOrderInsights? orders;
+
   const StoreInsights({
     required this.storeId,
     required this.storeName,
@@ -215,6 +218,7 @@ class StoreInsights {
     this.topProducts = const [],
     this.positives = const [],
     this.negatives = const [],
+    this.orders,
   });
 
   factory StoreInsights.fromJson(Map<String, dynamic> j) {
@@ -282,6 +286,7 @@ class StoreInsights {
         for (final row in advice['negatives'] as List? ?? const [])
           if (row is Map) StoreAdvice.fromJson(row.cast<String, dynamic>()),
       ],
+      orders: StoreOrderInsights.fromJson(j['orders']),
     );
   }
 
@@ -323,4 +328,112 @@ enum StoreMetric {
   const StoreMetric(this.label, this.axisTitle);
   final String label;
   final String axisTitle;
+}
+
+/// One order rate, always with the counts it is made of: "3 of 8" is shown
+/// beside the percentage, never a bare percentage (backend
+/// store_orders/analytics.py).
+class StoreOrderRate {
+  final String key;
+  final int numerator;
+  final int denominator;
+
+  /// Null when there is nothing to divide by.
+  final double? percent;
+  final String definition;
+
+  const StoreOrderRate({
+    required this.key,
+    this.numerator = 0,
+    this.denominator = 0,
+    this.percent,
+    this.definition = '',
+  });
+
+  factory StoreOrderRate.fromJson(Map<String, dynamic> j) => StoreOrderRate(
+        key: j['key'] as String? ?? '',
+        numerator: (j['numerator'] as num?)?.toInt() ?? 0,
+        denominator: (j['denominator'] as num?)?.toInt() ?? 0,
+        percent: (j['percent'] as num?)?.toDouble(),
+        definition: j['definition'] as String? ?? '',
+      );
+
+  String get label => switch (key) {
+        'view_to_request' => 'Views to order requests',
+        'request_to_acceptance' => 'Requests the store answered',
+        'acceptance_to_confirmation' => 'Answered, then confirmed by the buyer',
+        'confirmed_to_completed' => 'Confirmed, then received by the buyer',
+        'completion_rate' => 'Requests completed',
+        _ => key.replaceAll('_', ' '),
+      };
+}
+
+/// The orders block of the insights. Requests, acceptances, confirmations
+/// and completions are kept apart, and none of them is a payment: BROKA
+/// does not see the money, so the one money figure is the agreed total of
+/// completed orders, and it is labelled as not being revenue.
+class StoreOrderInsights {
+  final bool enabled;
+  final bool accepting;
+  final StoreKpi requests;
+  final StoreKpi accepted;
+  final StoreKpi confirmed;
+  final StoreKpi completed;
+  final StoreKpi cartAdditions;
+  final int completedValueMinor;
+  final List<StoreOrderRate> rates;
+
+  /// Requests waiting for the store's answer, and those older than a day.
+  final int awaitingStore;
+  final int staleRequests;
+
+  /// Confirmed orders still to prepare or hand over.
+  final int toFulfil;
+
+  /// What each figure counts, in the server's words.
+  final Map<String, String> definitions;
+
+  const StoreOrderInsights({
+    this.enabled = false,
+    this.accepting = true,
+    this.requests = const StoreKpi(),
+    this.accepted = const StoreKpi(),
+    this.confirmed = const StoreKpi(),
+    this.completed = const StoreKpi(),
+    this.cartAdditions = const StoreKpi(),
+    this.completedValueMinor = 0,
+    this.rates = const [],
+    this.awaitingStore = 0,
+    this.staleRequests = 0,
+    this.toFulfil = 0,
+    this.definitions = const {},
+  });
+
+  static StoreOrderInsights? fromJson(Object? json) {
+    if (json is! Map) return null;
+    final kpis = (json['kpis'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final pipeline = (json['pipeline'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final definitions = (json['definitions'] as Map?) ?? const {};
+    return StoreOrderInsights(
+      enabled: json['enabled'] == true,
+      accepting: json['accepting'] != false,
+      requests: StoreKpi.fromJson(kpis['requests']),
+      accepted: StoreKpi.fromJson(kpis['accepted']),
+      confirmed: StoreKpi.fromJson(kpis['confirmed']),
+      completed: StoreKpi.fromJson(kpis['completed']),
+      cartAdditions: StoreKpi.fromJson(kpis['cart_additions']),
+      completedValueMinor: (json['completed_value_minor'] as num?)?.toInt() ?? 0,
+      rates: [
+        for (final r in json['rates'] as List? ?? const [])
+          if (r is Map) StoreOrderRate.fromJson(r.cast<String, dynamic>()),
+      ],
+      awaitingStore: (pipeline['awaiting_store'] as num?)?.toInt() ?? 0,
+      staleRequests: (pipeline['stale_requests'] as num?)?.toInt() ?? 0,
+      toFulfil: (pipeline['to_fulfil'] as num?)?.toInt() ?? 0,
+      definitions: {
+        for (final e in definitions.entries)
+          if (e.value is String) e.key.toString(): e.value as String,
+      },
+    );
+  }
 }

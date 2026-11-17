@@ -14,6 +14,7 @@ import '../../domain/models/store.dart';
 import '../../domain/models/store_insights.dart';
 import '../../domain/models/store_billing.dart';
 import '../../domain/models/store_campaign.dart';
+import '../../domain/models/store_order.dart';
 import '../../domain/models/store_product.dart';
 import '../../domain/models/store_reviews.dart';
 import '../../../../core/errors/user_facing_error.dart';
@@ -617,6 +618,160 @@ class StoresRepository {
           {'kind': kind, if (platform != null && platform.isNotEmpty) 'platform': platform},
         );
       });
+
+  // ── Store orders (backend api/domains/store_orders/) ─────────────────────
+  //
+  // The server decides every status, price and total, and answers each
+  // action with the order as it now stands - the screen shows that answer,
+  // never its own guess. A refused action (the buyer cancelled meanwhile,
+  // an offer lapsed, stock ran short) comes back as a Failure whose
+  // message says why.
+
+  /// The store's orders in one group (StoreOrderGroup.value). Owner only.
+  Future<Result<StoreOrdersPage>> getStoreOrders(
+    String storeId, {
+    String group = 'needs_action',
+    String? search,
+    int limit = 20,
+    int offset = 0,
+  }) =>
+      _guard(() async => StoreOrdersPage.fromJson(await _client.get(
+            '/stores/$storeId/orders',
+            queryParams: {
+              'group': group,
+              'limit': limit.toString(),
+              'offset': offset.toString(),
+              if (search != null && search.trim().isNotEmpty) 'q': search.trim(),
+            },
+          ) as Map<String, dynamic>));
+
+  /// The counts behind the Orders tab, and the owner's unread updates.
+  Future<Result<StoreOrdersOverview>> getStoreOrdersOverview(String storeId) =>
+      _guard(() async => StoreOrdersOverview.fromJson(
+          await _client.get('/stores/$storeId/orders/summary') as Map<String, dynamic>));
+
+  /// One order, as the caller (its store or its buyer) may see it.
+  Future<Result<StoreOrder>> getOrder(String orderId) => _guard(() async =>
+      StoreOrder.fromJson(await _client.get('/orders/$orderId') as Map<String, dynamic>));
+
+  /// Marks this order's updates read in the caller's own feed. Best-effort.
+  Future<Result<int>> markOrderUpdatesRead(String orderId) => _guard(() async {
+        final data = await _client.post('/orders/notifications/read', {'order_id': orderId});
+        return ((data as Map?)?['marked'] as num?)?.toInt() ?? 0;
+      });
+
+  Future<Result<StoreOrder>> _orderAction(String orderId, StoreOrderAction action,
+          [Map<String, dynamic> body = const {}]) =>
+      _guard(() async => StoreOrder.fromJson(
+          await _client.post('/orders/$orderId/${action.path}', body) as Map<String, dynamic>));
+
+  /// Accepts the request as the buyer asked it, optionally with a delivery
+  /// charge (in cents) and handover details. The buyer confirms next.
+  Future<Result<StoreOrder>> acceptOrder(String orderId,
+          {int? deliveryFeeMinor, String? sellerNote, String? fulfilmentNote}) =>
+      _orderAction(orderId, StoreOrderAction.accept, {
+        if (deliveryFeeMinor != null) 'delivery_fee_minor': deliveryFeeMinor,
+        if (_filled(sellerNote)) 'seller_note': sellerNote!.trim(),
+        if (_filled(fulfilmentNote)) 'fulfilment_note': fulfilmentNote!.trim(),
+      });
+
+  /// Offers different quantities, prices or handover. Nothing goes ahead
+  /// until the buyer accepts the changes.
+  Future<Result<StoreOrder>> proposeOrderChanges(
+    String orderId, {
+    required List<ProposedOrderItem> items,
+    String? fulfilment,
+    int? deliveryFeeMinor,
+    String? sellerNote,
+  }) =>
+      _orderAction(orderId, StoreOrderAction.propose, {
+        'items': [for (final i in items) i.toJson()],
+        if (fulfilment != null) 'fulfilment': fulfilment,
+        if (deliveryFeeMinor != null) 'delivery_fee_minor': deliveryFeeMinor,
+        if (_filled(sellerNote)) 'seller_note': sellerNote!.trim(),
+      });
+
+  /// Declines, with the reason the buyer is shown.
+  Future<Result<StoreOrder>> declineOrder(String orderId, String reason) =>
+      _orderAction(orderId, StoreOrderAction.decline, {'reason': reason.trim()});
+
+  /// Cancels: the store must say why; a buyer may.
+  Future<Result<StoreOrder>> cancelOrder(String orderId, {String? reason}) =>
+      _orderAction(orderId, StoreOrderAction.cancel, {
+        if (_filled(reason)) 'reason': reason!.trim(),
+      });
+
+  Future<Result<StoreOrder>> startPreparingOrder(String orderId) =>
+      _orderAction(orderId, StoreOrderAction.startPreparing);
+
+  /// Ready for collection, with where and when.
+  Future<Result<StoreOrder>> markOrderReady(String orderId, {String? note}) =>
+      _orderAction(orderId, StoreOrderAction.markReady, {
+        if (_filled(note)) 'fulfilment_note': note!.trim(),
+      });
+
+  /// On its way, with who is delivering it.
+  Future<Result<StoreOrder>> dispatchOrder(String orderId, {String? note}) =>
+      _orderAction(orderId, StoreOrderAction.dispatch, {
+        if (_filled(note)) 'dispatch_note': note!.trim(),
+      });
+
+  /// The store reports the handover; only the buyer completes the order.
+  Future<Result<StoreOrder>> markOrderDelivered(String orderId) =>
+      _orderAction(orderId, StoreOrderAction.markDelivered);
+
+  /// The buyer confirms the store's offer - the exact [revision] they saw.
+  Future<Result<StoreOrder>> confirmOrder(String orderId, int revision) =>
+      _orderAction(orderId, StoreOrderAction.confirm, {'revision': revision});
+
+  Future<Result<StoreOrder>> rejectOrderProposal(String orderId, {String? note}) =>
+      _orderAction(orderId, StoreOrderAction.rejectProposal, {
+        if (_filled(note)) 'note': note!.trim(),
+      });
+
+  Future<Result<StoreOrder>> confirmOrderReceived(String orderId) =>
+      _orderAction(orderId, StoreOrderAction.confirmReceived);
+
+  Future<Result<StoreOrder>> reportOrderProblem(String orderId, String note) =>
+      _orderAction(orderId, StoreOrderAction.reportProblem, {'note': note.trim()});
+
+  /// Records what the caller says happened with the payment. It is their
+  /// report, labelled as theirs; BROKA does not see or verify payments.
+  Future<Result<StoreOrder>> reportOrderPayment(String orderId,
+          {required String kind, String? reference, String? note}) =>
+      _guard(() async => StoreOrder.fromJson(await _client.post('/orders/$orderId/payment-reports', {
+            'kind': kind,
+            if (_filled(reference)) 'reference': reference!.trim(),
+            if (_filled(note)) 'note': note!.trim(),
+          }) as Map<String, dynamic>));
+
+  /// The owner's stock switches for one product: whether its stock is
+  /// counted, how many are on hand, and a pause on new orders for it.
+  Future<Result<StoreListingStock>> setListingStock(
+    String storeId,
+    String listingId, {
+    bool? tracked,
+    int? quantity,
+    bool? temporarilyUnavailable,
+  }) =>
+      _guard(() async => StoreListingStock.fromJson(await _client.patch(
+            '/stores/$storeId/manage/listings/$listingId/stock',
+            {
+              if (tracked != null) 'stock_tracked': tracked,
+              if (quantity != null) 'quantity': quantity,
+              if (temporarilyUnavailable != null) 'temporarily_unavailable': temporarilyUnavailable,
+            },
+          ) as Map<String, dynamic>));
+
+  /// Takes new order requests again, or pauses them with [note] for buyers
+  /// ("Back on Monday"). Orders already sent carry on either way.
+  Future<Result<Store>> setAcceptingOrders(String storeId, bool accepting, {String? note}) =>
+      updateStore(storeId, {
+        'accepting_orders': accepting,
+        if (!accepting) 'orders_pause_note': (note ?? '').trim(),
+      });
+
+  static bool _filled(String? text) => text != null && text.trim().isNotEmpty;
 
   /// Suggestions for a title, description, caption or store description.
   /// Nothing is saved to the listing.

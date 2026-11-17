@@ -697,6 +697,12 @@ class NotificationService {
       await showFeedbackUpdateFromPush(data);
       return;
     }
+    if (data['type'] == storeOrderType) {
+      // An order update (backend store_orders/notify.py). FCM draws nothing
+      // while the app is in front, and a request left unanswered expires.
+      await showStoreOrderFromPush(data);
+      return;
+    }
     if (data['type'] == listingReportedType) {
       // A buyer marked one of the user's listings unavailable: it is hidden
       // from buyers until they say it isn't. FCM draws nothing while the
@@ -1809,6 +1815,49 @@ class NotificationService {
   /// Updates channel while the app is in front (Android draws it by itself
   /// otherwise, from the push's notification block). One notification per
   /// submission: a second reply replaces the first.
+  /// A store order update: a new request for a store, the store's answer
+  /// for its buyer, and every step after (backend store_orders/notify.py).
+  static const storeOrderType = 'store_order';
+
+  /// Draws a store order update while the app is in front, one
+  /// notification per order (the latest replaces the one before, as the
+  /// server's android_tag does for a closed app). Only the order id is
+  /// read from the payload for the tap; the screen fetches the order as
+  /// this account may see it.
+  Future<void> showStoreOrderFromPush(Map<String, dynamic> data) async {
+    if (!_ready) return;
+    final id = _nonEmpty(data['order_id']);
+    if (id == null) return;
+    final title = _nonEmpty(data['title']) ?? 'Order update';
+    final body = _nonEmpty(data['body']) ?? 'Open the order to see what changed.';
+    final tag = 'store_order:$id';
+    try {
+      await _plugin.show(
+        0,
+        title,
+        body,
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            _updatesChannel.id,
+            _updatesChannel.name,
+            channelDescription: _updatesChannel.description,
+            importance: Importance.high,
+            priority: Priority.high,
+            category: AndroidNotificationCategory.message,
+            tag: tag,
+            icon: smallIcon,
+            color: _accent,
+            styleInformation: BigTextStyleInformation(body),
+          ),
+          iOS: DarwinNotificationDetails(threadIdentifier: tag),
+        ),
+        payload: jsonEncode({'type': storeOrderType, 'order_id': id}),
+      );
+    } catch (e) {
+      debugPrint('[Notifications] showStoreOrder failed: $e');
+    }
+  }
+
   Future<void> showFeedbackUpdateFromPush(Map<String, dynamic> data) async {
     if (!_ready) return;
     final id = _nonEmpty(data['feedbackId']);
@@ -1995,6 +2044,24 @@ class NotificationService {
         return;
       }
       if (topRouteName(nav) != '/seller-dashboard') nav.pushNamed('/seller-dashboard');
+      return;
+    }
+    if (type == storeOrderType) {
+      // A store order update, tapped: the order itself, for its store or
+      // its buyer. Only the id is read from the untrusted payload; the
+      // screen fetches the order, and the API answers 404 for an order
+      // this account has no part in. Without an id, My Store's dashboard.
+      // Guests sign in first - orders are an account's own.
+      if (!ApiService.isLoggedIn) {
+        nav.pushNamed('/auth');
+        return;
+      }
+      final orderId = _nonEmpty(data['order_id']);
+      if (orderId == null) {
+        if (topRouteName(nav) != '/store-manage') nav.pushNamed('/store-manage');
+        return;
+      }
+      nav.pushNamed('/store-order', arguments: {'orderId': orderId});
       return;
     }
     if (type == 'service_communication') {
