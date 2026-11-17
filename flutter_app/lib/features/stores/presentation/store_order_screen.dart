@@ -589,10 +589,15 @@ class _StoreOrderScreenState extends State<StoreOrderScreen> {
               Text('$quantity × $price${i.priceUnit != null ? ' / ${i.priceUnit}' : ''}',
                   style: TextStyle(
                       color: i.changed ? BrokaColors.warning : BrokaColors.textMid, fontSize: 12)),
-            if (o.isSeller && i.stockTracked)
+            // Every product's count, counted by the store or not; on hand
+            // only where the store keeps one.
+            if (o.isSeller && (i.stockTracked || i.stockAvailable != null))
               Text(
-                'Stock: ${i.stockOnHand ?? 0} on hand, ${i.stockAvailable ?? 0} free to order'
+                'Stock: ${i.stockTracked ? '${i.stockOnHand ?? 0} on hand, ' : ''}'
+                '${i.stockAvailable ?? 0} free to order'
+                '${(i.stockInDeals ?? 0) > 0 ? ', ${i.stockInDeals} in chat deals' : ''}'
                 '${i.reservedQuantity > 0 ? ', ${i.reservedQuantity} set aside for this order' : ''}',
+                key: Key('order-item-stock-${i.id}'),
                 style: const TextStyle(color: BrokaColors.textLow, fontSize: 11.5),
               ),
           ]),

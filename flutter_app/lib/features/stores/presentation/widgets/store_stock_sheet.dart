@@ -1,15 +1,19 @@
 // A product's stock, as its owner manages it for store orders
-// (PATCH /stores/{id}/manage/listings/{listing_id}/stock):
+// (PATCH /stores/{id}/manage/listings/{listing_id}/stock). Orders and chat
+// deals take units from one count either way (backend listings/inventory.py):
+// accepting an order sets units aside, handing it over takes them off, and
+// an order that ends without a sale gives them back.
 //
-//   counted     the owner says how many are on hand. Accepting an order
-//               sets units aside; handing it over takes them off; an order
-//               that ends without a sale gives them back.
-//   not counted every product until its owner chooses. The store confirms
-//               availability on each order - never "out of stock".
+//   counted     the owner keeps an on-hand number and restocks it. With
+//               none left the product stays listed as out of stock.
+//   not counted every product until its owner chooses: the listing's
+//               stated quantity is what it sells, and with nothing left it
+//               shows as sold.
 //   paused      shown to buyers, labelled, and not orderable for now.
 //
-// The server checks again: on hand can't go below what accepted orders
-// hold, and its refusal is shown in its own words.
+// Switching between the first two keeps every unit already promised. The
+// server checks again: a count can't go below what is promised, and its
+// refusal is shown in its own words.
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -75,10 +79,20 @@ class _StoreStockSheetState extends State<StoreStockSheet> {
         setState(() => _problem = 'Say how many you have - 0 if none are left.');
         return;
       }
+      // What is promised can't be taken back by a lower count: units set
+      // aside for accepted orders, and units in chat deals under way. The
+      // server checks the same (and, when counting starts, adds orders the
+      // store accepted before it counted).
       final reserved = widget.product.stockReserved;
-      if (quantity < reserved) {
-        setState(() => _problem =
-            '$reserved of these are set aside for accepted orders. Set at least $reserved.');
+      final inDeals = widget.product.stockInDeals;
+      final promised = reserved + inDeals;
+      if (quantity < promised) {
+        setState(() => _problem = inDeals == 0
+            ? '$reserved of these are set aside for accepted orders. Set at least $reserved.'
+            : reserved == 0
+                ? '$inDeals of these are in chat deals still under way. Set at least $inDeals.'
+                : '$promised of these are promised: $reserved to accepted orders and $inDeals '
+                    'to chat deals. Set at least $promised.');
         return;
       }
     }
@@ -109,6 +123,8 @@ class _StoreStockSheetState extends State<StoreStockSheet> {
   Widget build(BuildContext context) {
     final p = widget.product;
     const hint = TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.4);
+    // What an order or a chat deal may still take (the server's count).
+    final left = p.availableQuantity ?? p.stockQuantity ?? 1;
     return SafeArea(
       child: Padding(
         // Above the keyboard while the quantity is typed.
@@ -142,8 +158,10 @@ class _StoreStockSheetState extends State<StoreStockSheet> {
               title: const Text('Count stock for this product',
                   style: TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.w600)),
               subtitle: const Text(
-                  'Accepting an order sets units aside; they come off when the order is '
-                  'handed over, and go back if it ends without a sale.',
+                  'Keep an on-hand number and restock it; with none left it stays listed as '
+                  'out of stock. Either way, accepting an order sets units aside, handing it '
+                  'over takes them off, and chat deals take from the same count.',
+                  key: Key('stock-tracked-note'),
                   style: hint),
             ),
             if (_tracked) ...[
@@ -161,12 +179,26 @@ class _StoreStockSheetState extends State<StoreStockSheet> {
                   padding: const EdgeInsets.only(top: 6),
                   child: Text('${p.stockReserved} set aside for accepted orders.', style: hint),
                 ),
+              if (p.stockInDeals > 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text('${p.stockInDeals} in chat deals still under way.',
+                      key: const Key('stock-in-deals'), style: hint),
+                ),
+              if (p.stockTracked && p.availableQuantity != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text('${p.availableQuantity} free for new orders and deals.',
+                      key: const Key('stock-available'), style: hint),
+                ),
             ] else
               Padding(
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Text(
-                  "Not counted: you confirm what you have on each order, and buyers never see "
-                  "it as out of stock. A buyer can ask for up to ${p.stockQuantity ?? 1}.",
+                  "Not counted: orders and chat deals take from the listing's quantity "
+                  '(${p.stockQuantity ?? 1}), and with none left it shows as sold. '
+                  '$left can be ordered now.',
+                  key: const Key('stock-untracked-note'),
                   style: hint,
                 ),
               ),
@@ -213,7 +245,9 @@ String? storeStockNote(StoreProduct p) {
   if (!p.stockTracked) return null;
   if (p.outOfStock) return 'Out of stock';
   final left = p.availableQuantity ?? 0;
-  return p.stockReserved > 0
-      ? '$left in stock to order · ${p.stockReserved} set aside'
-      : '$left in stock';
+  final promised = [
+    if (p.stockReserved > 0) '${p.stockReserved} set aside',
+    if (p.stockInDeals > 0) '${p.stockInDeals} in chat deals',
+  ];
+  return promised.isEmpty ? '$left in stock' : '$left in stock to order · ${promised.join(' · ')}';
 }

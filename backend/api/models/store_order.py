@@ -146,12 +146,15 @@ class StoreOrderItem(Base):
     final_quantity = sa.Column(sa.Integer, nullable=True)
     final_unit_price_minor = sa.Column(sa.BigInteger, nullable=True)
 
-    # Tracked stock this line holds on the listing (Listing.stock_reserved),
-    # and what it finally took off the shelf. stock_state:
-    #   none      nothing reserved (untracked product, or not accepted yet)
+    # Stock this line holds on the listing (Listing.stock_reserved), and
+    # what it finally took off the shelf (listings/inventory.py counts it as
+    # sold through orders). stock_state:
+    #   none      nothing reserved (not accepted yet, or accepted before
+    #             every product's stock was counted)
     #   reserved  holding reserved_quantity units
     #   released  gave them back (rejected, cancelled, declined, expired)
-    #   deducted  handed over: deducted_quantity came off Listing.quantity
+    #   deducted  handed over: deducted_quantity units are sold (off
+    #             Listing.quantity when its seller counts the stock)
     reserved_quantity = sa.Column(sa.Integer, nullable=False, default=0)
     deducted_quantity = sa.Column(sa.Integer, nullable=False, default=0)
     stock_state = sa.Column(sa.String(12), nullable=False, default="none")

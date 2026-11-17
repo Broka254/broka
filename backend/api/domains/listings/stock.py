@@ -27,6 +27,12 @@ which catches every other way a deal ends - refunds, cancellations, payouts
 
 Auctions are left alone: one item, sold through its own lifecycle
 (domains/auctions/lifecycle.py), which already sets these statuses itself.
+
+Units left to sell are counted in one place for chat deals and store orders
+alike - listings/inventory.py. Store orders take units too: a stated
+quantity whose every unit is promised or sold, through either channel, is
+hidden the same way, while a store product whose stock its seller counts is
+never hidden by stock (status_for).
 """
 from __future__ import annotations
 
@@ -61,6 +67,12 @@ def _holding_deal():
     if deals_hold_stock():
         return Deal.status.not_in(_RELEASING_STATUSES)
     return Deal.status == DealStatus.released
+
+
+def holding_deal():
+    """SQL: a deal whose units are off sale - for the shared count
+    (listings/inventory.py)."""
+    return _holding_deal()
 
 # A deal in one of these holds its units. Refunded and cancelled deals gave
 # them back; "negotiating" is not an agreement (every Deal row is created at
@@ -101,16 +113,25 @@ async def units_taken(db: AsyncSession, listing_id: str) -> tuple[int, int]:
 
 
 async def units_left(db: AsyncSession, listing: Listing) -> int:
-    taken, _ = await units_taken(db, listing.id)
-    return max(units_total(listing) - taken, 0)
+    """Units a buyer could still be sold, by the shared count
+    (listings/inventory.py): chat deals and accepted store orders both."""
+    from . import inventory
+    return (await inventory.count(db, listing)).available
 
 
 def status_for(listing: Listing, taken: int, sold: int) -> Optional[ListingStatus]:
     """The status stock says a direct listing should have, or None when it
-    isn't stock's to decide."""
+    isn't stock's to decide.
+
+    A product whose stock its seller counts (Listing.stock_tracked) is never
+    hidden by stock: it is a shelf the seller restocks, so with none left it
+    stays listed and says "Out of stock" (listings/inventory.py), whichever
+    channel took the last unit - a chat deal or a store order."""
     current = getattr(listing.status, "value", listing.status)
     if not is_stocked(listing) or current not in {s.value for s in _STOCK_STATUSES}:
         return None
+    if bool(getattr(listing, "stock_tracked", False)) and getattr(listing, "quantity", None) is not None:
+        return ListingStatus.active
     total = units_total(listing)
     if sold >= total:
         return ListingStatus.completed
@@ -121,12 +142,17 @@ def status_for(listing: Listing, taken: int, sold: int) -> Optional[ListingStatu
 
 async def sync_listing_stock(db: AsyncSession, now=None) -> int:
     """The sweep: bring every direct listing's status in line with its
-    deals. Returns how many listings changed.
+    deals and store orders. Returns how many listings changed.
 
     Looks only at listings stock has hidden (pending, completed) and at
-    active ones that have any deal - a listing no one has agreed to buy
-    has all its units by definition. One grouped query for the units,
-    then one UPDATE per listing that actually changes."""
+    active ones that have any deal, any reservation or any store-order sale
+    - a listing nothing has taken units from has all of them by definition.
+    Grouped queries for the units, then one UPDATE per listing that
+    actually changes. Units are counted as listings/inventory.py counts
+    them, so the sweep never undoes what an order or a deal just set."""
+    from api.models.store_order import StoreOrderItem
+    from . import inventory
+
     units = func.coalesce(Deal.quantity, 1)
     taken_q = (
         select(Deal.listing_id.label("listing_id"),
@@ -142,20 +168,38 @@ async def sync_listing_stock(db: AsyncSession, now=None) -> int:
         .group_by(Deal.listing_id)
         .subquery()
     )
+    # Units store orders handed over (inventory.order_units).
+    orders_q = (
+        select(StoreOrderItem.listing_id.label("listing_id"),
+               func.sum(StoreOrderItem.deducted_quantity).label("sold"))
+        .where(StoreOrderItem.deducted_quantity > 0)
+        .group_by(StoreOrderItem.listing_id)
+        .subquery()
+    )
     rows = (await db.execute(
-        select(Listing, func.coalesce(taken_q.c.taken, 0), func.coalesce(sold_q.c.sold, 0))
+        select(Listing, func.coalesce(taken_q.c.taken, 0), func.coalesce(sold_q.c.sold, 0),
+               func.coalesce(orders_q.c.sold, 0))
         .outerjoin(taken_q, taken_q.c.listing_id == Listing.id)
         .outerjoin(sold_q, sold_q.c.listing_id == Listing.id)
+        .outerjoin(orders_q, orders_q.c.listing_id == Listing.id)
         .where(
             or_(Listing.listing_type.is_(None), Listing.listing_type != ListingType.auction),
             (Listing.status.in_((ListingStatus.pending, ListingStatus.completed)))
-            | ((Listing.status == ListingStatus.active) & taken_q.c.taken.is_not(None)),
+            | ((Listing.status == ListingStatus.active)
+               & (taken_q.c.taken.is_not(None) | (Listing.stock_reserved > 0)
+                  | orders_q.c.sold.is_not(None))),
         )
+        # Updated in id order, the order every other path takes listing
+        # locks in (listings/inventory.py): this one transaction holds each
+        # row it changes until it commits, and a store order action holding
+        # two of the same listings must not be waiting on it in reverse.
+        .order_by(Listing.id)
     )).all()
 
     changed = 0
-    for listing, taken, sold in rows:
-        target = status_for(listing, int(taken or 0), int(sold or 0))
+    for listing, taken, sold, order_sold in rows:
+        counted = inventory.from_counts(listing, int(taken or 0), int(sold or 0), int(order_sold or 0))
+        target = status_for(listing, counted.taken, counted.sold)
         current = getattr(listing.status, "value", listing.status)
         if target is None or target.value == current:
             continue
@@ -169,7 +213,7 @@ async def sync_listing_stock(db: AsyncSession, now=None) -> int:
         if result.rowcount:
             changed += 1
             logger.info("[stock] listing %s %s -> %s (taken=%s sold=%s of %s)",
-                        listing.id, current, target.value, taken, sold,
-                        units_total(listing))
+                        listing.id, current, target.value, counted.taken, counted.sold,
+                        counted.total)
     await db.commit()
     return changed

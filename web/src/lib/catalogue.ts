@@ -96,16 +96,18 @@ export interface ProductCardData {
   maxQuantity: number
   /** Exact public stock, null when the seller did not state a quantity. */
   quantity?: number | null
-  /** Orderable now, out of the stock the seller counts, or paused by the
-   *  seller. Untracked stock is never "out of stock". */
+  /** Orderable now, none left to order, or paused by the seller. */
   availability?: 'available' | 'out_of_stock' | 'paused'
   /** "Ends in 2d 3h" when the server says this listing is ending soon. */
   endsLabel?: string | null
 }
 
-/** Units left of stock the seller counts, or null when they don't count it. */
-function trackedLeft(listing: Listing): number | null {
-  return listing.stock_tracked === true && typeof listing.available_quantity === 'number'
+/** Units an order may still take, as the API counts them for a store's
+ *  product - whether or not the seller counts its stock, with units in chat
+ *  deals, in accepted orders and already sold taken off - or null when it
+ *  sends no count. */
+function leftToOrder(listing: Listing): number | null {
+  return typeof listing.available_quantity === 'number'
     ? Math.max(0, Math.floor(listing.available_quantity))
     : null
 }
@@ -127,13 +129,13 @@ export function toProductCard(listing: Listing, storeSlug: string, apiUrl: strin
     place: placeLine(listing.location_subcounty, listing.location_county) ?? listing.location_name,
     isAuction: listing.listing_type === 'auction',
     condition: conditionLabel(listing.condition),
-    maxQuantity: trackedLeft(listing) ?? Math.max(1, Math.floor(listing.quantity ?? 1)),
-    // What the card says is in stock: what is left of counted stock, or
-    // what the seller said they have.
-    quantity: trackedLeft(listing) ?? listing.quantity ?? null,
+    maxQuantity: leftToOrder(listing) ?? Math.max(1, Math.floor(listing.quantity ?? 1)),
+    // What the card says is in stock: what the API says is left, or (from
+    // an API that sends no count) what the seller said they have.
+    quantity: leftToOrder(listing) ?? listing.quantity ?? null,
     availability: listing.temporarily_unavailable
       ? 'paused'
-      : trackedLeft(listing) === 0 || listing.out_of_stock
+      : leftToOrder(listing) === 0 || listing.out_of_stock
         ? 'out_of_stock'
         : 'available',
     endsLabel: listing.time_left?.is_expiring_soon

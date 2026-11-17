@@ -118,9 +118,10 @@ export default async function ProductPage({ params, searchParams }: Props) {
   // Store orders switch the web on for buying and asking (STORE_ORDERS.md).
   const webCommerce = store.orders_enabled === true
   const askPath = storeMessagesPath(store.slug, listing.id)
-  // Why a buyer can't order it now, if they can't: removed or sold, out of
-  // the stock the seller counts, or paused by the seller. Untracked stock
-  // is never "out of stock" - the store confirms it on each order.
+  // Why a buyer can't order it now, if they can't: removed or sold, none
+  // left to order (chat deals and accepted orders took it), or paused by
+  // the seller. A product whose every unit is promised or sold and whose
+  // stock the seller doesn't count is no longer active: it reads as gone.
   const unavailable: 'gone' | 'out_of_stock' | 'paused' | null =
     listing.status !== 'active' || listing.reported_sold_out
       ? 'gone'

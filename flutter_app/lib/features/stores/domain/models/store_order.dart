@@ -144,6 +144,7 @@ class StoreOrderItem {
     this.stockTracked = false,
     this.stockOnHand,
     this.stockAvailable,
+    this.stockInDeals,
     this.reservedQuantity = 0,
   });
 
@@ -169,10 +170,15 @@ class StoreOrderItem {
   /// The store can't supply this product (quantity 0).
   final bool removed;
 
-  // The store's own view only (null or zero for the buyer).
+  // The store's own view only (null or zero for the buyer). The backend's
+  // shared count (listings/inventory.py), counted by the store or not:
+  // [stockAvailable] is what another order or a chat deal may still take,
+  // with units in chat deals ([stockInDeals]) and other orders'
+  // reservations already off. [stockOnHand] only when the store counts.
   final bool stockTracked;
   final int? stockOnHand;
   final int? stockAvailable;
+  final int? stockInDeals;
   final int reservedQuantity;
 
   bool get quantityChanged => proposedQuantity != null && proposedQuantity != requestedQuantity;
@@ -197,6 +203,7 @@ class StoreOrderItem {
         stockTracked: j['stock_tracked'] == true,
         stockOnHand: _intOrNull(j['stock_on_hand']),
         stockAvailable: _intOrNull(j['stock_available']),
+        stockInDeals: _intOrNull(j['stock_committed_to_deals']),
         reservedQuantity: _int(j['reserved_quantity']),
       );
 }
@@ -625,26 +632,33 @@ class StoreListingStock {
     this.stockTracked = false,
     this.quantity,
     this.stockReserved = 0,
+    this.stockInDeals = 0,
     this.availableQuantity,
     this.temporarilyUnavailable = false,
   });
 
   final String listingId;
   final bool stockTracked;
+
+  /// On hand while counted; the stated quantity otherwise.
   final int? quantity;
 
   /// Units accepted orders hold until they are handed over.
   final int stockReserved;
 
-  /// What can still be ordered; null when untracked.
+  /// Units chat deals still under way hold.
+  final int stockInDeals;
+
+  /// What an order or a chat deal may still take, counted or not.
   final int? availableQuantity;
   final bool temporarilyUnavailable;
 
   factory StoreListingStock.fromJson(Map<String, dynamic> j) => StoreListingStock(
         listingId: j['listing_id'] as String? ?? '',
         stockTracked: j['stock_tracked'] == true,
-        quantity: _intOrNull(j['quantity']),
+        quantity: _intOrNull(j['stock_on_hand'] ?? j['quantity']),
         stockReserved: _int(j['stock_reserved']),
+        stockInDeals: _int(j['stock_committed_to_deals']),
         availableQuantity: _intOrNull(j['available_quantity']),
         temporarilyUnavailable: j['temporarily_unavailable'] == true,
       );

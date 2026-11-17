@@ -48,7 +48,8 @@ from api.core.econfirm_client import EConfirmError, EConfirmConnectionError, ECo
 from api.core.secrets_crypto import encrypt_secret, decrypt_secret, SecretCryptoError
 from api.models.external_escrow import ExternalEscrow, EConfirmEscrowStatus
 from .repository import DealRepository, MpesaRepository, ExternalEscrowRepository
-from api.domains.listings.stock import deals_hold_stock, is_stocked, status_for, units_taken, units_total
+from api.domains.listings import inventory
+from api.domains.listings.stock import deals_hold_stock, is_stocked, status_for
 from .providers import get_escrow_provider
 from . import policy
 
@@ -353,13 +354,19 @@ class EscrowService:
         # Units. Checked after the join above on purpose: a buyer finishing
         # their own live deal is not refused because it took the last unit.
         units = 1
-        taken = sold = 0
+        counted = None
         if stocked:
             if getattr(listing.status, "value", listing.status) == ListingStatus.cancelled.value:
                 raise HTTPException(status_code=409, detail="This listing has been removed by the seller.")
             units = quantity or 1
-            taken, sold = await units_taken(self.db, listing_id)
-            left = max(units_total(listing) - taken, 0)
+            # Counted under the row lock taken above, by the one rule store
+            # orders reserve by too (listings/inventory.py): units other
+            # chat deals hold, units accepted store orders hold and units
+            # store orders sold are all gone. This used to count chat deals
+            # alone, so a buyer here could be sold units an accepted store
+            # order was waiting for.
+            counted = await inventory.count(self.db, listing)
+            left = counted.available
             if left <= 0:
                 raise HTTPException(status_code=409, detail="This listing is sold out.")
             if units > left:
@@ -392,7 +399,11 @@ class EscrowService:
             # With payments off an agreement takes nothing off sale
             # (stock.deals_hold_stock): the price was agreed, nothing paid.
             held = units if deals_hold_stock() else 0
-            listing.status = status_for(listing, taken + held, sold) or listing.status
+            # Store orders' units count too: an order holding the rest of a
+            # stated quantity leaves the listing pending once this deal takes
+            # what was left.
+            listing.status = status_for(
+                listing, counted.taken + held, counted.sold) or listing.status
         else:
             listing.status = "pending"
         await self.db.commit()

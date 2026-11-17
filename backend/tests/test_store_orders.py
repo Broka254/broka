@@ -23,7 +23,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select, text, update
 
 import api.database as db_module
-from api.database import Listing, init_db, reset_engine
+from api.database import Deal, DealStatus, Listing, init_db, reset_engine
 from api.models.store_order import (
     StoreOrder, StoreOrderEvent, StoreOrderNotification, StoreOrderPaymentReport,
 )
@@ -643,19 +643,38 @@ class TestStock:
             assert await service.expire_due(db) == []
 
     @pytest.mark.asyncio
-    async def test_untracked_stock_is_never_zero(self, client):
+    async def test_an_uncounted_product_sells_its_stated_quantity(self, client):
+        # Not counted by its seller, a product still has the units its
+        # listing states - none stated reads as one, as the cart always did -
+        # and an accepted order reserves them like any other. It used to
+        # reserve nothing, so the same phone could be sold in a chat deal.
         _, seller_token, store_id = await _seller(client)
         untracked = await _listing(client, seller_token, store_id)
         _, buyer_token = await _buyer(client)
         public = (await client.get(f"/listings/{untracked}")).json()
-        assert public["stock_tracked"] is False and public["available_quantity"] is None
+        assert public["stock_tracked"] is False and public["available_quantity"] == 1
+        r = await _submit(client, buyer_token, store_id, [{"listing_id": untracked, "quantity": 2}])
+        assert r.status_code == 409 and r.json()["detail"]["code"] == "ORDER_ITEM_QUANTITY"
         oid = (await _order(client, buyer_token, store_id, untracked))["id"]
         accepted = await _post(client, seller_token, f"/orders/{oid}/accept")
         assert accepted.status_code == 200
+        assert tuple(await _listing_row(untracked)) == (None, 1)
+        line = accepted.json()["items"][0]
+        assert (line["reserved_quantity"], line["stock_state"], line["stock_available"]) == (1, "reserved", 0)
+        # Its one unit is promised: off sale, as a chat deal for it leaves it.
+        public = (await client.get(f"/listings/{untracked}")).json()
+        assert (public["status"], public["units_left"], public["sold_out"]) == ("pending", 0, True)
+        # Handed over: sold once, and the stated quantity stays as stated.
+        await _post(client, buyer_token, f"/orders/{oid}/confirm", {"revision": 1})
+        await _post(client, seller_token, f"/orders/{oid}/dispatch")
+        await _post(client, seller_token, f"/orders/{oid}/delivered")
         assert tuple(await _listing_row(untracked)) == (None, 0)
-        # A product without a stated quantity reads as one, as the cart always did.
-        r = await _submit(client, buyer_token, store_id, [{"listing_id": untracked, "quantity": 2}])
-        assert r.status_code == 409 and r.json()["detail"]["code"] == "ORDER_ITEM_QUANTITY"
+        assert (await client.get(f"/listings/{untracked}")).json()["status"] == "completed"
+        await _post(client, buyer_token, f"/orders/{oid}/received")
+        # The stock sweep reads the order's sale too, and leaves it sold.
+        await _sweep()
+        public = (await client.get(f"/listings/{untracked}")).json()
+        assert (public["status"], public["units_left"]) == ("completed", 0)
 
     @pytest.mark.asyncio
     async def test_stock_controls(self, client):
@@ -695,7 +714,8 @@ class TestStoreSettings:
     @pytest.mark.asyncio
     async def test_pausing_new_orders_keeps_the_store_open(self, client):
         _, seller_token, store_id = await _seller(client)
-        lid = await _listing(client, seller_token, store_id)
+        # Two: the order accepted below holds one, and a new one asks for the other.
+        lid = await _listing(client, seller_token, store_id, quantity=2)
         _, buyer_token = await _buyer(client)
         open_order = (await _order(client, buyer_token, store_id, lid))["id"]
         r = await client.patch(f"/stores/{store_id}", json={
@@ -1136,3 +1156,517 @@ class TestSchema:
             ("seller_declined", "seller", "submitted", "declined"),
         ]
         assert rows[0].actor_id == buyer_id
+
+
+# ── One count for both channels (listings/inventory.py) ─────────────────────
+#
+# A store product is sold two ways: chat deals (POST /deal/finalize) and
+# store orders. finalize_deal used to count chat deals only, so a chat buyer
+# could be sold units an accepted order was holding; an order counted chat
+# deals before it locked anything, so a deal agreed in that gap was missed;
+# and a product its seller didn't count reserved nothing at all. These pin
+# the one count both channels now take units by, counted or not.
+
+async def _finalize(client, token: str, buyer_id: str, listing_id: str, quantity: int = 1,
+                    price: float = 12500):
+    """A chat deal: the buyer accepts the agreed price for `quantity` units."""
+    return await client.post("/deal/finalize", json={
+        "listing_id": listing_id, "buyer_id": buyer_id, "agreed_price": price, "quantity": quantity,
+    }, headers=_auth(token))
+
+
+async def _set_deal(deal_id: str, status: DealStatus) -> None:
+    """Move a chat deal on, as its payout, refund or cancellation would."""
+    async with db_module.AsyncSessionLocal() as db:
+        deal = await db.get(Deal, deal_id)
+        deal.status = status
+        if status == DealStatus.released:
+            deal.released_at = datetime.utcnow()
+        await db.commit()
+
+
+async def _deal_units(listing_id: str) -> int:
+    """Units in chat deals on the listing that hold stock (payments on: all
+    from agreement until refunded or cancelled)."""
+    async with db_module.AsyncSessionLocal() as db:
+        deals = (await db.execute(select(Deal).where(Deal.listing_id == listing_id))).scalars().all()
+    return sum(int(d.quantity or 1) for d in deals
+               if d.status not in (DealStatus.refunded, DealStatus.cancelled, DealStatus.negotiating))
+
+
+async def _owner_product(client, token: str, store_id: str, listing_id: str) -> dict:
+    page = (await client.get(f"/stores/{store_id}/manage/listings", headers=_auth(token))).json()
+    return next(p for p in page["items"] if p["id"] == listing_id)
+
+
+async def _sweep() -> None:
+    from api.core.workers import task_sync_listing_stock
+    await task_sync_listing_stock()
+
+
+class TestCrossChannelStock:
+    @pytest.mark.asyncio
+    async def test_an_accepted_order_holds_its_units_against_chat_deals(self, client):
+        # 1. A store order reserves the last units: a chat deal can't have them.
+        _, seller_token, store_id = await _seller(client)
+        lid = await _listing(client, seller_token, store_id, quantity=3)
+        await _track(client, seller_token, store_id, lid, 3)
+        _, buyer_token = await _buyer(client)
+        oid = (await _order(client, buyer_token, store_id, lid, quantity=2))["id"]
+        assert (await _post(client, seller_token, f"/orders/{oid}/accept")).status_code == 200
+
+        chat_id, chat_token = await _buyer(client, name="Chat Buyer")
+        r = await _finalize(client, chat_token, chat_id, lid, quantity=2)
+        # It used to be allowed: finalize_deal counted chat deals only.
+        assert r.status_code == 409 and r.json()["detail"] == "Only 1 left - this deal can be for 1 at most."
+        assert (await _finalize(client, chat_token, chat_id, lid, quantity=1)).status_code == 201
+
+        # The last unit is gone on both channels now.
+        late_id, late_token = await _buyer(client, name="Late Chat Buyer")
+        r = await _finalize(client, late_token, late_id, lid, quantity=1)
+        assert r.status_code == 409 and r.json()["detail"] == "This listing is sold out."
+        late = await _submit(client, late_token, store_id, [{"listing_id": lid, "quantity": 1}])
+        assert late.status_code == 409 and late.json()["detail"]["code"] == "ORDER_ITEM_OUT_OF_STOCK"
+        assert tuple(await _listing_row(lid)) == (3, 2)
+        assert await _deal_units(lid) == 1
+        # A counted product stays listed, saying it's out of stock.
+        public = (await client.get(f"/listings/{lid}")).json()
+        assert public["status"] == "active"
+        assert (public["units_left"], public["available_quantity"], public["out_of_stock"],
+                public["available"]) == (0, 0, True, False)
+
+    @pytest.mark.asyncio
+    async def test_a_chat_deal_holds_its_units_against_store_orders(self, client):
+        # 2. A chat deal takes a unit first: the store can't accept it again.
+        _, seller_token, store_id = await _seller(client)
+        lid = await _listing(client, seller_token, store_id, quantity=2)
+        await _track(client, seller_token, store_id, lid, 2)
+        _, buyer_token = await _buyer(client)
+        oid = (await _order(client, buyer_token, store_id, lid, quantity=2))["id"]
+        chat_id, chat_token = await _buyer(client, name="Chat Buyer")
+        assert (await _finalize(client, chat_token, chat_id, lid, quantity=1)).status_code == 201
+
+        r = await _post(client, seller_token, f"/orders/{oid}/accept")
+        assert r.status_code == 409 and r.json()["detail"]["code"] == "ORDER_STOCK_SHORT"
+        assert r.json()["detail"]["available"] == 1
+        assert tuple(await _listing_row(lid)) == (2, 0)
+        # What is left can still be offered.
+        item_id = (await client.get(f"/orders/{oid}", headers=_auth(seller_token))).json()["items"][0]["id"]
+        offer = await _post(client, seller_token, f"/orders/{oid}/propose",
+                            {"items": [{"item_id": item_id, "quantity": 1}]})
+        assert offer.status_code == 200, offer.text
+        assert tuple(await _listing_row(lid)) == (2, 1)
+        _, third_token = await _buyer(client, name="Third Buyer")
+        late = await _submit(client, third_token, store_id, [{"listing_id": lid, "quantity": 1}])
+        assert late.json()["detail"]["code"] == "ORDER_ITEM_OUT_OF_STOCK"
+        third_chat_id, third_chat_token = await _buyer(client, name="Third Chat Buyer")
+        r = await _finalize(client, third_chat_token, third_chat_id, lid, quantity=1)
+        assert r.status_code == 409 and r.json()["detail"] == "This listing is sold out."
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("counted", [True, False], ids=["counted", "not_counted"])
+    @pytest.mark.parametrize("first", ["store_order", "chat_deal"])
+    async def test_two_channels_racing_for_the_last_unit_cannot_both_get_it(
+            self, client, monkeypatch, first, counted):
+        """3. Each channel's request holds the listing's lock from before it
+        counts until it commits, so the other waits and then counts again.
+        The first is held mid-count - after reading the chat deals, before
+        writing - to open exactly the window the old code had: there, the
+        second sailed through and both took the unit. A product its seller
+        doesn't count is held the same way; it used to reserve nothing."""
+        if db_module.engine.dialect.name != "postgresql":
+            pytest.skip("needs PostgreSQL's concurrent writers; SQLite serialises them outright")
+        from api.domains.listings import stock as listing_stock
+
+        _, seller_token, store_id = await _seller(client)
+        lid = await _listing(client, seller_token, store_id, quantity=1)
+        if counted:
+            await _track(client, seller_token, store_id, lid, 1)
+        _, buyer_token = await _buyer(client)
+        oid = (await _order(client, buyer_token, store_id, lid, quantity=1))["id"]
+        chat_id, chat_token = await _buyer(client, name="Racing Chat Buyer")
+
+        counting = asyncio.Event()
+        go_on = asyncio.Event()
+        held = {"once": False}
+        real = listing_stock.units_taken
+
+        async def held_mid_count(db, listing_id):
+            result = await real(db, listing_id)
+            if listing_id == lid and not held["once"]:
+                held["once"] = True
+                counting.set()
+                await asyncio.wait_for(go_on.wait(), 30)
+            return result
+
+        monkeypatch.setattr(listing_stock, "units_taken", held_mid_count)
+        # Where the chat path counted before the shared count existed.
+        monkeypatch.setattr("api.domains.escrow.service.units_taken", held_mid_count, raising=False)
+
+        async def store_order():
+            return await _post(client, seller_token, f"/orders/{oid}/accept")
+
+        async def chat_deal():
+            return await _finalize(client, chat_token, chat_id, lid, quantity=1)
+
+        one, other = (store_order, chat_deal) if first == "store_order" else (chat_deal, store_order)
+        a = asyncio.create_task(one())
+        await asyncio.wait_for(counting.wait(), 30)
+        b = asyncio.create_task(other())
+        await asyncio.sleep(0.5)
+        # The other channel is waiting on the listing's lock, not counting.
+        assert not b.done(), (await b).text
+        go_on.set()
+        ra, rb = await asyncio.wait_for(asyncio.gather(a, b), 30)
+        assert ra.status_code in (200, 201), ra.text
+        assert rb.status_code == 409, rb.text
+        quantity, reserved = await _listing_row(lid)
+        assert (quantity, reserved + await _deal_units(lid)) == (1, 1)
+
+    @pytest.mark.asyncio
+    async def test_an_uncounted_product_is_held_for_an_order_against_chat_deals(self, client):
+        # One phone whose stock the seller doesn't count. An accepted order
+        # holds it, so a chat deal can't be agreed for it; cancelled, it is
+        # free again - and a chat deal for it then holds it against orders.
+        _, seller_token, store_id = await _seller(client)
+        lid = await _listing(client, seller_token, store_id)
+        _, buyer_token = await _buyer(client)
+        oid = (await _order(client, buyer_token, store_id, lid))["id"]
+        assert (await _post(client, seller_token, f"/orders/{oid}/accept")).status_code == 200
+        chat_id, chat_token = await _buyer(client, name="Chat Buyer")
+        r = await _finalize(client, chat_token, chat_id, lid)
+        # It used to be allowed: an uncounted product reserved nothing.
+        assert r.status_code == 409 and r.json()["detail"] == "This listing is sold out."
+        assert (await client.get(f"/listings/{lid}")).json()["status"] == "pending"
+
+        await _post(client, buyer_token, f"/orders/{oid}/cancel")
+        assert tuple(await _listing_row(lid)) == (None, 0)
+        assert (await client.get(f"/listings/{lid}")).json()["status"] == "active"
+        deal = await _finalize(client, chat_token, chat_id, lid)
+        assert deal.status_code == 201
+        _, late_token = await _buyer(client, name="Late Buyer")
+        late = await _submit(client, late_token, store_id, [{"listing_id": lid, "quantity": 1}])
+        assert late.status_code == 409 and late.json()["detail"]["code"] == "ORDER_ITEM_UNAVAILABLE"
+        # Refunded, the deal gives it back (the stock sweep notices refunds,
+        # as it always has for chat deals).
+        await _set_deal(deal.json()["deal_id"], DealStatus.refunded)
+        await _sweep()
+        assert (await client.get(f"/listings/{lid}")).json()["status"] == "active"
+        again = await _submit(client, late_token, store_id, [{"listing_id": lid, "quantity": 1}])
+        assert again.status_code == 201, again.text
+
+    @pytest.mark.asyncio
+    async def test_cancelled_and_expired_orders_give_their_units_to_chat_deals(self, client):
+        # 4. An order ending without a sale releases what it held - to
+        # either channel.
+        from api.domains.store_orders import service
+
+        _, seller_token, store_id = await _seller(client)
+        lid = await _listing(client, seller_token, store_id, quantity=2)
+        await _track(client, seller_token, store_id, lid, 2)
+        _, buyer_token = await _buyer(client)
+        cancelled = (await _order(client, buyer_token, store_id, lid, quantity=1))["id"]
+        lapsing = (await _order(client, buyer_token, store_id, lid, quantity=1))["id"]
+        for oid in (cancelled, lapsing):
+            assert (await _post(client, seller_token, f"/orders/{oid}/accept")).status_code == 200
+        first_id, first_token = await _buyer(client, name="First Chat Buyer")
+        assert (await _finalize(client, first_token, first_id, lid)).status_code == 409
+
+        await _post(client, buyer_token, f"/orders/{cancelled}/cancel", {"reason": "Found it nearby"})
+        assert tuple(await _listing_row(lid)) == (2, 1)
+        assert (await _finalize(client, first_token, first_id, lid)).status_code == 201
+
+        async with db_module.AsyncSessionLocal() as db:
+            await db.execute(update(StoreOrder).where(StoreOrder.id == lapsing)
+                             .values(expires_at=datetime.utcnow() - timedelta(minutes=1)))
+            await db.commit()
+        second_id, second_token = await _buyer(client, name="Second Chat Buyer")
+        assert (await _finalize(client, second_token, second_id, lid)).status_code == 409
+        async with db_module.AsyncSessionLocal() as db:
+            assert await service.expire_due(db)
+        assert tuple(await _listing_row(lid)) == (2, 0)
+        assert (await _finalize(client, second_token, second_id, lid)).status_code == 201
+        assert await _deal_units(lid) == 2
+
+    @pytest.mark.asyncio
+    async def test_a_completed_order_and_a_paid_out_deal_each_take_their_units_once(self, client):
+        # 5. Handover deducts an order's units from on hand once; a chat
+        # deal's units leave on hand once when it is paid out.
+        _, seller_token, store_id = await _seller(client)
+        lid = await _listing(client, seller_token, store_id, quantity=5)
+        await _track(client, seller_token, store_id, lid, 5)
+        _, buyer_token = await _buyer(client)
+        oid = (await _order(client, buyer_token, store_id, lid, quantity=2))["id"]
+        await _post(client, seller_token, f"/orders/{oid}/accept")
+        await _post(client, buyer_token, f"/orders/{oid}/confirm", {"revision": 1})
+        await _post(client, seller_token, f"/orders/{oid}/dispatch")
+        await _post(client, seller_token, f"/orders/{oid}/delivered")
+        assert tuple(await _listing_row(lid)) == (3, 0)
+        await _post(client, buyer_token, f"/orders/{oid}/received")
+        assert tuple(await _listing_row(lid)) == (3, 0)
+
+        chat_id, chat_token = await _buyer(client, name="Chat Buyer")
+        deal = await _finalize(client, chat_token, chat_id, lid, quantity=1)
+        assert deal.status_code == 201
+        before = await _owner_product(client, seller_token, store_id, lid)
+        assert (before["stock_on_hand"], before["stock_committed_to_deals"], before["available_quantity"]) == (3, 1, 2)
+        await _set_deal(deal.json()["deal_id"], DealStatus.released)
+        for _ in range(2):
+            await _sweep()
+            paid_out = await _owner_product(client, seller_token, store_id, lid)
+            # Gone from on hand (sold), no longer "in a deal", and counted once.
+            assert (paid_out["stock_on_hand"], paid_out["stock_committed_to_deals"],
+                    paid_out["stock_sold_through_deals"], paid_out["available_quantity"]) == (2, 0, 1, 2)
+        # quantity itself was never touched by the chat sale.
+        assert tuple(await _listing_row(lid)) == (3, 0)
+        r = await _finalize(client, chat_token, chat_id, lid, quantity=3)
+        assert r.status_code == 409 and "Only 2 left" in r.json()["detail"]
+        r = await _submit(client, buyer_token, store_id, [{"listing_id": lid, "quantity": 3}])
+        assert r.json()["detail"]["code"] == "ORDER_ITEM_QUANTITY" and r.json()["detail"]["available"] == 2
+
+    @pytest.mark.asyncio
+    async def test_refunded_and_cancelled_deals_give_their_units_back(self, client):
+        # 6. As the chat rules always had it: a refunded or cancelled deal
+        # holds nothing - for store orders as much as for other chats.
+        _, seller_token, store_id = await _seller(client)
+        lid = await _listing(client, seller_token, store_id, quantity=1)
+        await _track(client, seller_token, store_id, lid, 1)
+        chat_id, chat_token = await _buyer(client, name="Chat Buyer")
+        deal = await _finalize(client, chat_token, chat_id, lid)
+        assert deal.status_code == 201
+        _, buyer_token = await _buyer(client)
+        r = await _submit(client, buyer_token, store_id, [{"listing_id": lid, "quantity": 1}])
+        assert r.json()["detail"]["code"] == "ORDER_ITEM_OUT_OF_STOCK"
+
+        await _set_deal(deal.json()["deal_id"], DealStatus.refunded)
+        assert (await client.get(f"/listings/{lid}")).json()["available_quantity"] == 1
+        oid = (await _order(client, buyer_token, store_id, lid, quantity=1))["id"]
+        assert (await _post(client, seller_token, f"/orders/{oid}/accept")).status_code == 200
+        await _post(client, buyer_token, f"/orders/{oid}/cancel")
+
+        second_id, second_token = await _buyer(client, name="Second Chat Buyer")
+        again = await _finalize(client, second_token, second_id, lid)
+        assert again.status_code == 201
+        await _set_deal(again.json()["deal_id"], DealStatus.cancelled)
+        assert (await client.get(f"/listings/{lid}")).json()["available_quantity"] == 1
+        assert tuple(await _listing_row(lid)) == (1, 0)
+
+    @pytest.mark.asyncio
+    async def test_with_payments_off_only_paid_out_deals_hold_units(self, client, payments_off):
+        # The established chat rule (listings/stock.deals_hold_stock): with
+        # payments off an agreed deal is a price, not a sale; a paid-out one
+        # holds its units - for store orders too.
+        _, seller_token, store_id = await _seller(client)
+        lid = await _listing(client, seller_token, store_id, quantity=1)
+        await _track(client, seller_token, store_id, lid, 1)
+        chat_id, chat_token = await _buyer(client, name="Chat Buyer")
+        deal = await _finalize(client, chat_token, chat_id, lid)
+        assert deal.status_code == 201
+        assert (await client.get(f"/listings/{lid}")).json()["available_quantity"] == 1
+        await _set_deal(deal.json()["deal_id"], DealStatus.released)
+        _, buyer_token = await _buyer(client)
+        r = await _submit(client, buyer_token, store_id, [{"listing_id": lid, "quantity": 1}])
+        assert r.json()["detail"]["code"] == "ORDER_ITEM_OUT_OF_STOCK"
+
+    @pytest.mark.asyncio
+    async def test_every_seller_figure_is_the_number_the_backend_decides_by(self, client):
+        # P1: the stock controls, the product list, the order screen, the
+        # public product and the store's catalogue all show the shared
+        # count - and both channels are allowed exactly that many.
+        _, seller_token, store_id = await _seller(client)
+        lid = await _listing(client, seller_token, store_id, quantity=5)
+        await _track(client, seller_token, store_id, lid, 5)
+        _, buyer_token = await _buyer(client)
+        oid = (await _order(client, buyer_token, store_id, lid, quantity=2))["id"]
+        await _post(client, seller_token, f"/orders/{oid}/accept")
+        chat_id, chat_token = await _buyer(client, name="Chat Buyer")
+        assert (await _finalize(client, chat_token, chat_id, lid, quantity=1)).status_code == 201
+
+        controls = (await client.patch(f"/stores/{store_id}/manage/listings/{lid}/stock",
+                                       json={"temporarily_unavailable": False},
+                                       headers=_auth(seller_token))).json()
+        product = await _owner_product(client, seller_token, store_id, lid)
+        line = (await client.get(f"/orders/{oid}", headers=_auth(seller_token))).json()["items"][0]
+        public = (await client.get(f"/listings/{lid}")).json()
+        card = next(c for c in (await client.get(f"/stores/{store_id}/listings")).json() if c["id"] == lid)
+
+        assert (controls["stock_on_hand"], controls["stock_reserved"],
+                controls["stock_committed_to_deals"], controls["available_quantity"]) == (5, 2, 1, 2)
+        assert (product["stock_on_hand"], product["stock_reserved"],
+                product["stock_committed_to_deals"], product["available_quantity"]) == (5, 2, 1, 2)
+        assert (line["stock_on_hand"], line["stock_committed_to_deals"], line["stock_available"]) == (5, 1, 2)
+        assert (public["available_quantity"], public["units_left"]) == (2, 2)
+        assert card["available_quantity"] == 2
+
+        # Exactly 2, on either channel.
+        r = await _submit(client, buyer_token, store_id, [{"listing_id": lid, "quantity": 3}])
+        assert r.json()["detail"]["code"] == "ORDER_ITEM_QUANTITY" and r.json()["detail"]["available"] == 2
+        other_id, other_token = await _buyer(client, name="Other Chat Buyer")
+        r = await _finalize(client, other_token, other_id, lid, quantity=3)
+        assert r.status_code == 409 and "Only 2 left" in r.json()["detail"]
+        second = (await _order(client, buyer_token, store_id, lid, quantity=2))["id"]
+        assert (await _post(client, seller_token, f"/orders/{second}/accept")).status_code == 200
+        after = await _owner_product(client, seller_token, store_id, lid)
+        assert after["available_quantity"] == 0
+        r = await _finalize(client, other_token, other_id, lid, quantity=1)
+        assert r.status_code == 409 and r.json()["detail"] == "This listing is sold out."
+        # On hand can't be counted below what is promised: 4 to orders, 1 to a chat.
+        low = await client.patch(f"/stores/{store_id}/manage/listings/{lid}/stock",
+                                 json={"quantity": 4}, headers=_auth(seller_token))
+        assert low.status_code == 409 and low.json()["detail"]["code"] == "STOCK_BELOW_RESERVED"
+        assert low.json()["detail"]["minimum"] == 5
+
+    @pytest.mark.asyncio
+    async def test_an_uncounted_products_figures_are_the_number_the_backend_decides_by(self, client):
+        # The same for a product whose seller doesn't count it: 4 stated, 2
+        # held by an accepted order, 1 in a chat deal - 1 left, everywhere.
+        _, seller_token, store_id = await _seller(client)
+        lid = await _listing(client, seller_token, store_id, quantity=4)
+        _, buyer_token = await _buyer(client)
+        oid = (await _order(client, buyer_token, store_id, lid, quantity=2))["id"]
+        await _post(client, seller_token, f"/orders/{oid}/accept")
+        chat_id, chat_token = await _buyer(client, name="Chat Buyer")
+        assert (await _finalize(client, chat_token, chat_id, lid, quantity=1)).status_code == 201
+
+        product = await _owner_product(client, seller_token, store_id, lid)
+        line = (await client.get(f"/orders/{oid}", headers=_auth(seller_token))).json()["items"][0]
+        public = (await client.get(f"/listings/{lid}")).json()
+        card = next(c for c in (await client.get(f"/stores/{store_id}/listings")).json() if c["id"] == lid)
+        assert (product["stock_tracked"], product["stock_on_hand"], product["stock_reserved"],
+                product["stock_committed_to_deals"], product["available_quantity"]) == (False, None, 2, 1, 1)
+        assert (line["stock_on_hand"], line["stock_committed_to_deals"], line["stock_available"]) == (None, 1, 1)
+        assert (public["status"], public["available_quantity"], public["units_left"]) == ("active", 1, 1)
+        assert card["available_quantity"] == 1
+
+        # Exactly 1, on either channel.
+        r = await _submit(client, buyer_token, store_id, [{"listing_id": lid, "quantity": 2}])
+        assert r.json()["detail"]["code"] == "ORDER_ITEM_QUANTITY" and r.json()["detail"]["available"] == 1
+        other_id, other_token = await _buyer(client, name="Other Chat Buyer")
+        r = await _finalize(client, other_token, other_id, lid, quantity=2)
+        assert r.status_code == 409 and "Only 1 left" in r.json()["detail"]
+
+
+class TestStockTrackingToggle:
+    # Orders reserve whether or not the seller counts the stock, so the
+    # switch changes how the units are written down, never how many are
+    # left or who holds them - in either direction, with orders under way.
+
+    @pytest.mark.asyncio
+    async def test_counting_can_stop_while_orders_hold_units(self, client):
+        _, seller_token, store_id = await _seller(client)
+        lid = await _listing(client, seller_token, store_id, quantity=3)
+        await _track(client, seller_token, store_id, lid, 3)
+        _, buyer_token = await _buyer(client)
+        oid = (await _order(client, buyer_token, store_id, lid, quantity=2))["id"]
+        await _post(client, seller_token, f"/orders/{oid}/accept")
+        path = f"/stores/{store_id}/manage/listings/{lid}/stock"
+
+        stopped = await client.patch(path, json={"stock_tracked": False}, headers=_auth(seller_token))
+        assert stopped.status_code == 200, stopped.text
+        s = stopped.json()
+        assert (s["stock_tracked"], s["quantity"], s["stock_reserved"], s["available_quantity"]) == (False, 3, 2, 1)
+        assert tuple(await _listing_row(lid)) == (3, 2)
+        # A chat deal can't take the order's units...
+        chat_id, chat_token = await _buyer(client, name="Chat Buyer")
+        r = await _finalize(client, chat_token, chat_id, lid, quantity=2)
+        assert r.status_code == 409 and r.json()["detail"] == "Only 1 left - this deal can be for 1 at most."
+        assert (await _finalize(client, chat_token, chat_id, lid, quantity=1)).status_code == 201
+        # ...and the handover takes them once: sold through the order, the
+        # stated quantity left as stated, and none left for anyone.
+        await _post(client, buyer_token, f"/orders/{oid}/confirm", {"revision": 1})
+        await _post(client, seller_token, f"/orders/{oid}/dispatch")
+        await _post(client, seller_token, f"/orders/{oid}/delivered")
+        assert tuple(await _listing_row(lid)) == (3, 0)
+        other_id, other_token = await _buyer(client, name="Other Chat Buyer")
+        r = await _finalize(client, other_token, other_id, lid)
+        assert r.status_code == 409 and r.json()["detail"] == "This listing is sold out."
+        public = (await client.get(f"/listings/{lid}")).json()
+        assert (public["units_left"], public["status"]) == (0, "pending")
+
+    @pytest.mark.asyncio
+    async def test_counting_from_nothing_left_needs_a_number(self, client):
+        _, seller_token, store_id = await _seller(client)
+        lid = await _listing(client, seller_token, store_id, quantity=2)
+        await _track(client, seller_token, store_id, lid, 0)
+        path = f"/stores/{store_id}/manage/listings/{lid}/stock"
+        r = await client.patch(path, json={"stock_tracked": False}, headers=_auth(seller_token))
+        # Not counted, 0 would read as one: say how many first.
+        assert r.status_code == 400 and r.json()["detail"]["code"] == "STOCK_QUANTITY_REQUIRED"
+        ok = await client.patch(path, json={"stock_tracked": False, "quantity": 2}, headers=_auth(seller_token))
+        assert ok.status_code == 200 and ok.json()["quantity"] == 2
+
+    @pytest.mark.asyncio
+    async def test_counting_can_start_while_orders_hold_units(self, client):
+        _, seller_token, store_id = await _seller(client)
+        lid = await _listing(client, seller_token, store_id, quantity=5)
+        _, buyer_token = await _buyer(client)
+        oid = (await _order(client, buyer_token, store_id, lid, quantity=2))["id"]
+        assert (await _post(client, seller_token, f"/orders/{oid}/accept")).status_code == 200
+        # Not counted, the order still reserved its units.
+        assert tuple(await _listing_row(lid)) == (5, 2)
+        path = f"/stores/{store_id}/manage/listings/{lid}/stock"
+
+        short = await client.patch(path, json={"stock_tracked": True, "quantity": 1}, headers=_auth(seller_token))
+        assert short.status_code == 409 and short.json()["detail"]["code"] == "STOCK_BELOW_RESERVED"
+        assert short.json()["detail"]["reserved"] == 2
+        assert tuple(await _listing_row(lid)) == (5, 2)
+
+        started = await client.patch(path, json={"stock_tracked": True, "quantity": 4}, headers=_auth(seller_token))
+        assert started.status_code == 200, started.text
+        assert (started.json()["stock_reserved"], started.json()["available_quantity"]) == (2, 2)
+        assert tuple(await _listing_row(lid)) == (4, 2)
+        line = (await client.get(f"/orders/{oid}", headers=_auth(seller_token))).json()["items"][0]
+        assert (line["reserved_quantity"], line["stock_state"]) == (2, "reserved")
+        # A chat deal can't take the order's units...
+        chat_id, chat_token = await _buyer(client, name="Chat Buyer")
+        r = await _finalize(client, chat_token, chat_id, lid, quantity=3)
+        assert r.status_code == 409 and "Only 2 left" in r.json()["detail"]
+        # ...and handing the order over takes them off once.
+        await _post(client, buyer_token, f"/orders/{oid}/confirm", {"revision": 1})
+        await _post(client, seller_token, f"/orders/{oid}/dispatch")
+        await _post(client, seller_token, f"/orders/{oid}/delivered")
+        assert tuple(await _listing_row(lid)) == (2, 0)
+        await _post(client, buyer_token, f"/orders/{oid}/received")
+        assert tuple(await _listing_row(lid)) == (2, 0)
+
+    @pytest.mark.asyncio
+    async def test_switching_counting_keeps_what_deals_and_orders_hold_and_sold(self, client):
+        _, seller_token, store_id = await _seller(client)
+        lid = await _listing(client, seller_token, store_id, quantity=6)
+        sold_id, sold_token = await _buyer(client, name="Paid Chat Buyer")
+        sold = await _finalize(client, sold_token, sold_id, lid, quantity=1)
+        await _set_deal(sold.json()["deal_id"], DealStatus.released)
+        open_id, open_token = await _buyer(client, name="Open Chat Buyer")
+        assert (await _finalize(client, open_token, open_id, lid, quantity=1)).status_code == 201
+        # And a store order handed over while not counted.
+        _, buyer_token = await _buyer(client)
+        oid = (await _order(client, buyer_token, store_id, lid, quantity=2))["id"]
+        await _post(client, seller_token, f"/orders/{oid}/accept")
+        await _post(client, buyer_token, f"/orders/{oid}/confirm", {"revision": 1})
+        await _post(client, seller_token, f"/orders/{oid}/dispatch")
+        await _post(client, seller_token, f"/orders/{oid}/delivered")
+        # 6 stated: 1 sold in chat, 1 in a chat deal under way, 2 sold through the order.
+        assert tuple(await _listing_row(lid)) == (6, 0)
+        assert (await client.get(f"/listings/{lid}")).json()["units_left"] == 2
+        path = f"/stores/{store_id}/manage/listings/{lid}/stock"
+
+        # Counting from the stated quantity: on hand is what neither channel sold.
+        started = (await client.patch(path, json={"stock_tracked": True}, headers=_auth(seller_token))).json()
+        assert (started["stock_on_hand"], started["stock_committed_to_deals"],
+                started["available_quantity"]) == (3, 1, 2)
+        # The seller's own count: on hand 3 is what they have, not 3 less what was sold again.
+        recount = (await client.patch(path, json={"quantity": 3}, headers=_auth(seller_token))).json()
+        assert (recount["stock_on_hand"], recount["available_quantity"]) == (3, 2)
+        low = await client.patch(path, json={"quantity": 0}, headers=_auth(seller_token))
+        assert low.status_code == 409 and low.json()["detail"]["in_deals"] == 1
+        # Stopping gives the same units by the stated quantity's rule...
+        stopped = (await client.patch(path, json={"stock_tracked": False}, headers=_auth(seller_token))).json()
+        assert (stopped["stock_tracked"], stopped["quantity"], stopped["available_quantity"]) == (False, 6, 2)
+        assert (await client.get(f"/listings/{lid}")).json()["units_left"] == 2
+        # ...a stated quantity can't go below what is sold or promised...
+        under = await client.patch(path, json={"quantity": 3}, headers=_auth(seller_token))
+        assert under.status_code == 409 and under.json()["detail"]["minimum"] == 4
+        # ...and is stored as given, everything sold counted against it.
+        restated = (await client.patch(path, json={"quantity": 8}, headers=_auth(seller_token))).json()
+        assert (restated["stock_tracked"], restated["quantity"], restated["stock_on_hand"]) == (False, 8, None)
+        assert (await client.get(f"/listings/{lid}")).json()["units_left"] == 4
