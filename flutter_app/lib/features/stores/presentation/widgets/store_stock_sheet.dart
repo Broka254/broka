@@ -1,15 +1,19 @@
 // A product's stock, as its owner manages it for store orders
-// (PATCH /stores/{id}/manage/listings/{listing_id}/stock):
+// (PATCH /stores/{id}/manage/listings/{listing_id}/stock). Orders and chat
+// deals take units from one count either way (backend listings/inventory.py):
+// accepting an order sets units aside, handing it over takes them off, and
+// an order that ends without a sale gives them back.
 //
-//   counted     the owner says how many are on hand. Accepting an order
-//               sets units aside; handing it over takes them off; an order
-//               that ends without a sale gives them back.
-//   not counted every product until its owner chooses. The store confirms
-//               availability on each order - never "out of stock".
+//   counted     the owner keeps an on-hand number and restocks it. With
+//               none left the product stays listed as out of stock.
+//   not counted every product until its owner chooses: the listing's
+//               stated quantity is what it sells, and with nothing left it
+//               shows as sold.
 //   paused      shown to buyers, labelled, and not orderable for now.
 //
-// The server checks again: on hand can't go below what accepted orders
-// hold, and its refusal is shown in its own words.
+// Switching between the first two keeps every unit already promised. The
+// server checks again: a count can't go below what is promised, and its
+// refusal is shown in its own words.
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -119,9 +123,8 @@ class _StoreStockSheetState extends State<StoreStockSheet> {
   Widget build(BuildContext context) {
     final p = widget.product;
     const hint = TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.4);
-    // Counting can't stop while accepted orders hold units: their handover
-    // is what takes the units off the stock (the server refuses it too).
-    final mustKeepCounting = p.stockTracked && p.stockReserved > 0;
+    // What an order or a chat deal may still take (the server's count).
+    final left = p.availableQuantity ?? p.stockQuantity ?? 1;
     return SafeArea(
       child: Padding(
         // Above the keyboard while the quantity is typed.
@@ -151,17 +154,14 @@ class _StoreStockSheetState extends State<StoreStockSheet> {
               contentPadding: EdgeInsets.zero,
               value: _tracked,
               activeColor: BrokaColors.gold,
-              onChanged: _saving || mustKeepCounting ? null : (on) => setState(() => _tracked = on),
+              onChanged: _saving ? null : (on) => setState(() => _tracked = on),
               title: const Text('Count stock for this product',
                   style: TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.w600)),
-              subtitle: Text(
-                  mustKeepCounting
-                      ? '${p.stockReserved} are set aside for accepted orders. Hand over or cancel '
-                          'those orders before you stop counting.'
-                      : 'Accepting an order sets units aside; they come off when the order is '
-                          'handed over, and go back if it ends without a sale. Chat deals take '
-                          'from the same count.',
-                  key: const Key('stock-tracked-note'),
+              subtitle: const Text(
+                  'Keep an on-hand number and restock it; with none left it stays listed as '
+                  'out of stock. Either way, accepting an order sets units aside, handing it '
+                  'over takes them off, and chat deals take from the same count.',
+                  key: Key('stock-tracked-note'),
                   style: hint),
             ),
             if (_tracked) ...[
@@ -195,8 +195,10 @@ class _StoreStockSheetState extends State<StoreStockSheet> {
               Padding(
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Text(
-                  "Not counted: you confirm what you have on each order, and buyers never see "
-                  "it as out of stock. A buyer can ask for up to ${p.stockQuantity ?? 1}.",
+                  "Not counted: orders and chat deals take from the listing's quantity "
+                  '(${p.stockQuantity ?? 1}), and with none left it shows as sold. '
+                  '$left can be ordered now.',
+                  key: const Key('stock-untracked-note'),
                   style: hint,
                 ),
               ),

@@ -75,12 +75,13 @@ class StoreProduct {
   });
 
   /// Stock, as the backend counts it for store orders and chat deals alike
-  /// (backend listings/inventory.py). Tracked: the owner counts it,
-  /// [stockQuantity] is on hand, accepted orders hold [stockReserved] of
-  /// it, chat deals still under way hold [stockInDeals], and
-  /// [availableQuantity] is what a new order or deal may still take.
-  /// Untracked (every product until its owner chooses): the store confirms
-  /// availability on each order, which is never "out of stock".
+  /// (backend listings/inventory.py), for every product: accepted orders
+  /// hold [stockReserved], chat deals still under way hold [stockInDeals],
+  /// and [availableQuantity] is what a new order or deal may still take.
+  /// Tracked: the owner keeps an on-hand count ([stockQuantity]), and with
+  /// none left the product stays listed as out of stock. Untracked (every
+  /// product until its owner chooses): [stockQuantity] is the listing's
+  /// stated quantity, and with nothing left the listing shows as sold.
   final bool stockTracked;
   final int? stockQuantity;
   final int stockReserved;

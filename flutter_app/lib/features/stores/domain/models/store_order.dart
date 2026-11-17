@@ -171,9 +171,10 @@ class StoreOrderItem {
   final bool removed;
 
   // The store's own view only (null or zero for the buyer). The backend's
-  // shared count (listings/inventory.py): [stockAvailable] is what another
-  // order or a chat deal may still take, with units in chat deals
-  // ([stockInDeals]) and other orders' reservations already off.
+  // shared count (listings/inventory.py), counted by the store or not:
+  // [stockAvailable] is what another order or a chat deal may still take,
+  // with units in chat deals ([stockInDeals]) and other orders'
+  // reservations already off. [stockOnHand] only when the store counts.
   final bool stockTracked;
   final int? stockOnHand;
   final int? stockAvailable;
@@ -648,7 +649,7 @@ class StoreListingStock {
   /// Units chat deals still under way hold.
   final int stockInDeals;
 
-  /// What can still be ordered; null when untracked.
+  /// What an order or a chat deal may still take, counted or not.
   final int? availableQuantity;
   final bool temporarilyUnavailable;
 

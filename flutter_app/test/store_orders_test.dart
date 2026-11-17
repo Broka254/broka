@@ -376,8 +376,8 @@ void main() {
       expect(CampaignEvents.fromJson({'by_kind': {'visit': 4}}).orders, isNull);
     });
 
-    test("a product's stock: untracked is never out of stock", () {
-      final untracked = StoreProduct.fromJson(_product(quantity: 3));
+    test("a product's stock: the product list says it only for counted stock", () {
+      final untracked = StoreProduct.fromJson(_product(quantity: 3, available: 3));
       expect(untracked.stockTracked, isFalse);
       expect(untracked.outOfStock, isFalse);
       expect(storeStockNote(untracked), isNull);
@@ -669,11 +669,9 @@ void main() {
       expect(find.byKey(const Key('stock-in-deals')), findsOneWidget);
       expect(find.text('1 in chat deals still under way.'), findsOneWidget);
       expect(find.text('2 free for new orders and deals.'), findsOneWidget);
-      // Counting can't stop while accepted orders hold units (the server refuses it too).
+      // Counting can stop while orders hold units: they stay set aside.
       final tracking = tester.widget<SwitchListTile>(find.byKey(const Key('stock-tracked-switch')));
-      expect(tracking.onChanged, isNull);
-      expect(find.text('2 are set aside for accepted orders. Hand over or cancel those orders '
-          'before you stop counting.'), findsOneWidget);
+      expect(tracking.onChanged, isNotNull);
 
       await tester.enterText(find.byKey(const Key('stock-quantity-field')), '2');
       await tester.tap(find.byKey(const Key('stock-save')));
@@ -681,6 +679,41 @@ void main() {
       expect(find.text('3 of these are promised: 2 to accepted orders and 1 to chat deals. '
           'Set at least 3.'), findsOneWidget);
       expect(backend.calls('PATCH', '/stores/s1/manage/listings/l1/stock'), isEmpty);
+    });
+
+    testWidgets("Products: a product that isn't counted says what orders and deals left", (tester) async {
+      final backend = await _openMyStore(tester, more: {
+        'GET /stores/s1/manage/listings': (_) => _json({
+              // 3 stated: 1 set aside for an order, 1 in a chat deal.
+              'items': [_product(quantity: 3, reserved: 1, inDeals: 1, available: 1)],
+              'counts': {'all': 1, 'live': 1, 'hidden': 0, 'in_deal': 0, 'sold': 0},
+            }),
+        'PATCH /stores/s1/manage/listings/l1/stock': (_) => _json({
+              'listing_id': 'l1',
+              'stock_tracked': false,
+              'quantity': 3,
+              'stock_reserved': 1,
+              'available_quantity': 1,
+              'temporarily_unavailable': true,
+            }),
+      });
+      await tester.tap(find.text('Products'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('store-product-l1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('product-action-stock')));
+      await tester.pumpAndSettle();
+      expect(
+          tester.widget<Text>(find.byKey(const Key('stock-untracked-note'))).data,
+          "Not counted: orders and chat deals take from the listing's quantity (3), and with "
+          'none left it shows as sold. 1 can be ordered now.');
+      // Not counted, the sheet sends no quantity.
+      await tester.tap(find.byKey(const Key('stock-paused-switch')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('stock-save')));
+      await tester.pumpAndSettle();
+      expect(backend.bodies('PATCH', '/stores/s1/manage/listings/l1/stock').single,
+          {'stock_tracked': false, 'temporarily_unavailable': true});
     });
 
     testWidgets('no stock controls while store orders are off', (tester) async {
@@ -720,6 +753,21 @@ void main() {
       await openOrder(tester, order);
       expect(tester.widget<Text>(find.byKey(const Key('order-item-stock-i1'))).data,
           'Stock: 5 on hand, 2 free to order, 1 in chat deals, 2 set aside for this order');
+    });
+
+    testWidgets("a product the store doesn't count still shows what is free", (tester) async {
+      final order = _order();
+      ((order['items'] as List).first as Map<String, dynamic>).addAll({
+        'stock_tracked': false,
+        'stock_on_hand': null,
+        'stock_available': 0,
+        'stock_committed_to_deals': 0,
+        'reserved_quantity': 2,
+        'stock_state': 'reserved',
+      });
+      await openOrder(tester, order);
+      expect(tester.widget<Text>(find.byKey(const Key('order-item-stock-i1'))).data,
+          'Stock: 0 free to order, 2 set aside for this order');
     });
 
     testWidgets('declining needs a reason the buyer will see', (tester) async {
