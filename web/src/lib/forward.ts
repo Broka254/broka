@@ -62,7 +62,7 @@ export function visitorHeaders(req: Request): Record<string, string> {
 export async function forwardToApi(
   req: Request,
   storeId: string,
-  action: 'visit' | 'share',
+  action: 'visit' | 'share' | 'cart-events',
   shape: (body: Record<string, unknown>) => Record<string, unknown>,
 ): Promise<Response> {
   if (!ID.test(storeId)) return new Response(null, { status: 400 })

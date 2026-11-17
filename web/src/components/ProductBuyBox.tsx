@@ -8,6 +8,7 @@ import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 
 import { type CartLine, cart, useCart } from '@/lib/cart'
+import { reportCartAdd } from '@/lib/visitor'
 
 import { QtyStepper } from './AddToCart'
 import { Icon } from './Icon'
@@ -45,7 +46,9 @@ export function ProductBuyBox({
       )}
       <div className={styles.buyButtons}>
         {left > 0 ? (
-          <button type="button" className={`button button--ghost ${styles.buyAdd}`} onClick={() => cart.add(storeId, line, Math.min(qty, left))}>
+          <button type="button" className={`button button--ghost ${styles.buyAdd}`} onClick={() => {
+            if (cart.add(storeId, line, Math.min(qty, left))) reportCartAdd(storeId, line.id)
+          }}>
             <Icon name="cart" size={19} /> Add to cart
           </button>
         ) : (
@@ -57,7 +60,7 @@ export function ProductBuyBox({
           type="button"
           className={`button ${styles.buyNow}`}
           onClick={() => {
-            if (!inCart) cart.add(storeId, line, qty)
+            if (!inCart && cart.add(storeId, line, qty)) reportCartAdd(storeId, line.id)
             router.push(cartPath)
           }}
         >

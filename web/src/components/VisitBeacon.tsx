@@ -6,20 +6,7 @@
 // visitor within half an hour without using their IP address.
 import { useEffect, useRef } from 'react'
 
-const VISITOR_KEY = 'broka_vid'
-
-function visitorId(): string | undefined {
-  try {
-    let id = localStorage.getItem(VISITOR_KEY)
-    if (!id || !/^[A-Za-z0-9_-]{8,64}$/.test(id)) {
-      id = crypto.randomUUID()
-      localStorage.setItem(VISITOR_KEY, id)
-    }
-    return id
-  } catch {
-    return undefined
-  }
-}
+import { rememberAttribution, visitorId } from '@/lib/visitor'
 
 export function VisitBeacon({
   storeId,
@@ -37,6 +24,9 @@ export function VisitBeacon({
   useEffect(() => {
     if (sent.current) return
     sent.current = true
+    // A campaign link's token is kept for this store, so an order sent
+    // later from the cart is credited to the campaign that brought it.
+    rememberAttribution(storeId, via, campaign)
     void fetch(`/api/stores/${encodeURIComponent(storeId)}/visit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

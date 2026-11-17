@@ -4,6 +4,7 @@
 // product is in the cart - the way shops show it.
 import type { ProductCardData } from '@/lib/catalogue'
 import { cart, lineFor, useCart } from '@/lib/cart'
+import { reportCartAdd } from '@/lib/visitor'
 
 import { Icon } from './Icon'
 import styles from './shop.module.css'
@@ -68,7 +69,13 @@ export function AddToCart({ storeId, product }: { storeId: string; product: Prod
     )
   }
   return (
-    <button type="button" className={styles.addToCart} onClick={() => cart.add(storeId, line)}>
+    <button
+      type="button"
+      className={styles.addToCart}
+      onClick={() => {
+        if (cart.add(storeId, line)) reportCartAdd(storeId, line.id)
+      }}
+    >
       <Icon name="cart" size={17} />
       Add to cart
     </button>

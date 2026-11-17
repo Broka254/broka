@@ -2,6 +2,14 @@
 
 // The cart page: every product, how many, the total - and how to buy them.
 //
+// WITH STORE ORDERS ON (the store's `orders_enabled`, STORE_ORDERS.md) the
+// page is a real checkout on every device: the buyer signs in with an SMS
+// code and sends the store an order request (WebCheckout.tsx); the store
+// confirms availability and the final details, and the buyer follows the
+// order at /store/orders/<id>. No app is needed and no payment is taken.
+//
+// WITHOUT THEM - the production default until they are switched on - the
+// page is what it was:
 // Deals are made in the BROKA app: the button opens this cart there (a
 // /store/<name>/cart link with the products and quantities; the app reads
 // each product again and fills its own cart), and each product is agreed
@@ -28,6 +36,14 @@ import type { EscrowDirectory } from '@/lib/escrow-providers'
 import { EscrowBox } from './EscrowBox'
 import { Icon } from './Icon'
 import styles from './shop.module.css'
+import { WebCheckout } from './WebCheckout'
+
+/** Store orders on this store (from the store's API payload). */
+export interface Ordering {
+  enabled: boolean
+  accepting: boolean
+  pauseNote?: string | null
+}
 
 const noSubscription = () => () => {}
 
@@ -42,6 +58,7 @@ export function CheckoutView({
   cartPath,
   storeUrl,
   escrow,
+  ordering,
 }: {
   storeId: string
   storeName: string
@@ -50,6 +67,8 @@ export function CheckoutView({
   storeUrl: string
   /** The escrow providers, fetched by the page (a client component cannot fetch them). */
   escrow?: EscrowDirectory
+  /** Store orders: a web checkout instead of the handoff to the app. */
+  ordering?: Ordering
 }) {
   const lines = useCart(storeId)
   const android = useIsAndroid()
@@ -129,6 +148,44 @@ export function CheckoutView({
         </Link>
       </section>
 
+      {ordering?.enabled ? (
+        <aside className={`card ${styles.summary}`} aria-labelledby="summary-heading">
+          <h2 id="summary-heading">Order summary</h2>
+          <dl>
+            <div>
+              <dt>Items ({n})</dt>
+              <dd>{formatPrice(total)}</dd>
+            </div>
+            <div>
+              <dt>Delivery</dt>
+              <dd>Confirmed by the store</dd>
+            </div>
+            <div>
+              <dt>Payment</dt>
+              <dd>Directly to the store, or an independent escrow service</dd>
+            </div>
+            <div className={styles.summaryTotal}>
+              <dt>Estimated total</dt>
+              <dd data-testid="cart-total">{formatPrice(total)}</dd>
+            </div>
+          </dl>
+          <p className={styles.stepsNote} data-testid="confirm-note">
+            {storeName} confirms availability, quantities, prices and any delivery charge before anything is final. You
+            see the final total and confirm it yourself.
+          </p>
+          <WebCheckout
+            storeId={storeId}
+            storeName={storeName}
+            lines={lines}
+            accepting={ordering.accepting}
+            pauseNote={ordering.pauseNote}
+          />
+          <EscrowBox compact directory={escrow} />
+          <p className={styles.stepsNote}>
+            <strong>{LAND_AND_CARS.lead}</strong> {LAND_AND_CARS.text}
+          </p>
+        </aside>
+      ) : (
       <aside className={`card ${styles.summary}`} aria-labelledby="summary-heading">
         <h2 id="summary-heading">Order summary</h2>
         <dl>
@@ -193,6 +250,7 @@ export function CheckoutView({
           <strong>{LAND_AND_CARS.lead}</strong> {LAND_AND_CARS.text}
         </p>
       </aside>
+      )}
     </div>
   )
 }

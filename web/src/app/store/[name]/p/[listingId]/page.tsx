@@ -26,7 +26,15 @@ import styles from '@/components/store.module.css'
 import { getEscrowDirectory, getListing, getStore, getStoreListings } from '@/lib/api'
 import { filtersQuery, toProductCard } from '@/lib/catalogue'
 import { clip, conditionLabel, formatPrice } from '@/lib/format'
-import { campaignToken, productPath, storeCartPath, storePath, storeShopPath, viaTag } from '@/lib/links'
+import {
+  campaignToken,
+  productPath,
+  storeCartPath,
+  storeMessagesPath,
+  storePath,
+  storeShopPath,
+  viaTag,
+} from '@/lib/links'
 import { NO_DEPOSIT, PAY_LINE, SEE_FIRST } from '@/lib/safety'
 import { API_URL } from '@/lib/server-config'
 import {
@@ -107,6 +115,22 @@ export default async function ProductPage({ params, searchParams }: Props) {
   const card = toProductCard(listing, store.slug, API_URL)
   const cartPath = storeCartPath(store.slug)
   const escrow = await getEscrowDirectory()
+  // Store orders switch the web on for buying and asking (STORE_ORDERS.md).
+  const webCommerce = store.orders_enabled === true
+  const askPath = storeMessagesPath(store.slug, listing.id)
+  // Why a buyer can't order it now, if they can't: removed or sold, out of
+  // the stock the seller counts, or paused by the seller. Untracked stock
+  // is never "out of stock" - the store confirms it on each order.
+  const unavailable: 'gone' | 'out_of_stock' | 'paused' | null =
+    listing.status !== 'active' || listing.reported_sold_out
+      ? 'gone'
+      : listing.temporarily_unavailable
+        ? 'paused'
+        : listing.out_of_stock || card.availability === 'out_of_stock'
+          ? 'out_of_stock'
+          : !view.available
+            ? 'gone'
+            : null
 
   return (
     <StorefrontShell>
@@ -135,13 +159,25 @@ export default async function ProductPage({ params, searchParams }: Props) {
                 ))}
               </ul>
             )}
-            {!view.available && (
+            {unavailable === 'gone' && (
               <p className={styles.unavailable} role="status">
                 This product isn&apos;t available any more. <Link href={storeShopPath(store.slug)}>See what else {store.name} has.</Link>
               </p>
             )}
+            {unavailable === 'out_of_stock' && (
+              <p className={styles.unavailable} role="status" data-testid="out-of-stock">
+                Out of stock at {store.name} right now.{' '}
+                {webCommerce ? <Link href={askPath}>Ask the store when it&apos;s back.</Link> : null}
+              </p>
+            )}
+            {unavailable === 'paused' && (
+              <p className={styles.unavailable} role="status" data-testid="paused">
+                {store.name} isn&apos;t taking orders for this product for now.{' '}
+                {webCommerce ? <Link href={askPath}>Ask the store about it.</Link> : null}
+              </p>
+            )}
 
-            {view.available && listing.listing_type !== 'auction' && (
+            {unavailable === null && listing.listing_type !== 'auction' && (
               <ProductBuyBox
                 storeId={store.id}
                 cartPath={cartPath}
@@ -173,8 +209,16 @@ export default async function ProductPage({ params, searchParams }: Props) {
             )}
 
             <div className={styles.cta}>
-              {view.available && (
-                <AppButton chat label="Chat with the seller or make an offer in the BROKA app" className={shopStyles.offerLink} />
+              {webCommerce ? (
+                // A question needs no app: the conversation is on the website
+                // (and in the app, for the store).
+                <Link href={askPath} className={shopStyles.offerLink} data-testid="ask-store">
+                  Ask {store.name} about this product
+                </Link>
+              ) : (
+                view.available && (
+                  <AppButton chat label="Chat with the seller or make an offer in the BROKA app" className={shopStyles.offerLink} />
+                )
               )}
               <ShareButtons storeId={store.id} url={view.url} title={listing.name} />
             </div>
