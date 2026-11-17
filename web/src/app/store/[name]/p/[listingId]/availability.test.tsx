@@ -84,11 +84,21 @@ describe('product page: whether it can be ordered now', () => {
   })
   afterEach(() => vi.unstubAllGlobals())
 
-  it('stock the seller does not count is never "out of stock": the product can be ordered', async () => {
-    await show(store({ orders_enabled: true }), listing({ quantity: null, stock_tracked: false }))
+  it('a product with a unit left can be ordered, whether or not the seller counts its stock', async () => {
+    await show(store({ orders_enabled: true }), listing({ quantity: null, stock_tracked: false, available_quantity: 1 }))
     expect(addToCart()).toBeTruthy()
     expect(screen.queryByTestId('out-of-stock')).toBeNull()
     expect(screen.queryByTestId('paused')).toBeNull()
+  })
+
+  it('an uncounted product whose every unit is promised reads as gone, not orderable', async () => {
+    // The API takes it off sale (pending) once orders and chat deals hold every unit.
+    await show(
+      store({ orders_enabled: true }),
+      listing({ quantity: null, stock_tracked: false, available_quantity: 0, status: 'pending', sold_out: true, available: false }),
+    )
+    expect(screen.getByText(/isn't available any more/)).toBeTruthy()
+    expect(addToCart()).toBeNull()
   })
 
   it('counted stock that has run out says so, offers no cart, and with store orders on a question', async () => {

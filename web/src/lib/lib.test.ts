@@ -196,6 +196,15 @@ describe('product cards', () => {
       priceLabel: 'KES 18,000 / bag',
     })
   })
+  it("say what the API's count leaves, whether or not the seller counts the stock", () => {
+    // 3 stated, 2 of them taken by a chat deal and an accepted order: 1 left.
+    const uncounted = toProductCard(
+      listing({ quantity: 3, stock_tracked: false, available_quantity: 1 }), 'clanix', API)
+    expect(uncounted).toMatchObject({ maxQuantity: 1, quantity: 1, availability: 'available' })
+    const counted = toProductCard(
+      listing({ quantity: 5, stock_tracked: true, available_quantity: 0 }), 'clanix', API)
+    expect(counted).toMatchObject({ quantity: 0, availability: 'out_of_stock' })
+  })
   it('shows time left only when the listing is ending soon', () => {
     const ending = toProductCard(
       listing({

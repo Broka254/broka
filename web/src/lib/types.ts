@@ -182,12 +182,14 @@ export interface Listing {
   sold_out?: boolean
   /** A buyer reported it gone and the seller hasn't revoked that (single-listing read). */
   reported_sold_out?: boolean
-  /**
-   * Stock the seller counts (store orders): when tracked, how many can
-   * still be ordered; null when untracked - the store then confirms
-   * availability on each order, which is never "out of stock".
-   */
+  /** Whether the seller keeps an on-hand count of this product's stock. */
   stock_tracked?: boolean
+  /**
+   * How many an order or a chat deal may still take of a store's product,
+   * counted by its seller or not: chat deals, accepted orders and units
+   * already sold are taken off (the API's shared count). Null for listings
+   * outside a store.
+   */
   available_quantity?: number | null
   /** Tracked and none left right now (single-listing read). */
   out_of_stock?: boolean
