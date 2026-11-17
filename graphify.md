@@ -548,6 +548,7 @@ Counts: admin 93, optional 7, public 72, token 6, user 220.
 ### `backend/api/domains/listings/`
 
 - `handover.py` — How a buyer gets what a listing sells: delivered, or not movable at all.
+- `inventory.py` — The one count of a listing's units, for every way they are sold.
 - `location.py` — Where a listing sits on the map, and the county it is filed under.
 - `paid.py` — Whether buyers can see a listing: while it is paid for.
 - `price_rules.py` — How far one price change may move a listing, and what a raise does to its fee.
@@ -639,7 +640,7 @@ Counts: admin 93, optional 7, public 72, token 6, user 220.
 - `pricing.py` — Money for store orders: integer minor units (cents), never floats.
 - `router.py` — HTTP contracts for store orders, and web enquiries to a store.
 - `service.py` — Store orders: creating them, applying actions, and what each side sees.
-- `stock.py` — Tracked stock for store orders: reserved when the store accepts, given back when an order ends without a sale, taken off when it is handed…
+- `stock.py` — Stock for store orders: reserved when the store accepts, given back when an order ends without a sale, taken off when it is handed over - f…
 
 ### `backend/api/domains/stores/`
 
@@ -837,36 +838,36 @@ Counts: admin 93, optional 7, public 72, token 6, user 220.
 | `account_restrictions` | `AccountRestriction` | backend/api/models/scam_report.py:75 |
 | `admin_alerts` | `AdminAlert` | backend/api/models/admin_alert.py:32 |
 | `admin_reports` | `AdminReport` | backend/api/models/admin_report.py:26 |
-| `auction_meta` | `AuctionMeta` | backend/api/database.py:1129 |
-| `audit_logs` | `AuditLog` | backend/api/database.py:1768 |
-| `bids` | `Bid` | backend/api/database.py:1118 |
-| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:1276 |
+| `auction_meta` | `AuctionMeta` | backend/api/database.py:1131 |
+| `audit_logs` | `AuditLog` | backend/api/database.py:1770 |
+| `bids` | `Bid` | backend/api/database.py:1120 |
+| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:1278 |
 | `categories` | `Category` | backend/api/database.py:726 |
 | `category_filters` | `CategoryFilter` | backend/api/database.py:734 |
 | `chat_files` | `ChatFile` | backend/api/models/chat_file.py:29 |
-| `deals` | `Deal` | backend/api/database.py:1328 |
+| `deals` | `Deal` | backend/api/database.py:1330 |
 | `dispute_cases` | `DisputeCase` | backend/api/models/dispute.py:282 |
 | `dispute_events` | `DisputeEvent` | backend/api/models/dispute.py:358 |
 | `dispute_evidence` | `DisputeEvidence` | backend/api/models/dispute.py:389 |
 | `dispute_timers` | `DisputeTimer` | backend/api/models/dispute.py:417 |
-| `disputes` | `Dispute` | backend/api/database.py:1667 |
+| `disputes` | `Dispute` | backend/api/database.py:1669 |
 | `email_otps` | `EmailOtp` | backend/api/database.py:703 |
 | `escrow_provider_revisions` | `EscrowProviderRevision` | backend/api/models/escrow_provider.py:61 |
 | `escrow_providers` | `EscrowProviderRow` | backend/api/models/escrow_provider.py:40 |
 | `expiry_notifications` | `ExpiryNotification` | backend/api/models/expiry_notification.py:34 |
 | `external_escrows` | `ExternalEscrow` | backend/api/models/external_escrow.py:75 |
 | `feature_usage` | `FeatureUsage` | backend/api/models/subscription.py:86 |
-| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1716 |
-| `fraud_events` | `FraudEvent` | backend/api/database.py:1787 |
-| `interests` | `Interest` | backend/api/database.py:901 |
+| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1718 |
+| `fraud_events` | `FraudEvent` | backend/api/database.py:1789 |
+| `interests` | `Interest` | backend/api/database.py:903 |
 | `launch_offer_claims` | `LaunchOfferClaim` | backend/api/models/launch_offer.py:38 |
 | `ledger_entries` | `LedgerEntry` | backend/api/models/escrow_ledger.py:20 |
 | `legal_acceptances` | `LegalAcceptance` | backend/api/models/legal.py:24 |
-| `listing_likes` | `ListingLike` | backend/api/database.py:1246 |
-| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:1562 |
+| `listing_likes` | `ListingLike` | backend/api/database.py:1248 |
+| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:1564 |
 | `listing_payments` | `ListingPayment` | backend/api/models/listing_payment.py:33 |
-| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:1538 |
-| `listing_views` | `ListingView` | backend/api/database.py:1216 |
+| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:1540 |
+| `listing_views` | `ListingView` | backend/api/database.py:1218 |
 | `listings` | `Listing` | backend/api/database.py:743 |
 | `marketing_campaign_events` | `MarketingCampaignEvent` | backend/api/models/marketing.py:138 |
 | `marketing_campaigns` | `MarketingCampaign` | backend/api/models/marketing.py:51 |
@@ -874,19 +875,19 @@ Counts: admin 93, optional 7, public 72, token 6, user 220.
 | `media_assets` | `MediaAsset` | backend/api/models/media.py:74 |
 | `media_blobs` | `MediaBlob` | backend/api/models/media.py:108 |
 | `message_deliveries` | `MessageDelivery` | backend/api/models/message_delivery.py:59 |
-| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:1597 |
-| `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:929 |
+| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:1599 |
+| `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:931 |
 | `payment_callbacks` | `PaymentCallback` | backend/api/models/payment_callback.py:30 |
 | `phone_otps` | `PhoneOtp` | backend/api/database.py:684 |
 | `platform_costs` | `PlatformCost` | backend/api/models/platform_cost.py:28 |
 | `push_devices` | `PushDevice` | backend/api/models/push_device.py:28 |
-| `refresh_tokens` | `RefreshToken` | backend/api/database.py:1637 |
+| `refresh_tokens` | `RefreshToken` | backend/api/database.py:1639 |
 | `restriction_appeals` | `RestrictionAppeal` | backend/api/models/scam_report.py:100 |
-| `reviews` | `Review` | backend/api/database.py:1682 |
+| `reviews` | `Review` | backend/api/database.py:1684 |
 | `scam_report_details` | `ScamReportDetail` | backend/api/models/scam_report.py:33 |
 | `scam_report_evidence` | `ScamReportEvidence` | backend/api/models/scam_report.py:60 |
-| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:1488 |
-| `seller_metrics` | `SellerMetrics` | backend/api/database.py:1467 |
+| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:1490 |
+| `seller_metrics` | `SellerMetrics` | backend/api/database.py:1469 |
 | `service_catalog` | `ServiceCatalog` | backend/api/models/service_cost.py:142 |
 | `service_communication_device_deliveries` | `ServiceCommunicationDeviceDelivery` | backend/api/models/service_communication.py:175 |
 | `service_communication_recipients` | `ServiceCommunicationRecipient` | backend/api/models/service_communication.py:123 |
@@ -902,11 +903,11 @@ Counts: admin 93, optional 7, public 72, token 6, user 220.
 | `store_category_links` | `StoreCategoryLink` | backend/api/models/store.py:210 |
 | `store_daily_counts` | `StoreDailyCount` | backend/api/models/store.py:229 |
 | `store_follows` | `StoreFollow` | backend/api/models/store.py:291 |
-| `store_order_events` | `StoreOrderEvent` | backend/api/models/store_order.py:164 |
+| `store_order_events` | `StoreOrderEvent` | backend/api/models/store_order.py:167 |
 | `store_order_items` | `StoreOrderItem` | backend/api/models/store_order.py:127 |
-| `store_order_notifications` | `StoreOrderNotification` | backend/api/models/store_order.py:237 |
-| `store_order_payment_reports` | `StoreOrderPaymentReport` | backend/api/models/store_order.py:209 |
-| `store_order_payments` | `StoreOrderPayment` | backend/api/models/store_order.py:187 |
+| `store_order_notifications` | `StoreOrderNotification` | backend/api/models/store_order.py:240 |
+| `store_order_payment_reports` | `StoreOrderPaymentReport` | backend/api/models/store_order.py:212 |
+| `store_order_payments` | `StoreOrderPayment` | backend/api/models/store_order.py:190 |
 | `store_orders` | `StoreOrder` | backend/api/models/store_order.py:43 |
 | `store_payments` | `StorePayment` | backend/api/models/store_billing.py:62 |
 | `store_rating_snapshots` | `StoreRatingSnapshot` | backend/api/models/store.py:263 |
@@ -915,15 +916,15 @@ Counts: admin 93, optional 7, public 72, token 6, user 220.
 | `subscription_payments` | `SubscriptionPayment` | backend/api/models/subscription.py:53 |
 | `subscriptions` | `Subscription` | backend/api/models/subscription.py:35 |
 | `thread_clears` | `ThreadClear` | backend/api/models/thread_clear.py:25 |
-| `thread_read_state` | `ThreadReadState` | backend/api/database.py:1020 |
+| `thread_read_state` | `ThreadReadState` | backend/api/database.py:1022 |
 | `user_feedback` | `UserFeedback` | backend/api/models/feedback.py:35 |
-| `user_specializations` | `UserSpecialization` | backend/api/database.py:1261 |
+| `user_specializations` | `UserSpecialization` | backend/api/database.py:1263 |
 | `users` | `User` | backend/api/database.py:583 |
-| `verification_payments` | `VerificationPayment` | backend/api/database.py:1736 |
-| `wishlists` | `Wishlist` | backend/api/database.py:1234 |
-| `zeno_conversations` | `ZenoConversation` | backend/api/database.py:1064 |
+| `verification_payments` | `VerificationPayment` | backend/api/database.py:1738 |
+| `wishlists` | `Wishlist` | backend/api/database.py:1236 |
+| `zeno_conversations` | `ZenoConversation` | backend/api/database.py:1066 |
 | `zeno_sessions` | `ZenoSession` | backend/api/models/zeno_session.py:27 |
-| `zeno_turns` | `ZenoTurn` | backend/api/database.py:1091 |
+| `zeno_turns` | `ZenoTurn` | backend/api/database.py:1093 |
 | `zetupay_payments` | `ZetuPayPayment` | backend/api/models/zetupay.py:52 |
 | `zetupay_transactions` | `ZetuPayTransaction` | backend/api/models/zetupay.py:81 |
 
@@ -1427,7 +1428,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `presentation/widgets/store_performance.dart` — BROKA — My Store's performance section
 - `presentation/widgets/store_product_card.dart` — A product in a store's catalogue, as a shop shows it: the photo with its condition, a save heart, the name, the price, how many are left, a…
 - `presentation/widgets/store_share_card.dart` — The store's link, its QR code and one-tap sharing - on the "your store is live" screen and at the top of My Store.
-- `presentation/widgets/store_stock_sheet.dart` — A product's stock, as its owner manages it for store orders (PATCH /stores/{id}/manage/listings/{listing_id}/stock):
+- `presentation/widgets/store_stock_sheet.dart` — A product's stock, as its owner manages it for store orders (PATCH /stores/{id}/manage/listings/{listing_id}/stock).
 
 ### `flutter_app/lib/features/traders/`
 
@@ -1871,6 +1872,7 @@ Modules:
 - `IOS_CALLING_SETUP.md` — BROKA iOS calling — what's in the repo, what still needs Xcode
 - `LAUNCH_DISCOUNT_MODEL.md` — What a launch discount costs BROKA, and how many sellers it can carry
 - `LEGAL_ACCEPTANCE.md` — Legal acceptance at sign-up
+- `LEGAL_STORE_ORDERS_PROPOSAL.md` — Proposed Terms wording: store orders and escrow
 - `LISTING_OVERHAUL.md` — BROKA — Listing Flow Overhaul
 - `LISTING_POSTING_REVIEW.md` — BROKA — Listing Posting Review
 - `NOTIFICATIONS.md` — Notifications — calls and messages with the app closed (2026-10-07)
