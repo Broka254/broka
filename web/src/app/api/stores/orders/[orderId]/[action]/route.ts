@@ -18,7 +18,9 @@ const ACTIONS: Record<string, { path: string; shape: Shape }> = {
   'payment-arrangement': {
     path: 'payment-arrangement',
     shape: (b) => ({
-      arrangement: b.arrangement === 'independent_escrow' ? 'independent_escrow' : 'direct_to_seller',
+      // Only the two known choices go on. Anything else is left out, so the
+      // API refuses it - never guessed into "pay the store directly".
+      arrangement: b.arrangement === 'independent_escrow' || b.arrangement === 'direct_to_seller' ? b.arrangement : undefined,
       provider_id: b.arrangement === 'independent_escrow' ? text(b.provider_id, 40) : undefined,
     }),
   },
@@ -33,7 +35,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ ord
   if (refused) return refused
   const { orderId, action } = await params
   const id = safeId(orderId)
-  const spec = ACTIONS[action]
+  // Own keys only: "constructor" and "toString" are not actions.
+  const spec = Object.hasOwn(ACTIONS, action) ? ACTIONS[action] : undefined
   if (!id || !spec) {
     return respond({ status: 404, data: { detail: { code: 'NOT_FOUND', message: 'Not found' } }, cookies: [] })
   }

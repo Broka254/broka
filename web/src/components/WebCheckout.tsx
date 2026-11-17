@@ -27,9 +27,12 @@ type Method = 'delivery' | 'collection'
 interface Draft {
   method: Method
   address: string
-  phone: string
+  /** null until the buyer edits it: the field then shows the account's own number. */
+  phone: string | null
   note: string
 }
+
+const EMPTY_DRAFT: Draft = { method: 'delivery', address: '', phone: null, note: '' }
 
 const DRAFT = 'broka_checkout_'
 const ATTEMPT = 'broka_order_attempt_'
@@ -51,6 +54,19 @@ function writeSession(key: string, value: unknown) {
     else sessionStorage.setItem(key, JSON.stringify(value))
   } catch {
     // Private mode: kept in this page only.
+  }
+}
+
+/** The form as this tab left it (a reload, a trip back to the shop). Only
+ *  fields of the right shape are taken: it is read back from storage. */
+function restoreDraft(storeId: string): Draft {
+  const saved = readSession<Partial<Draft>>(DRAFT + storeId)
+  if (!saved || typeof saved !== 'object') return EMPTY_DRAFT
+  return {
+    method: saved.method === 'collection' ? 'collection' : 'delivery',
+    address: typeof saved.address === 'string' ? saved.address.slice(0, 300) : '',
+    phone: typeof saved.phone === 'string' ? saved.phone.slice(0, 20) : null,
+    note: typeof saved.note === 'string' ? saved.note.slice(0, 500) : '',
   }
 }
 
@@ -84,36 +100,33 @@ export function WebCheckout({
 }) {
   const session = useSession()
   const router = useRouter()
-  const [draft, setDraft] = useState<Draft>({ method: 'delivery', address: '', phone: '', note: '' })
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<{ message: string; listingId?: string } | null>(null)
-  const restored = useRef(false)
-
   // Work in progress survives a reload, a trip back to the shop and a
-  // dropped connection - in this tab only.
+  // dropped connection - in this tab only. It is read here rather than in
+  // an effect: the form isn't drawn until the session is known, so the
+  // server's page and the browser's first render still match.
+  const [draft, setDraft] = useState<Draft>(() => restoreDraft(storeId))
+  const [busy, setBusy] = useState(false)
+  // Set the moment a request goes out, before React has drawn the disabled
+  // button: a second tap in that gap sends nothing.
+  const sending = useRef(false)
+  const [error, setError] = useState<{ message: string; listingId?: string } | null>(null)
   useEffect(() => {
-    if (restored.current) return
-    restored.current = true
-    const saved = readSession<Draft>(DRAFT + storeId)
-    if (saved) setDraft((d) => ({ ...d, ...saved }))
-  }, [storeId])
-  useEffect(() => {
-    if (restored.current) writeSession(DRAFT + storeId, draft)
+    writeSession(DRAFT + storeId, draft)
   }, [draft, storeId])
-  useEffect(() => {
-    if (session.status === 'signed_in' && session.user.phone) {
-      setDraft((d) => (d.phone ? d : { ...d, phone: session.user.phone ?? '' }))
-    }
-  }, [session])
+
+  // The number the store can reach the buyer on: what they typed, or until
+  // they type, the one on their account.
+  const accountPhone = session.status === 'signed_in' ? (session.user.phone ?? '') : ''
+  const phone = draft.phone ?? accountPhone
 
   const body = useMemo(() => ({
     items: lines.map((l) => ({ listing_id: l.id, quantity: l.qty })),
     fulfilment: draft.method,
     delivery_address: draft.method === 'delivery' ? draft.address.trim() : undefined,
-    contact_phone: draft.phone.trim() || undefined,
+    contact_phone: phone.trim() || undefined,
     note: draft.note.trim() || undefined,
     ...attribution(storeId),
-  }), [lines, draft, storeId])
+  }), [lines, draft, phone, storeId])
 
   if (!accepting) {
     return (
@@ -133,8 +146,9 @@ export function WebCheckout({
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
-    if (busy) return
+    if (busy || sending.current) return
     if (needsAddress) return setError({ message: 'Add a delivery address - an area and a landmark is enough.' })
+    sending.current = true
     setBusy(true)
     setError(null)
     // Same request, same key: a retry can only ever return the first order.
@@ -154,6 +168,7 @@ export function WebCheckout({
       router.push(orderPath(r.data.id))
       return
     }
+    sending.current = false
     setBusy(false)
     if (r.error.code === 'IDEMPOTENCY_KEY_REUSED') writeSession(ATTEMPT + storeId, null)
     setError({
@@ -208,7 +223,7 @@ export function WebCheckout({
           type="tel"
           inputMode="tel"
           autoComplete="tel"
-          value={draft.phone}
+          value={phone}
           maxLength={20}
           onChange={(e) => set({ phone: e.target.value })}
         />

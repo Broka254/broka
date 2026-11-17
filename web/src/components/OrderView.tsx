@@ -10,7 +10,7 @@
 // records what the buyer and the store report and labels it that way; it
 // never receives, holds or checks the money, and this page never says it did.
 import Link from 'next/link'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { type EscrowDirectory, isOfficialUrl, UNAVAILABLE } from '@/lib/escrow-providers'
 import {
@@ -24,7 +24,7 @@ import {
   UNSUCCESSFUL,
 } from '@/lib/orders'
 import { storeMessagesPath, storePath } from '@/lib/links'
-import { useSession } from '@/lib/session-client'
+import { refreshSession, useSession } from '@/lib/session-client'
 import { webFetch } from '@/lib/web-api'
 
 import styles from './orders.module.css'
@@ -69,8 +69,14 @@ function ItemRow({ item, currency }: { item: OrderItem; currency: string }) {
           <p className={styles.itemMeta}>
             {qtyChanged ? (
               <>
-                <span className={styles.was}>{item.requested_quantity}</span>{' '}
-                <span className={styles.changed}>{item.quantity}</span>
+                <span className={styles.was}>
+                  <span className="visually-hidden">You asked for </span>
+                  {item.requested_quantity}
+                </span>{' '}
+                <span className={styles.changed}>
+                  <span className="visually-hidden">the store offers </span>
+                  {item.quantity}
+                </span>
               </>
             ) : (
               item.quantity
@@ -78,8 +84,14 @@ function ItemRow({ item, currency }: { item: OrderItem; currency: string }) {
             ×{' '}
             {priceChanged ? (
               <>
-                <span className={styles.was}>{formatMinor(item.requested_unit_price_minor, currency)}</span>{' '}
-                <span className={styles.changed}>{formatMinor(item.unit_price_minor, currency)}</span>
+                <span className={styles.was}>
+                  <span className="visually-hidden">listed at </span>
+                  {formatMinor(item.requested_unit_price_minor, currency)}
+                </span>{' '}
+                <span className={styles.changed}>
+                  <span className="visually-hidden">the store charges </span>
+                  {formatMinor(item.unit_price_minor, currency)}
+                </span>
               </>
             ) : (
               formatMinor(item.unit_price_minor, currency)
@@ -130,39 +142,53 @@ export function OrderView({ orderId, escrow = UNAVAILABLE }: { orderId: string; 
   const [providerId, setProviderId] = useState('')
   const [reference, setReference] = useState('')
   const seeded = useRef(false)
+  // Bumped to read the order again: by the poll below, and after an action
+  // the order did not allow any more.
+  const [reads, setReads] = useState(0)
 
-  const load = useCallback(async () => {
-    const r = await webFetch<Order>(`/api/stores/orders/${encodeURIComponent(orderId)}`)
-    if (r.ok) {
-      setOrder(r.data)
-      setLoadError(null)
-      // The payment choice starts as the order's own - once, so a refresh
-      // while the buyer is choosing doesn't undo their choice.
-      if (!seeded.current) {
-        seeded.current = true
-        if (r.data.payment.arrangement) setArrangement(r.data.payment.arrangement)
-        if (r.data.payment.provider?.id) setProviderId(r.data.payment.provider.id)
-      }
-    } else {
-      setLoadError({ status: r.status, message: r.error.message })
-    }
-  }, [orderId])
-
+  // Reads the order once signed in, and again each time `reads` changes.
   useEffect(() => {
-    if (session.status === 'signed_in') void load()
-  }, [session.status, load])
+    if (session.status !== 'signed_in') return
+    let live = true
+    const read = async () => {
+      const r = await webFetch<Order>(`/api/stores/orders/${encodeURIComponent(orderId)}`)
+      if (!live) return
+      if (r.ok) {
+        setOrder(r.data)
+        setLoadError(null)
+        // The payment choice starts as the order's own - once, so a refresh
+        // while the buyer is choosing doesn't undo their choice.
+        if (!seeded.current) {
+          seeded.current = true
+          if (r.data.payment.arrangement) setArrangement(r.data.payment.arrangement)
+          if (r.data.payment.provider?.id) setProviderId(r.data.payment.provider.id)
+        }
+      } else if (r.status === 401) {
+        // The session ended since the page loaded: show the sign-in step,
+        // and read the order again once the buyer is back.
+        void refreshSession()
+      } else {
+        setLoadError({ status: r.status, message: r.error.message })
+      }
+    }
+    void read()
+    return () => {
+      live = false
+    }
+  }, [session.status, orderId, reads])
 
   // While the order is open, the store's answer appears without a reload.
+  const open = order?.open === true
   useEffect(() => {
-    if (!order?.open) return
+    if (!open) return
     const t = setInterval(() => {
-      if (document.visibilityState === 'visible') void load()
+      if (document.visibilityState === 'visible') setReads((n) => n + 1)
     }, POLL_MS)
     return () => clearInterval(t)
-  }, [order?.open, load])
+  }, [open])
 
   if (session.status === 'loading') return <p className={styles.muted}>Loading your order…</p>
-  if (session.status === 'signed_out' || loadError?.status === 401) {
+  if (session.status === 'signed_out') {
     return <SignInPanel title="Sign in to see this order" lead="Use the phone number you ordered with. We'll text you a code." />
   }
   if (loadError) {
@@ -197,8 +223,9 @@ export function OrderView({ orderId, escrow = UNAVAILABLE }: { orderId: string; 
       setReference('')
     } else {
       setError(r.error.message)
+      if (r.status === 401) void refreshSession()
       // The order may have moved on (the store answered, the offer lapsed).
-      void load()
+      setReads((n) => n + 1)
     }
   }
 

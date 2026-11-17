@@ -153,16 +153,18 @@ export interface OrderSummary {
   store: { id: string; name: string | null; slug: string | null }
 }
 
-const kes = new Intl.NumberFormat('en-KE', { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+const wholeShillings = new Intl.NumberFormat('en-KE', { maximumFractionDigits: 0 })
+const withCents = new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 /** "KES 12,500", or "KES 12,500.50" when there are cents. Amounts are
  *  integer cents from the API; the browser never computes a total. */
 export function formatMinor(minor: number | null | undefined, currency = 'KES'): string {
   if (minor == null || !Number.isFinite(minor)) return ''
-  return `${currency} ${kes.format(minor / 100)}`
+  const amount = minor / 100
+  return `${currency} ${(Number.isInteger(amount) ? wholeShillings : withCents).format(amount)}`
 }
 
-/** "Thursday 21 Nov, 14:05" in Kenya time. */
+/** "Thu 21 Nov, 14:05" in Kenya time, on a 24-hour clock like the opening hours. */
 export function formatWhen(iso: string | null | undefined): string {
   if (!iso) return ''
   const date = new Date(iso)
@@ -173,6 +175,7 @@ export function formatWhen(iso: string | null | undefined): string {
     month: 'short',
     hour: '2-digit',
     minute: '2-digit',
+    hourCycle: 'h23',
     timeZone: 'Africa/Nairobi',
   })
 }

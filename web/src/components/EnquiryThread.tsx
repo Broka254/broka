@@ -4,10 +4,10 @@
 // product - and reading its replies, with no app. The same conversation the
 // app shows: the store answers it from BROKA, and both sides see it there.
 // Sign-in is an SMS code; there is no anonymous messaging.
-import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { type FormEvent, useEffect, useRef, useState } from 'react'
 
 import { formatWhen } from '@/lib/orders'
-import { useSession } from '@/lib/session-client'
+import { refreshSession, useSession } from '@/lib/session-client'
 import { newKey, webFetch } from '@/lib/web-api'
 
 import styles from './orders.module.css'
@@ -43,24 +43,30 @@ export function EnquiryThread({
   // is the same message, not a second one (the chat engine dedupes on it).
   const pendingId = useRef<string>(newKey())
   const query = listingId ? `?listing=${encodeURIComponent(listingId)}` : ''
+  // Bumped to read the thread again right away (after sending).
+  const [reads, setReads] = useState(0)
 
-  const load = useCallback(async () => {
-    const r = await webFetch<{ messages: Message[] }>(`/api/stores/${encodeURIComponent(storeId)}/enquiries${query}`)
-    if (r.ok) setMessages(r.data.messages)
-    else if (r.status !== 401) setError(r.error.message)
-  }, [storeId, query])
-
-  useEffect(() => {
-    if (session.status === 'signed_in') void load()
-  }, [session.status, load])
-
+  // Reads the thread once signed in, and again every few seconds while the
+  // page is on screen, so the store's reply appears without a reload.
   useEffect(() => {
     if (session.status !== 'signed_in') return
+    let live = true
+    const read = async () => {
+      const r = await webFetch<{ messages: Message[] }>(`/api/stores/${encodeURIComponent(storeId)}/enquiries${query}`)
+      if (!live) return
+      if (r.ok) setMessages(r.data.messages)
+      else if (r.status === 401) void refreshSession()
+      else setError(r.error.message)
+    }
+    void read()
     const t = setInterval(() => {
-      if (document.visibilityState === 'visible') void load()
+      if (document.visibilityState === 'visible') void read()
     }, POLL_MS)
-    return () => clearInterval(t)
-  }, [session.status, load])
+    return () => {
+      live = false
+      clearInterval(t)
+    }
+  }, [session.status, storeId, query, reads])
 
   if (session.status === 'loading') return <p className={styles.muted}>Loading…</p>
   if (session.status === 'signed_out') {
@@ -86,7 +92,7 @@ export function EnquiryThread({
     if (!r.ok) return setError(r.error.message)
     pendingId.current = newKey()
     setText('')
-    void load()
+    setReads((n) => n + 1)
   }
 
   return (

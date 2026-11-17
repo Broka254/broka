@@ -4,10 +4,10 @@
 // the ones waiting on them marked. Works the same on a phone, a tablet and
 // a computer; nothing here needs the app.
 import Link from 'next/link'
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { formatMinor, formatWhen, orderPath, type OrderSummary } from '@/lib/orders'
-import { signOut, useSession } from '@/lib/session-client'
+import { refreshSession, signOut, useSession } from '@/lib/session-client'
 import { webFetch } from '@/lib/web-api'
 
 import styles from './orders.module.css'
@@ -18,24 +18,36 @@ type Scope = 'open' | 'closed' | 'all'
 export function OrdersList() {
   const session = useSession()
   const [scope, setScope] = useState<Scope>('open')
-  const [orders, setOrders] = useState<OrderSummary[] | null>(null)
-  const [total, setTotal] = useState(0)
+  // What was read, and for which tab: a list is only shown under the tab it
+  // belongs to, never the previous tab's while the next one loads.
+  const [result, setResult] = useState<{ scope: Scope; items: OrderSummary[]; total: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
-
-  const load = useCallback(async (which: Scope) => {
-    setError(null)
-    const r = await webFetch<{ items: OrderSummary[]; total: number }>(`/api/stores/orders?scope=${which}`)
-    if (r.ok) {
-      setOrders(r.data.items)
-      setTotal(r.data.total)
-    } else {
-      setError(r.error.message)
-    }
-  }, [])
+  // Bumped by "Try again".
+  const [reads, setReads] = useState(0)
 
   useEffect(() => {
-    if (session.status === 'signed_in') void load(scope)
-  }, [session.status, scope, load])
+    if (session.status !== 'signed_in') return
+    let live = true
+    const read = async () => {
+      const r = await webFetch<{ items: OrderSummary[]; total: number }>(`/api/stores/orders?scope=${scope}`)
+      if (!live) return
+      if (r.ok) {
+        setError(null)
+        setResult({ scope, items: r.data.items, total: r.data.total })
+      } else if (r.status === 401) {
+        void refreshSession()
+      } else {
+        setError(r.error.message)
+      }
+    }
+    void read()
+    return () => {
+      live = false
+    }
+  }, [session.status, scope, reads])
+
+  const orders = result && result.scope === scope ? result.items : null
+  const total = result?.total ?? 0
 
   if (session.status === 'loading') return <p className={styles.muted}>Loading…</p>
   if (session.status === 'signed_out') {
@@ -61,7 +73,10 @@ export function OrdersList() {
             role="tab"
             aria-selected={scope === s}
             className={scope === s ? styles.primary : styles.secondary}
-            onClick={() => setScope(s)}
+            onClick={() => {
+              setError(null)
+              setScope(s)
+            }}
           >
             {s === 'open' ? 'In progress' : s === 'closed' ? 'Finished' : 'All'}
           </button>
@@ -70,11 +85,19 @@ export function OrdersList() {
       {error && (
         <p className={styles.error} role="alert">
           {error}{' '}
-          <button type="button" className={styles.linkish} onClick={() => void load(scope)}>
+          <button
+            type="button"
+            className={styles.linkish}
+            onClick={() => {
+              setError(null)
+              setReads((n) => n + 1)
+            }}
+          >
             Try again
           </button>
         </p>
       )}
+      {!orders && !error && <p className={styles.muted}>Loading…</p>}
       {orders && orders.length === 0 && (
         <p className={styles.muted}>
           {scope === 'open' ? 'Nothing in progress.' : 'No orders here yet.'} Orders you send a store from its BROKA page
