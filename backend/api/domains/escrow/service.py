@@ -361,9 +361,10 @@ class EscrowService:
             units = quantity or 1
             # Counted under the row lock taken above, by the one rule store
             # orders reserve by too (listings/inventory.py): units other
-            # chat deals hold and units accepted store orders hold are both
-            # gone. This used to count chat deals alone, so a buyer here
-            # could be sold units an accepted store order was waiting for.
+            # chat deals hold, units accepted store orders hold and units
+            # store orders sold are all gone. This used to count chat deals
+            # alone, so a buyer here could be sold units an accepted store
+            # order was waiting for.
             counted = await inventory.count(self.db, listing)
             left = counted.available
             if left <= 0:
@@ -398,8 +399,11 @@ class EscrowService:
             # With payments off an agreement takes nothing off sale
             # (stock.deals_hold_stock): the price was agreed, nothing paid.
             held = units if deals_hold_stock() else 0
+            # Store orders' units count too: an order holding the rest of a
+            # stated quantity leaves the listing pending once this deal takes
+            # what was left.
             listing.status = status_for(
-                listing, counted.in_deals + held, counted.sold_in_deals) or listing.status
+                listing, counted.taken + held, counted.sold) or listing.status
         else:
             listing.status = "pending"
         await self.db.commit()

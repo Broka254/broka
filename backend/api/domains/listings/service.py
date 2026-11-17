@@ -573,7 +573,9 @@ class ListingService:
         # The authenticated creator, reading back what they just created -
         # so the owner view, reserve included.
         assets = await load_listing_media(self.db, [listing], [seller])
-        return self._owner_listing_dict(listing, seller=seller, store=store, assets=assets)
+        counted = (await inventory.card_counts(self.db, [listing])).get(listing.id)
+        return self._owner_listing_dict(listing, seller=seller, store=store, assets=assets,
+                                        counted=counted)
 
     # What a seller may still change on a listing created but never paid
     # for: Go live created it, the seller backed out of the Listing fee
@@ -640,7 +642,7 @@ class ListingService:
         store = await self.db.get(Store, listing.store_id) if listing.store_id else None
         assets = await load_listing_media(self.db, [listing], [seller])
         # A replay can come after its owner started counting the stock.
-        counted = (await inventory.tracked_counts(self.db, [listing])).get(listing.id)
+        counted = (await inventory.card_counts(self.db, [listing])).get(listing.id)
         return self._owner_listing_dict(listing, seller=seller, store=store, assets=assets,
                                         counted=counted)
 
@@ -816,8 +818,8 @@ class ListingService:
         left = None
         tracked = False
         if is_stocked(listing):
-            # The shared count (inventory.py): chat deals and accepted store
-            # orders both, exactly as a deal or an order is decided.
+            # The shared count (inventory.py): chat deals and store orders
+            # both, exactly as a deal or an order is decided.
             counted = await inventory.count(self.db, listing)
             left = counted.available
             tracked = counted.tracked
@@ -833,7 +835,8 @@ class ListingService:
             # storefront says differently from "no longer for sale".
             "out_of_stock": bool(tracked and left == 0 and status == ListingStatus.active.value
                                  and reported is None),
-            "available_quantity": left if tracked else None,
+            # As on the cards: a store's product or counted stock.
+            "available_quantity": left if inventory.shows_availability(listing) else None,
             "available": status == ListingStatus.active.value and not sold_out,
         }
 
@@ -1096,9 +1099,10 @@ class ListingService:
         # star average comes from reviews, never the User.rating default.
         from api.domains.reviews.stats import seller_review_figures
         seller_reviews = await seller_review_figures(self.db, sellers_by_id.keys())
-        # What is left of counted stock, chat deals included: one query, and
-        # only when the page has a counted product (inventory.tracked_counts).
-        counted = await inventory.tracked_counts(self.db, candidates)
+        # What is left of each store product and counted stock, chat deals
+        # and orders taken off: two grouped queries, and only when the page
+        # has such a listing (inventory.card_counts).
+        counted = await inventory.card_counts(self.db, candidates)
 
         for listing in candidates:
             d = self._listing_dict(
@@ -1231,7 +1235,7 @@ class ListingService:
         assets = await load_listing_media(self.db, rows, sellers.values())
         from api.domains.reviews.stats import seller_review_figures
         seller_reviews = await seller_review_figures(self.db, sellers.keys())
-        counted = await inventory.tracked_counts(self.db, rows)
+        counted = await inventory.card_counts(self.db, rows)
         return [
             self._listing_dict(
                 l, seller=sellers.get(l.seller_id),
@@ -1275,7 +1279,7 @@ class ListingService:
             stores = {s.id: s for s in (await self.db.execute(
                 select(Store).where(Store.id.in_(store_ids)))).scalars().all()}
         assets = await load_listing_media(self.db, rows, [seller] if seller else [])
-        counted = await inventory.tracked_counts(self.db, rows)
+        counted = await inventory.card_counts(self.db, rows)
         out = []
         for l in rows:
             d = self._listing_dict(l, seller=seller, store=stores.get(l.store_id),
@@ -1529,7 +1533,7 @@ class ListingService:
         seller = (await self.db.execute(select(User).where(User.id == listing.seller_id))).scalar_one_or_none()
         # _get_owned_listing_or_403 above established ownership.
         assets = await load_listing_media(self.db, [listing], [seller])
-        counted = (await inventory.tracked_counts(self.db, [listing])).get(listing.id)
+        counted = (await inventory.card_counts(self.db, [listing])).get(listing.id)
         return self._owner_listing_dict(listing, seller=seller, store=store, assets=assets,
                                         counted=counted)
 
@@ -1544,7 +1548,7 @@ class ListingService:
         seller = (await self.db.execute(select(User).where(User.id == listing.seller_id))).scalar_one_or_none()
         # Ownership established by _get_owned_listing_or_403.
         assets = await load_listing_media(self.db, [listing], [seller])
-        counted = (await inventory.tracked_counts(self.db, [listing])).get(listing.id)
+        counted = (await inventory.card_counts(self.db, [listing])).get(listing.id)
         return self._owner_listing_dict(listing, seller=seller, store=None, assets=assets,
                                         counted=counted)
 
@@ -1562,7 +1566,7 @@ class ListingService:
         )).scalar_one_or_none()
         store = await self.db.get(Store, listing.store_id) if listing.store_id else None
         assets = await load_listing_media(self.db, [listing], [seller])
-        counted = (await inventory.tracked_counts(self.db, [listing])).get(listing.id)
+        counted = (await inventory.card_counts(self.db, [listing])).get(listing.id)
         return self._owner_listing_dict(listing, seller=seller, store=store, assets=assets,
                                         counted=counted)
 
@@ -1792,12 +1796,13 @@ class ListingService:
             "price_unit": listing.price_unit,
             "quantity": listing.quantity,
             # Store orders (store_orders/stock.py). Whether the seller counts
-            # this product's stock; what is left to order (null when they
-            # don't - the store then confirms availability on each order,
-            # which is never "out of stock"); and the seller's pause on new
-            # orders for it. "Left" is the shared count (inventory.py): units
-            # in chat deals and in accepted orders both taken off. Every list
-            # passes `counted` for its tracked listings (tracked_counts).
+            # this product's stock; what an order or a chat deal may still
+            # take, for a store's product or counted stock (null for other
+            # listings, which say it on their own page as units_left); and
+            # the seller's pause on new orders for it. "Left" is the shared
+            # count (inventory.py): units in chat deals, in accepted orders
+            # and sold through orders all taken off. Every list passes
+            # `counted` for those listings (inventory.card_counts).
             "stock_tracked": inventory.is_tracked(listing),
             "available_quantity": inventory.card_available(listing, counted),
             "temporarily_unavailable": bool(getattr(listing, "temporarily_unavailable", False)),

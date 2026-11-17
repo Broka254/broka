@@ -873,16 +873,18 @@ class Listing(Base):
     # is retried by the sweep.
     sold_out_texted_at   = Column(DateTime, nullable=True)
     # Store orders (api/domains/store_orders/stock.py, STORE_ORDERS.md).
-    #   stock_tracked   the seller counts this product: `quantity` is then
-    #                   the units on hand. Accepting an order reserves units
-    #                   against it, and handing an order over takes them
-    #                   off. False (every existing listing): `quantity` is
-    #                   what the seller said they have, informational, and
-    #                   the seller confirms availability on each order -
-    #                   untracked is never treated as zero.
-    #   stock_reserved  units held by accepted orders not handed over yet.
-    #                   Changed only by single conditional UPDATEs, so two
-    #                   acceptances can never reserve the same last unit.
+    # Every listing's units are counted for orders and chat deals alike
+    # (api/domains/listings/inventory.py); this says how they are written.
+    #   stock_tracked   the seller keeps an on-hand count: `quantity` is on
+    #                   hand plus what chat deals sold, and handing an order
+    #                   over takes its units off it. False (every existing
+    #                   listing): `quantity` is the stated total, and units
+    #                   sold through orders are counted from their lines.
+    #   stock_reserved  units held by accepted orders not handed over yet,
+    #                   counted or not. Taken only under the listing's row
+    #                   lock, by a conditional UPDATE, so two acceptances -
+    #                   or an acceptance and a chat deal - never get the
+    #                   same last unit.
     #   temporarily_unavailable  the seller paused new orders for this
     #                   product: still shown, labelled, but not orderable.
     # Columns, not a ListingStatus, for the reason given at paid_until.
