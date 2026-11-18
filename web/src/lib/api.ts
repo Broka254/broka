@@ -59,6 +59,13 @@ export async function getStoreCategories(storeId: string): Promise<StoreCategory
 
 const STORE_ID = /^[A-Za-z0-9_-]{1,64}$/
 
+/** The store with this id (GET /stores/{id}), or null: the inbox names a
+ *  store's own conversations by the store's id (lib/conversations.ts). */
+export async function getStoreById(storeId: string): Promise<Store | null> {
+  if (!STORE_ID.test(storeId)) return null
+  return apiGet<Store>(`/stores/${storeId}`, [`store-id:${storeId}`])
+}
+
 /** A store's buyer reviews: its own summary, never the seller's record. */
 export async function getStoreReviews(storeId: string): Promise<StoreReviews | null> {
   if (!STORE_ID.test(storeId)) return null

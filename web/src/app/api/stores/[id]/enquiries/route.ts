@@ -14,10 +14,16 @@ interface ThreadMessage {
   content: string
   kind: string
   created_at: string | null
+  client_msg_id?: string
 }
 
+const CLIENT_ID = /^[A-Za-z0-9_-]{8,64}$/
+
 /** Only the direct conversation: no private notes from Zeno, and media as
- *  a mention (the app shows photos and voice notes). */
+ *  a mention (the app shows photos and voice notes). The buyer's own
+ *  messages keep the id their browser sent them with, so the page can tell
+ *  the stored copy of a message it is still showing as "Sending…" from a
+ *  second one (EnquiryThread.tsx). */
 function thread(data: unknown): { messages: ThreadMessage[] } {
   const rows = Array.isArray(data) ? data : []
   const messages: ThreadMessage[] = []
@@ -33,6 +39,9 @@ function thread(data: unknown): { messages: ThreadMessage[] } {
       content: kind === 'text' ? String(m.content ?? '') : '',
       kind,
       created_at: typeof m.created_at === 'string' ? m.created_at : null,
+      ...(role === 'buyer' && typeof m.client_msg_id === 'string' && CLIENT_ID.test(m.client_msg_id)
+        ? { client_msg_id: m.client_msg_id }
+        : {}),
     })
   }
   return { messages }
@@ -59,7 +68,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
   const content = typeof body.content === 'string' ? body.content.slice(0, 2000) : ''
   const listingId = body.listing_id ? safeId(body.listing_id) : null
-  const clientId = typeof body.client_msg_id === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(body.client_msg_id)
+  const clientId = typeof body.client_msg_id === 'string' && CLIENT_ID.test(body.client_msg_id)
     ? body.client_msg_id : undefined
   return respond(await callApi(req, `/stores/${storeId}/enquiries`, {
     method: 'POST',

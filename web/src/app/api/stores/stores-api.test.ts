@@ -13,6 +13,7 @@ import { json, stubFetch } from '@/test/fixtures'
 
 import { POST as cartEvent } from './[id]/cart-events/route'
 import { GET as readThread, POST as askStore } from './[id]/enquiries/route'
+import { GET as listConversations } from './conversations/route'
 import { POST as submitOrder } from './[id]/orders/route'
 import { GET as listOrders } from './orders/route'
 import { GET as readOrder } from './orders/[orderId]/route'
@@ -528,6 +529,19 @@ describe('asking a store a question', () => {
     expect(fn).not.toHaveBeenCalled()
   })
 
+  it("keeps the id the buyer's browser sent its own message with - never one on the store's side", async () => {
+    stubFetch({
+      [api('/negotiate/')]: json([
+        { id: 'm1', role: 'buyer', content: 'Hi', msg_type: 'text', created_at: '2026-11-17T08:00:00', via_ai: false, client_msg_id: 'abcdefgh1234' },
+        { id: 'm2', role: 'seller', content: 'Hello', msg_type: 'text', created_at: '2026-11-17T08:01:00', via_ai: false, client_msg_id: 'sellerside12' },
+        { id: 'm3', role: 'buyer', content: 'Hm', msg_type: 'text', created_at: '2026-11-17T08:02:00', via_ai: false, client_msg_id: 'not an id!' },
+      ]),
+    })
+    const res = await readThread(request('/api/stores/s1/enquiries', { cookies: { broka_at: 't' } }), ctx({ id: 's1' }))
+    const { messages: shown } = (await res.json()) as { messages: Array<Record<string, unknown>> }
+    expect(shown.map((m) => m.client_msg_id)).toEqual(['abcdefgh1234', undefined, undefined])
+  })
+
   it("sends the question with the id that makes a retry the same message, and a bad id is dropped", async () => {
     const { to } = stubFetch({ [api('/stores/s1/enquiries')]: json({ id: 'm9' }, 201) })
     const ask = (body: unknown) =>
@@ -538,6 +552,67 @@ describe('asking a store a question', () => {
     expect(first).toEqual({ content: 'Is it in stock?', listing_id: 'l1', client_msg_id: 'abcdefgh1234' })
     expect(second!.content).toHaveLength(2000)
     expect(second).not.toHaveProperty('client_msg_id')
+  })
+})
+
+describe("the buyer's conversations with stores", () => {
+  const inbox = [
+    {
+      thread_type: 'store',
+      store_id: 's1',
+      listing_id: null,
+      my_role: 'buyer',
+      last_message: 'Yes, two left.',
+      last_role: 'seller',
+      last_msg_type: 'text',
+      last_message_at: '2026-11-17T08:05:00Z',
+      unread: 2,
+    },
+    // The user's own store's side of a thread: answered from the app.
+    { listing_id: 'l9', my_role: 'seller', last_message: 'Hi', last_role: 'buyer', last_msg_type: 'text' },
+  ]
+
+  it("reads the app's inbox as the signed-in buyer, and returns the conversations a store page can open", async () => {
+    const { to } = stubFetch({
+      [api('/negotiate/inbox/u1')]: json(inbox),
+      [api('/stores/s1')]: json({ id: 's1', name: 'Clanix', slug: 'clanix', is_active: true, orders_enabled: true, logo: null, logo_url: null }),
+    })
+    const res = await listConversations(request('/api/stores/conversations?user=u1', { cookies: { broka_at: 'tok' } }))
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      conversations: [
+        {
+          key: 'store:s1',
+          store: { id: 's1', slug: 'clanix', name: 'Clanix', logo: null },
+          product: null,
+          last: { text: 'Yes, two left.', from: 'seller', at: '2026-11-17T08:05:00Z' },
+          href: '/store/clanix/messages',
+        },
+      ],
+      partial: false,
+    })
+    expect(to(api('/negotiate/inbox/u1'))[0]!.headers.authorization).toBe('Bearer tok')
+    // Reading the list marks nothing read: no seller is told the buyer saw anything.
+    expect(to(api('/negotiate/store/'))).toHaveLength(0)
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('needs an id that is one, before building an address from it', async () => {
+    const { fn } = stubFetch({})
+    for (const path of ['/api/stores/conversations', '/api/stores/conversations?user=../admin']) {
+      const res = await listConversations(request(path, { cookies: { broka_at: 'tok' } }))
+      expect(res.status).toBe(400)
+    }
+    expect(fn).not.toHaveBeenCalled()
+  })
+
+  it("passes the API's refusal of another account's inbox on, and a missing session as signed out", async () => {
+    stubFetch({ [api('/negotiate/inbox/u2')]: json({ detail: "Cannot access another user's inbox." }, 403) })
+    const refused = await listConversations(request('/api/stores/conversations?user=u2', { cookies: { broka_at: 'tok' } }))
+    expect(refused.status).toBe(403)
+    expect(await refused.json()).toEqual({ error: { code: 'HTTP_403', message: "Cannot access another user's inbox." } })
+    const out = await listConversations(request('/api/stores/conversations?user=u1'))
+    expect(out.status).toBe(401)
   })
 })
 
