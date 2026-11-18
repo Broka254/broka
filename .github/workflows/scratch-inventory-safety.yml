@@ -1,0 +1,91 @@
+# TEMPORARY - scratch branch only, deleted once the PR's own CI runs.
+# Runs the store-order inventory tests on PostgreSQL and SQLite, then runs
+# the new regression tests against main's backend code to show which fail
+# without the fix.
+name: scratch - store-order inventory checks
+on:
+  push:
+    branches: ['scratch/inventory-safety']
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: broka
+          POSTGRES_PASSWORD: broka
+          POSTGRES_DB: broka_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U broka -d broka_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    env:
+      ENV: test
+      SECRET_KEY: ci-test-secret-key-long-enough-for-testing-purposes
+      BROKA_NATIVE: "off"
+      REDIS_URL: redis://localhost:6379/0
+      DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+      PG_URL: "postgresql+asyncpg://broka:broka@localhost:5432/broka_test"
+      TESTS: >-
+        tests/test_deal_payout_stock.py tests/test_store_orders.py
+        tests/test_store_orders_migration.py tests/test_workers_v4.py
+        tests/test_settlement_sweeps.py tests/test_chat_settlement_econfirm.py
+        tests/test_listing_stock.py tests/test_sold_out_reports.py
+        tests/test_buyer_protection.py tests/test_dispute_fund_safety.py
+        tests/test_schema_migrations.py tests/test_escrow.py tests/test_buy_agent.py
+        tests/test_store_order_rules.py tests/test_payments_off.py
+      NEW_TESTS: >-
+        tests/test_deal_payout_stock.py
+        tests/test_store_orders.py::TestCrossChannelStock
+        tests/test_store_orders.py::TestExpirySweep
+        tests/test_workers_v4.py::TestTheSweepOutlivesAFailedPass
+        tests/test_store_orders_migration.py
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+      - name: Install
+        run: cd backend && pip install -r requirements.txt
+      - name: Targeted tests on PostgreSQL (with the fix)
+        id: pg
+        continue-on-error: true
+        env:
+          POSTGRES_TEST_URL: ${{ env.PG_URL }}
+        run: cd backend && python -m pytest $TESTS -q -o addopts="" --tb=short -p tests.postgres_plugin -rs
+      - name: Targeted tests on SQLite (with the fix)
+        id: sqlite
+        continue-on-error: true
+        run: cd backend && python -m pytest $TESTS -q -o addopts="" --tb=short -rs
+      - name: New tests against main's backend (failures expected where a fix is tested)
+        continue-on-error: true
+        env:
+          POSTGRES_TEST_URL: ${{ env.PG_URL }}
+        run: |
+          git checkout origin/main -- backend/api
+          git status --short | head
+          cd backend && python -m pytest $NEW_TESTS -q -o addopts="" --tb=line -p tests.postgres_plugin -rfs
+      - name: Verdict
+        run: |
+          echo "postgres=${{ steps.pg.outcome }} sqlite=${{ steps.sqlite.outcome }}"
+          test "${{ steps.pg.outcome }}" = success
+          test "${{ steps.sqlite.outcome }}" = success
