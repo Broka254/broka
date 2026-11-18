@@ -26,6 +26,14 @@
   font-weight: 600;
 }
 
+.chip svg {
+  flex: none;
+}
+
+.chipIcon {
+  color: var(--violet-text);
+}
+
 .good {
   color: #34d399;
 }
@@ -819,10 +827,14 @@
 }
 
 @media (min-width: 760px) {
+  /* The row runs out under a fade at the right edge, where a tile cut
+     clean in half looked like a mistake rather than more to scroll to. */
   .categoryRail {
     gap: 14px;
     margin-inline: 0;
-    padding-inline: 0;
+    padding-inline: 0 56px;
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 64px), transparent);
+    mask-image: linear-gradient(90deg, #000 calc(100% - 64px), transparent);
   }
 
   .categoryTile {
@@ -1208,6 +1220,34 @@
 @media (max-width: 600px) {
   .galleryMain {
     border-radius: 22px;
+  }
+
+  /* A phone moves between photos with a swipe or the arrows, and the count
+     says where it is: the strip of thumbnails would only push the name and
+     the price below the first screen. */
+  .thumbs {
+    display: none;
+  }
+
+  /* The seller's record in one line that scrolls, not two or three. */
+  .proofLine {
+    flex-wrap: nowrap;
+    margin-inline: calc(-1 * var(--gutter));
+    padding-inline: var(--gutter);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .proofLine::-webkit-scrollbar {
+    display: none;
+  }
+
+  .proofLine li {
+    flex: none;
+  }
+
+  .priceRow {
+    margin-top: 16px;
   }
 
   .galleryNav {

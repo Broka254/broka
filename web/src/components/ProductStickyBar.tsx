@@ -47,14 +47,26 @@ export function ProductStickyBar({
     const footer = document.querySelector('[data-store-footer]')
     const observers: IntersectionObserver[] = []
     if (box) {
-      const io = new IntersectionObserver(([entry]) => {
-        if (entry) setScrolledPast(!entry.isIntersecting && entry.boundingClientRect.top < 0)
-      })
+      // The root reaches far below the screen, so the box "intersects" it
+      // whenever any of it is below the screen's top edge, and stops only
+      // once it is entirely above. Against the plain viewport, a jump from
+      // below the screen to above it (restored scroll, a fling on a slow
+      // phone) is no change at all - not intersecting either way - and the
+      // observer would never call.
+      // The newest entry, not the first: one call can carry several, oldest first.
+      const io = new IntersectionObserver(
+        (entries) => {
+          const entry = entries[entries.length - 1]
+          if (entry) setScrolledPast(!entry.isIntersecting)
+        },
+        { rootMargin: '0px 0px 100000px 0px' },
+      )
       io.observe(box)
       observers.push(io)
     }
     if (footer) {
-      const io = new IntersectionObserver(([entry]) => {
+      const io = new IntersectionObserver((entries) => {
+        const entry = entries[entries.length - 1]
         if (entry) setFooterInView(entry.isIntersecting)
       })
       io.observe(footer)
