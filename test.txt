@@ -1,0 +1,64 @@
+
+> broka-web@0.1.0 test
+> vitest run
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv5.0.1 [39m[90m/home/runner/work/broka/broka/web[39m
+
+ [32m✓[39m src/app/api/stores/stores-api.test.ts [2m([22m[2m65 tests[22m[2m)[22m[32m 111[2mms[22m[39m
+ [32m✓[39m src/components/order-view.test.tsx [2m([22m[2m24 tests[22m[2m)[22m[33m 1766[2mms[22m[39m
+   [32m✓[39m OrderView [2m(17)[22m
+     [33m[2m✓[22m[39m shows where the order is, what the store said, and the total the API worked out[33m 322[2mms[22m[39m
+ [32m✓[39m src/components/components.test.tsx [2m([22m[2m51 tests[22m[2m)[22m[33m 1726[2mms[22m[39m
+   [32m✓[39m StoreLanding [2m(4)[22m
+     [33m[2m✓[22m[39m wears the store's own sign, a search of its catalogue and its sections - with Home marked - on its homepage[33m 361[2mms[22m[39m
+ [32m✓[39m src/components/web-checkout.test.tsx [2m([22m[2m25 tests[22m[2m)[22m[33m 1769[2mms[22m[39m
+   [32m✓[39m SignInPanel [2m(5)[22m
+     [33m[2m✓[22m[39m signs an existing account in with a code, with no password and no app[33m 364[2mms[22m[39m
+ [32m✓[39m src/lib/lib.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/components/messaging.test.tsx [2m([22m[2m14 tests[22m[2m)[22m[33m 1122[2mms[22m[39m
+   [32m✓[39m writing to a store [2m(8)[22m
+     [33m[2m✓[22m[39m shows a message the moment it is sent, marked Sending, then the stored copy in its place - never both[33m 301[2mms[22m[39m
+ [32m✓[39m src/components/order-lists.test.tsx [2m([22m[2m11 tests[22m[2m)[22m[33m 839[2mms[22m[39m
+ [32m✓[39m src/lib/storefront.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/app/routes.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m src/components/navigation.test.tsx [2m([22m[2m17 tests[22m[2m)[22m[33m 1051[2mms[22m[39m
+   [32m✓[39m a store's navigation [2m(7)[22m
+     [33m[2m✓[22m[39m on the home page, Home is the one section marked as the page the buyer is on[33m 348[2mms[22m[39m
+ [32m✓[39m src/app/store/[name]/messages/page.test.tsx [2m([22m[2m9 tests[22m[2m)[22m[33m 1159[2mms[22m[39m
+   [32m✓[39m messaging a store on its website [2m(9)[22m
+     [33m[2m✓[22m[39m marks Messages as the section the buyer is in - not About, which the page used to mark[33m 363[2mms[22m[39m
+ [32m✓[39m src/lib/conversations.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/lib/escrow-providers.test.ts [2m([22m[2m33 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/app/store/[name]/p/[listingId]/availability.test.tsx [2m([22m[2m7 tests[22m[2m)[22m[33m 1074[2mms[22m[39m
+   [32m✓[39m product page: whether it can be ordered now [2m(7)[22m
+     [33m[2m✓[22m[39m a product with a unit left can be ordered, whether or not the seller counts its stock[33m 448[2mms[22m[39m
+ [32m✓[39m src/lib/messages.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/app/store/[name]/shop/page.test.tsx [2m([22m[2m7 tests[22m[2m)[22m[33m 994[2mms[22m[39m
+   [32m✓[39m store shop page [2m(7)[22m
+     [33m[2m✓[22m[39m shows the catalogue with a breadcrumb and no invented products[33m 379[2mms[22m[39m
+     [33m[2m✓[22m[39m an empty catalogue says so and offers a next step, never invented products[33m 432[2mms[22m[39m
+ [32m✓[39m src/app/store/[name]/p/[listingId]/page.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/lib/cart.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/app/store/[name]/about/page.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[33m 609[2mms[22m[39m
+   [32m✓[39m store details page [2m(4)[22m
+     [33m[2m✓[22m[39m asks for this shop's reviews and shows them[33m 408[2mms[22m[39m
+ [32m✓[39m src/lib/ratings.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/app/store/[name]/cart/page.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/app/store/orders/page.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 499[2mms[22m[39m
+   [32m✓[39m the buyer's account pages [2m(3)[22m
+     [33m[2m✓[22m[39m the orders, from every store, are under BROKA's account header - never one store's[33m 349[2mms[22m[39m
+ [32m✓[39m src/lib/store-nav.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/lib/legal.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/lib/category-art.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/lib/server-config.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m26 passed[39m[22m[90m (26)[39m
+[2m      Tests [22m [1m[32m364 passed[39m[22m[90m (364)[39m
+[2m   Start at [22m 15:13:41
+[2m   Duration [22m 18.22s[2m (environment 54%, tests 27%, setup 11%, transform 5%, import 4%)[22m
+
+[2mEnvironment [22m [33mjsdom was created 26 times[39m[2m · 26.17s total, 54% of tracked time[22m
+[2m            [22m [2mcreate it once per worker with [22m[33mpool: 'vmThreads'[39m[2m (keeps per-file isolation) or [22m[33misolate: false[39m[2m (shares it across files)[22m
+[2m            [22m [2mlearn more: https://vitest.dev/guide/improving-performance#test-environments[22m
+

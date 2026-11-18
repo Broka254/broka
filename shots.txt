@@ -1,0 +1,42 @@
+{
+  "pagesChecked": 46,
+  "horizontalOverflow": [],
+  "smallTapTargets": [],
+  "footerUnderBottomBar": [],
+  "errors": 0
+}
+[
+  {
+    "name": "desktop: conversation scroll",
+    "openedAtNewest": true,
+    "heldWhileReadingBack": true,
+    "newMessagesButtonGoesToNewest": true,
+    "sendingShownAtOnce": true,
+    "sentOnce": true,
+    "listTimesInsideRows": true,
+    "followedAfterSending": true
+  },
+  {
+    "name": "phone: chat screen",
+    "onOpen": {
+      "composerInView": true,
+      "composerBottom": 844,
+      "viewportHeight": 844,
+      "newestAboveComposer": true,
+      "storeHeaderHidden": true,
+      "bottomBarAbsent": true,
+      "overflowX": 0
+    },
+    "withKeyboard": {
+      "composerInView": true,
+      "composerBottom": 508,
+      "viewportHeight": 508,
+      "newestAboveComposer": true,
+      "storeHeaderHidden": true,
+      "bottomBarAbsent": true,
+      "overflowX": 0
+    },
+    "failureExplained": "Not sent - you've sent several messages in a short time. Wait a few minutes, then try again.",
+    "retriedOnce": true
+  }
+]
