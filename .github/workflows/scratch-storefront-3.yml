@@ -1,0 +1,114 @@
+# TEMPORARY - scratch branch only, deleted once the PR's own CI has run.
+# The web checks CI runs (typecheck, lint, test, build) on the storefront
+# 3.0 branch, then the production build served against a fixture API and
+# driven in Chromium at phone, tablet and desktop widths for screenshots
+# and measured layout checks. Results are pushed to a results branch of
+# their own, which is deleted with this one.
+name: scratch - storefront 3.0 checks and screenshots
+on:
+  push:
+    branches: ['scratch/storefront-3']
+
+permissions:
+  contents: write
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: web
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      BROKA_API_URL: http://127.0.0.1:4010
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/package.json
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install
+        run: npm ci && mkdir -p ../qa-out
+
+      - name: Typecheck
+        id: typecheck
+        continue-on-error: true
+        run: set -o pipefail; npm run typecheck 2>&1 | tee ../qa-out/typecheck.txt
+
+      - name: Lint
+        id: lint
+        continue-on-error: true
+        run: set -o pipefail; npm run lint 2>&1 | tee ../qa-out/lint.txt
+
+      - name: Test
+        id: test
+        continue-on-error: true
+        run: set -o pipefail; npm test 2>&1 | tee ../qa-out/test.txt
+
+      - name: Build
+        id: build
+        continue-on-error: true
+        run: set -o pipefail; npm run build 2>&1 | tee ../qa-out/build.txt
+
+      - name: Serve the build against the fixture API
+        if: steps.build.outcome == 'success'
+        run: |
+          node ../scratch/storefront-qa/mock-api.mjs > ../qa-out/mock-api.log 2>&1 &
+          npx next start -p 3000 > ../qa-out/next.log 2>&1 &
+          for i in $(seq 1 90); do curl -sf -o /dev/null http://127.0.0.1:3000/store/clanix && break; sleep 1; done
+          curl -s -o /dev/null -w "store page answered %{http_code}\n" http://127.0.0.1:3000/store/clanix
+          curl -s http://127.0.0.1:3000/store/clanix > ../qa-out/home.html
+          curl -s http://127.0.0.1:3000/store/clanix/p/l1 > ../qa-out/product.html
+
+      - name: Screenshots and layout checks
+        id: shots
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        working-directory: scratch/storefront-qa
+        env:
+          OUT_DIR: ${{ github.workspace }}/qa-out
+        run: |
+          npm init -y > /dev/null
+          npm install --no-audit --no-fund playwright@1 > /dev/null
+          npx playwright install --with-deps chromium > /dev/null
+          set -o pipefail
+          node shoot.mjs 2>&1 | tee "$OUT_DIR/shots.txt"
+
+      - name: Verdict file
+        if: always()
+        run: |
+          {
+            echo "sha=${GITHUB_SHA}"
+            echo "typecheck=${{ steps.typecheck.outcome }}"
+            echo "lint=${{ steps.lint.outcome }}"
+            echo "test=${{ steps.test.outcome }}"
+            echo "build=${{ steps.build.outcome }}"
+            echo "screenshots=${{ steps.shots.outcome }}"
+          } | tee ../qa-out/verdict.txt
+
+      - name: Publish the results to a branch of their own
+        if: always()
+        working-directory: ${{ runner.temp }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -rf results && mkdir results && cp -r "$GITHUB_WORKSPACE/qa-out/." results/
+          cd results
+          git init -q -b results
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "Storefront 3.0 QA results for ${GITHUB_SHA}"
+          git push -q "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/scratch/storefront-3-results-${GITHUB_RUN_NUMBER}"
+
+      - name: Fail when a check failed
+        if: always()
+        run: |
+          test "${{ steps.typecheck.outcome }}" = success
+          test "${{ steps.lint.outcome }}" = success
+          test "${{ steps.test.outcome }}" = success
+          test "${{ steps.build.outcome }}" = success
