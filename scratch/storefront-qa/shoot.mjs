@@ -43,6 +43,9 @@ const PAGES = {
   'home-new': '/store/mama-mboga',
   'shop-filtered': '/store/clanix/shop?subcategory_id=phones&sort=price_low',
   'product-out': '/store/clanix/p/l6',
+  'site-home': '/',
+  download: '/download',
+  'not-found': '/store/zzz-no-such-store',
 }
 
 /** What each page is done loading looks like (client-read pages fill in after load). */
@@ -226,6 +229,38 @@ await step('drawer phone', async () => {
   await page.getByRole('dialog').waitFor({ timeout: 5_000 })
   await page.waitForTimeout(500)
   await shot(page, 'drawer-mobile-390.png')
+  await ctx.close()
+})
+
+// ── "Added to cart": the note that confirms it, on a computer and a phone ──
+await step('added note', async () => {
+  for (const device of ['desktop-1280', 'mobile-390']) {
+    const ctx = await context(device, { cart: [] })
+    const page = await ctx.newPage()
+    await open(page, 'shop')
+    await page.locator('main article').nth(2).getByRole('button', { name: 'Add to cart' }).click()
+    await page.getByRole('status').filter({ hasText: 'Added to cart' }).waitFor({ timeout: 3_000 })
+    await page.waitForTimeout(450)
+    await shot(page, `added-note-${device}.png`)
+    await ctx.close()
+  }
+})
+
+// ── The filter panel on a phone ────────────────────────────────────────────
+await step('filters phone', async () => {
+  const ctx = await context('mobile-390')
+  const page = await ctx.newPage()
+  await open(page, 'shop')
+  await page.locator('summary[aria-label="Filters"]').click()
+  await page.waitForTimeout(400)
+  await shot(page, 'filters-mobile-390.png')
+  results.flows.push({
+    name: 'filters phone',
+    panelInside: await page.evaluate(() => {
+      const r = document.querySelector('details[open] > div')?.getBoundingClientRect()
+      return r ? { left: Math.round(r.left), right: Math.round(r.right), width: window.innerWidth, inside: r.left >= 0 && r.right <= window.innerWidth } : null
+    }),
+  })
   await ctx.close()
 })
 
