@@ -10,10 +10,27 @@
   position: sticky;
   top: 0;
   z-index: 30;
-  /* Opaque (globals.css --surface-bar): the products scroll under it. */
-  background: var(--surface-bar);
+  /* Opaque (globals.css --surface-bar): the products scroll under it. The
+     sheen on top of it is painted over the solid colour, not instead of it. */
+  background:
+    radial-gradient(60% 140% at 12% 0%, rgb(139 117 255 / 0.1), transparent 60%),
+    radial-gradient(50% 140% at 92% 0%, rgb(84 215 233 / 0.07), transparent 60%),
+    var(--surface-bar);
   border-bottom: 1px solid var(--border);
-  box-shadow: 0 10px 30px -24px rgb(0 0 0 / 0.9);
+  box-shadow: 0 18px 40px -30px rgb(0 0 0 / 0.95);
+}
+
+/* The aurora line along the header's foot, fading out at both ends. */
+.header::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 1px;
+  background: var(--line-aurora);
+  content: '';
+  opacity: 0.5;
+  pointer-events: none;
 }
 
 .bar {
@@ -21,10 +38,10 @@
   grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
   grid-template-areas: 'brand search actions';
   align-items: center;
-  gap: 20px;
-  max-width: 1280px;
+  gap: clamp(16px, 2.4vw, 32px);
+  max-width: calc(var(--shell) + 2 * var(--gutter));
   margin: 0 auto;
-  padding: 12px clamp(16px, 3vw, 32px);
+  padding: 12px var(--gutter);
 }
 
 .brand {
@@ -33,17 +50,37 @@
   align-items: center;
   gap: 12px;
   min-width: 0;
-  max-width: 320px;
+  max-width: 340px;
   border-radius: var(--radius-md);
 }
 
-.brandLogo {
+/* The store's sign in a ring of BROKA's colours. */
+.brandMark {
+  position: relative;
   flex: none;
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
+  width: 44px;
+  height: 44px;
+  padding: 1.5px;
+  border-radius: 15px;
+  background: conic-gradient(from 210deg, #8b75ff, #54d7e9, #608cff, #b9a8ff, #8b75ff);
+  box-shadow:
+    0 0 0 4px rgb(139 117 255 / 0.08),
+    0 10px 24px -12px rgb(139 117 255 / 0.9);
+  transition: box-shadow 0.3s var(--ease);
+}
+
+.brand:hover .brandMark {
+  box-shadow:
+    0 0 0 5px rgb(139 117 255 / 0.14),
+    0 12px 30px -10px rgb(139 117 255 / 1);
+}
+
+.brandLogo {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 13.5px;
   object-fit: cover;
-  border: 1px solid var(--border-strong);
   background: var(--surface-solid);
 }
 
@@ -53,25 +90,41 @@
   min-width: 0;
 }
 
+.brandNameRow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
 .brandName {
   overflow: hidden;
   color: var(--text-high);
   font-family: var(--font-display);
   font-size: 17px;
-  font-weight: 800;
+  font-weight: 700;
   line-height: 1.2;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.brandVerified {
+  flex: none;
+  color: #34d399;
+  filter: drop-shadow(0 0 6px rgb(52 211 153 / 0.45));
+}
+
 .brandTag {
   overflow: hidden;
-  color: var(--text-low);
-  font-size: 10.5px;
-  font-weight: 650;
-  letter-spacing: 0.12em;
-  line-height: 1.4;
+  background: linear-gradient(90deg, #b9a8ff, #8fb2ff 60%, #7fdeee);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  line-height: 1.5;
   text-overflow: ellipsis;
   text-transform: uppercase;
   white-space: nowrap;
@@ -81,7 +134,7 @@
   grid-area: search;
   justify-self: center;
   width: 100%;
-  max-width: 640px;
+  max-width: 660px;
   min-width: 0;
 }
 
@@ -98,7 +151,7 @@
 
 /* The row of the store's sections. */
 .sections {
-  border-top: 1px solid rgb(255 255 255 / 0.05);
+  border-top: 1px solid rgb(255 255 255 / 0.04);
 }
 
 .sectionsInner {
@@ -106,16 +159,16 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  max-width: 1280px;
+  max-width: calc(var(--shell) + 2 * var(--gutter));
   margin: 0 auto;
-  padding: 0 clamp(16px, 3vw, 32px);
+  padding: 0 var(--gutter);
 }
 
 .sectionList {
   display: flex;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
-  margin: 0;
+  margin: 0 0 0 -14px;
   padding: 0;
   list-style: none;
 }
@@ -128,10 +181,13 @@
   padding: 0 14px;
   color: var(--text-mid);
   font-size: 14px;
-  font-weight: 650;
-  transition: color 0.15s ease;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: color 0.2s ease;
 }
 
+/* The mark under the section in view: an aurora bar with a glow, drawn
+   out from the middle. */
 .sectionLink::after {
   position: absolute;
   right: 14px;
@@ -139,13 +195,19 @@
   left: 14px;
   height: 2px;
   border-radius: 2px 2px 0 0;
-  background: transparent;
+  background: linear-gradient(90deg, #a48bff, #608cff 55%, #54d7e9);
+  box-shadow: 0 0 14px rgb(139 117 255 / 0.9);
   content: '';
-  transition: background 0.15s ease;
+  transform: scaleX(0);
+  transition: transform 0.35s var(--ease-out);
 }
 
 .sectionLink:hover {
   color: var(--text-high);
+}
+
+.sectionLink:hover::after {
+  transform: scaleX(0.4);
 }
 
 .sectionLink[aria-current] {
@@ -153,7 +215,7 @@
 }
 
 .sectionLink[aria-current]::after {
-  background: var(--cta);
+  transform: scaleX(1);
 }
 
 .accountLink {
@@ -161,18 +223,23 @@
   flex: none;
   align-items: center;
   gap: 8px;
-  min-height: 36px;
-  padding: 0 13px;
+  min-height: 34px;
+  padding: 0 14px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
+  background: rgb(255 255 255 / 0.02);
   color: var(--text-mid);
   font-size: 13px;
-  font-weight: 650;
-  transition: border-color 0.15s ease, color 0.15s ease;
+  font-weight: 600;
+  transition:
+    border-color 0.2s ease,
+    color 0.2s ease,
+    background 0.2s ease;
 }
 
 .accountLink:hover {
   border-color: var(--border-accent);
+  background: rgb(139 117 255 / 0.08);
   color: var(--text-high);
 }
 
@@ -183,17 +250,21 @@
       'brand actions'
       'search search';
     gap: 10px 12px;
-    padding: 10px 14px 12px;
+    padding: 10px var(--gutter) 12px;
   }
 
   .search {
     max-width: none;
   }
 
+  .brandMark {
+    width: 40px;
+    height: 40px;
+    border-radius: 14px;
+  }
+
   .brandLogo {
-    width: 36px;
-    height: 36px;
-    border-radius: 11px;
+    border-radius: 12.5px;
   }
 
   .brandName {
@@ -227,22 +298,33 @@
 }
 
 @media (max-width: 860px) {
+  /* A dock floating just above the screen's edge: solid, so nothing under
+     it shows through, with the lit hairline edge of the rest of the site. */
   .bottomNav {
     position: fixed;
-    right: 0;
-    bottom: 0;
-    left: 0;
+    right: 10px;
+    bottom: calc(8px + env(safe-area-inset-bottom));
+    left: 10px;
     z-index: 35;
     display: block;
-    padding: 4px 8px calc(4px + env(safe-area-inset-bottom));
-    border-top: 1px solid var(--border);
-    background: var(--surface-bar);
-    box-shadow: 0 -12px 30px -18px rgb(0 0 0 / 0.85);
-    transition: transform 0.2s var(--ease);
+    padding: 5px;
+    border: 1px solid transparent;
+    border-radius: 24px;
+    background:
+      linear-gradient(180deg, #10142a, #080a16) padding-box,
+      var(--edge) border-box;
+    box-shadow:
+      0 22px 44px -14px rgb(0 0 0 / 0.95),
+      0 0 0 1px rgb(0 0 0 / 0.5),
+      0 -10px 40px -24px rgb(139 117 255 / 0.5);
+    transition:
+      transform 0.3s var(--ease),
+      opacity 0.3s ease;
   }
 
   .bottomNav[data-away] {
-    transform: translateY(115%);
+    opacity: 0;
+    transform: translateY(calc(100% + 24px));
   }
 }
 
@@ -262,19 +344,21 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 3px;
   width: 100%;
   min-height: 54px;
   padding: 4px 2px;
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: 18px;
   background: none;
   color: var(--text-low);
-  font-size: 11px;
-  font-weight: 650;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
   line-height: 1.2;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  transition: color 0.2s ease;
 }
 
 .tab > span:last-child {
@@ -292,43 +376,58 @@
   color: var(--text-high);
 }
 
-.tab[aria-current] .tabIcon {
-  color: var(--violet-text);
-}
-
-.tab[aria-current]::before {
-  position: absolute;
-  top: -4px;
-  left: 50%;
-  width: 26px;
-  height: 3px;
-  border-radius: 0 0 3px 3px;
-  background: var(--cta);
-  content: '';
-  transform: translateX(-50%);
-}
-
+/* The section in view: its icon on a lit pill. */
 .tabIcon {
   position: relative;
   display: grid;
+  width: 46px;
+  height: 28px;
   place-items: center;
+  border-radius: var(--radius-pill);
+  transition:
+    background 0.25s ease,
+    box-shadow 0.25s ease,
+    color 0.25s ease;
+}
+
+.tab[aria-current] .tabIcon {
+  background: var(--cta);
+  box-shadow:
+    0 8px 18px -8px rgb(122 92 240 / 0.95),
+    inset 0 1px rgb(255 255 255 / 0.22);
+  color: #fff;
 }
 
 .tabBadge {
   position: absolute;
-  top: -6px;
-  left: calc(100% - 7px);
+  top: -5px;
+  left: calc(50% + 5px);
   min-width: 18px;
   height: 18px;
   padding: 0 5px;
   border-radius: 9px;
-  background: #f472b6;
-  box-shadow: 0 0 0 2px #05070f;
+  background: linear-gradient(135deg, #f472b6, #c056f0);
+  box-shadow:
+    0 0 0 2px #0b0e1d,
+    0 4px 12px -2px rgb(244 114 182 / 0.7);
   color: #fff;
   font-size: 10.5px;
   font-weight: 800;
   line-height: 18px;
   text-align: center;
+  animation: badgeIn 0.4s var(--ease-out);
+}
+
+@keyframes badgeIn {
+  0% {
+    transform: scale(0.4);
+  }
+  60% {
+    transform: scale(1.25);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 /* ── The buyer's BROKA account pages: orders and messages ───────────────── */
@@ -337,8 +436,22 @@
   position: sticky;
   top: 0;
   z-index: 30;
-  background: var(--surface-bar);
+  background:
+    radial-gradient(60% 140% at 12% 0%, rgb(139 117 255 / 0.1), transparent 60%),
+    var(--surface-bar);
   border-bottom: 1px solid var(--border);
+}
+
+.accountHeader::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 1px;
+  background: var(--line-aurora);
+  content: '';
+  opacity: 0.45;
+  pointer-events: none;
 }
 
 .accountBar {
@@ -359,13 +472,14 @@
 }
 
 .accountWord {
-  background: linear-gradient(90deg, var(--violet), var(--blue));
+  background: linear-gradient(90deg, #b9a8ff, #8fb2ff 55%, #7fdeee);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+  font-family: var(--font-display);
   font-size: 15px;
-  font-weight: 900;
-  letter-spacing: 3px;
+  font-weight: 800;
+  letter-spacing: 0.2em;
 }
 
 .accountContext {
@@ -373,7 +487,7 @@
   border-left: 1px solid var(--border-strong);
   color: var(--text-mid);
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -386,13 +500,15 @@
   min-height: 40px;
   margin-left: auto;
   padding: 0 14px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid transparent;
   border-radius: var(--radius-pill);
-  background: var(--surface-1);
+  background:
+    linear-gradient(180deg, rgb(21 27 52 / 0.9), rgb(11 14 30 / 0.92)) padding-box,
+    var(--edge) border-box;
   color: var(--text-high);
   font-size: 13px;
-  font-weight: 650;
-  transition: border-color 0.15s ease;
+  font-weight: 600;
+  transition: box-shadow 0.2s ease;
 }
 
 .continue span {
@@ -402,7 +518,7 @@
 }
 
 .continue:hover {
-  border-color: var(--border-accent);
+  box-shadow: 0 10px 26px -16px rgb(122 92 240 / 0.9);
 }
 
 .accountTabs {
@@ -422,7 +538,7 @@
   padding: 0 14px;
   color: var(--text-mid);
   font-size: 14px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .accountTab:hover,
@@ -441,12 +557,15 @@
   left: 14px;
   height: 2px;
   border-radius: 2px 2px 0 0;
-  background: transparent;
+  background: linear-gradient(90deg, #a48bff, #608cff 55%, #54d7e9);
+  box-shadow: 0 0 14px rgb(139 117 255 / 0.9);
   content: '';
+  transform: scaleX(0);
+  transition: transform 0.35s var(--ease-out);
 }
 
 .accountTab[aria-current]::after {
-  background: var(--cta);
+  transform: scaleX(1);
 }
 
 @media (max-width: 560px) {

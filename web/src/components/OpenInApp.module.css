@@ -9,10 +9,11 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px 10px 16px;
-  background: rgb(7 11 22 / 0.94);
+  padding: 9px 10px 9px 16px;
   border-bottom: 1px solid var(--border);
-  backdrop-filter: blur(8px);
+  background:
+    linear-gradient(90deg, rgb(122 92 240 / 0.16), rgb(84 215 233 / 0.06) 70%),
+    #070915;
 }
 
 .text {
@@ -22,12 +23,15 @@
 }
 
 .open {
-  padding: 7px 16px;
+  padding: 7px 18px;
   border-radius: 999px;
   background: var(--cta);
+  box-shadow:
+    0 8px 20px -10px rgb(122 92 240 / 0.95),
+    inset 0 1px rgb(255 255 255 / 0.2);
   color: #fff;
-  font-weight: 800;
   font-size: 13px;
+  font-weight: 700;
 }
 
 .close {

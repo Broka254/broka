@@ -27,8 +27,9 @@ function takesTyping(el: Element | null): boolean {
   return !(el instanceof HTMLInputElement && NOT_TYPED_INTO.has(el.type))
 }
 
-/** Whether a text field has focus - on a phone, the keyboard is up. */
-function useTyping(): boolean {
+/** Whether a text field has focus - on a phone, the keyboard is up. The
+ *  product page's buy bar (ProductStickyBar) steps away on the same signal. */
+export function useTyping(): boolean {
   const [typing, setTyping] = useState(false)
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined

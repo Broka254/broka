@@ -7,6 +7,7 @@ import Link from 'next/link'
 import type { ProductCardData } from '@/lib/catalogue'
 
 import { AddToCart } from './AddToCart'
+import { Price } from './Price'
 import styles from './shop.module.css'
 
 export function ProductCard({ product, storeId }: { product: ProductCardData; storeId: string }) {
@@ -40,7 +41,9 @@ export function ProductCard({ product, storeId }: { product: ProductCardData; st
         </div>
         <div className={styles.productBody}>
           <p className={styles.productName}>{product.name}</p>
-          <p className={styles.productPrice}>{product.priceLabel}</p>
+          <p className={styles.productPrice}>
+            <Price label={product.priceLabel} />
+          </p>
           {product.quantity != null && product.quantity > 0 && (
             <p className={`${styles.stockLine} ${product.quantity > 3 ? styles.stockLineIn : ''}`}>
               {product.quantity <= 3 ? `Only ${product.quantity} left` : 'In stock'}

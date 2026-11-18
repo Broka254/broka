@@ -22,9 +22,12 @@
   width: min(100%, 570px);
   margin: auto 0;
   padding: clamp(27px, 6vw, 50px);
-  border: 1px solid rgb(195 202 226 / 16%);
-  border-radius: 24px;
-  background: linear-gradient(145deg, rgb(12 16 32 / 94%), rgb(5 6 13 / 91%));
+  border: 1px solid transparent;
+  border-radius: 28px;
+  background:
+    radial-gradient(70% 60% at 0% 0%, rgb(139 117 255 / 14%), transparent 70%) padding-box,
+    linear-gradient(145deg, rgb(14 18 36 / 95%), rgb(5 6 13 / 92%)) padding-box,
+    var(--edge) border-box;
   box-shadow: 0 30px 90px -60px #000, inset 0 1px rgb(255 255 255 / 4%);
 }
 .kicker {
@@ -37,10 +40,14 @@
 }
 .card h1 {
   margin: 12px 0 0;
-  color: #f7f7fc;
-  font-family: Montserrat, Inter, ui-sans-serif, system-ui, sans-serif;
+  padding-bottom: .06em;
+  background: var(--aurora-text);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-family: var(--font-display);
   font-size: clamp(34px, 7vw, 48px);
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: -.045em;
   line-height: 1.08;
 }

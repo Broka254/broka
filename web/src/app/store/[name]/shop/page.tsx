@@ -24,6 +24,7 @@ import styles from '@/components/store.module.css'
 import { getStore, getStoreCategories, getStoreListings } from '@/lib/api'
 import { CONDITIONS, PRICE_BANDS, SORTS, filtersQuery, panelActive, readFilters, toProductCard } from '@/lib/catalogue'
 import { PAGE_SIZE } from '@/lib/config'
+import { placeLine, plural } from '@/lib/format'
 import { absoluteUrl, campaignToken, storeCartPath, storeShopPath, viaTag } from '@/lib/links'
 import { API_URL } from '@/lib/server-config'
 import { storePaths } from '@/lib/store-nav'
@@ -75,6 +76,7 @@ export default async function StoreShopPage({ params, searchParams }: Props) {
 
   const view = storeView(store)
   const paths = storePaths(store)
+  const area = placeLine(store.subcounty, store.county)
   const [categories, listings] = store.is_active
     ? await Promise.all([
         getStoreCategories(store.id),
@@ -110,12 +112,26 @@ export default async function StoreShopPage({ params, searchParams }: Props) {
     <StorefrontShell>
       <StoreHeader view={view} active="shop" filters={filters} searchBase={path} />
       <main id="main-content" className={`page ${shop.storePage}`}>
-        <nav aria-label="Breadcrumb" className={shop.crumbs}>
-          <Link href={view.path}>{store.name}</Link>
-          <Icon name="chevron" size={14} />
-          <span aria-current="page">Shop</span>
-        </nav>
-        <h1 className={styles.detailsTitle}>Shop {store.name}</h1>
+        <header className={shop.catalogueHead}>
+          <nav aria-label="Breadcrumb" className={shop.crumbs}>
+            <Link href={view.path}>{store.name}</Link>
+            <Icon name="chevron" size={14} />
+            <span aria-current="page">Shop</span>
+          </nav>
+          <h1 className={styles.detailsTitle}>Shop {store.name}</h1>
+          {store.is_active && store.listing_count > 0 && (
+            <p className={shop.catalogueLead}>
+              <span>{plural(store.listing_count, 'product')}</span>
+              {view.sellCategories.length > 0 && <span>{view.sellCategories.slice(0, 3).join(', ')}</span>}
+              {view.isVirtual ? view.delivery && <span>{view.delivery}</span> : area && <span>{area}</span>}
+            </p>
+          )}
+          {!store.is_active && (
+            <p className={shop.catalogueLead} role="status">
+              {store.name} is taking a break. Its products will be back soon.
+            </p>
+          )}
+        </header>
         {store.is_active && (
           <section aria-labelledby="catalogue-title" className={shop.catalogue}>
             {hasStoreCategoryTiles(categories) && (

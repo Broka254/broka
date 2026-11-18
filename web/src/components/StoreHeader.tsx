@@ -60,10 +60,16 @@ export function StoreHeader({
       <header className={styles.header} data-section={active}>
         <div className={styles.bar}>
           <Link href={view.path} className={styles.brand} aria-label={`${store.name} home`}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={view.logo ?? asset('/logo.png')} alt="" className={styles.brandLogo} width={40} height={40} />
+            {/* The sign in a lit ring: the store's own logo, BROKA's when it uploaded none. */}
+            <span className={styles.brandMark}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={view.logo ?? asset('/logo.png')} alt="" className={styles.brandLogo} width={40} height={40} />
+            </span>
             <span className={styles.brandText}>
-              <span className={styles.brandName}>{store.name}</span>
+              <span className={styles.brandNameRow}>
+                <span className={styles.brandName}>{store.name}</span>
+                {store.owner?.verified && <Icon name="verified" size={15} className={styles.brandVerified} />}
+              </span>
               <span className={styles.brandTag}>Store on BROKA</span>
             </span>
           </Link>

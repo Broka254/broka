@@ -13,8 +13,10 @@ import { CartDrawer } from '@/components/CartDrawer'
 import { EscrowBox } from '@/components/EscrowBox'
 import { Gallery } from '@/components/Gallery'
 import { Icon } from '@/components/Icon'
+import { Price } from '@/components/Price'
 import { ProductBuyBox } from '@/components/ProductBuyBox'
 import { ProductCard } from '@/components/ProductCard'
+import { ProductStickyBar } from '@/components/ProductStickyBar'
 import { ShareButtons } from '@/components/ShareButtons'
 import { StoreAvatar } from '@/components/StoreAvatar'
 import { StoreFooter } from '@/components/StoreFooter'
@@ -26,7 +28,7 @@ import shopStyles from '@/components/shop.module.css'
 import styles from '@/components/store.module.css'
 import { getEscrowDirectory, getListing, getStore, getStoreListings } from '@/lib/api'
 import { filtersQuery, toProductCard } from '@/lib/catalogue'
-import { clip, conditionLabel, formatPrice } from '@/lib/format'
+import { clip, conditionLabel, formatPrice, plural } from '@/lib/format'
 import {
   campaignToken,
   productPath,
@@ -133,6 +135,28 @@ export default async function ProductPage({ params, searchParams }: Props) {
           : !view.available
             ? 'gone'
             : null
+  const buyable = unavailable === null && listing.listing_type !== 'auction'
+  const buyLine = {
+    id: card.id,
+    name: card.name,
+    price: card.price,
+    unit: card.unit,
+    image: card.image,
+    emoji: card.emoji,
+    href: card.href,
+    max: card.maxQuantity,
+  }
+  // Beside the price, as on the product's card: what is left to order, when
+  // the API counts it.
+  const stock =
+    unavailable === null && card.quantity != null && card.quantity > 0
+      ? { low: card.quantity <= 3, label: card.quantity <= 3 ? `Only ${card.quantity} left` : 'In stock' }
+      : null
+  // The seller's record in one line under the name. Reviews, not deals,
+  // make a rating (TrustChips.tsx): no reviews, no stars.
+  const sellerReviews = listing.seller_review_count ?? 0
+  const sellerRating = sellerReviews > 0 && listing.seller_rating != null ? listing.seller_rating : null
+  const deals = listing.seller_completed_deals ?? 0
 
   return (
     <StorefrontShell>
@@ -147,11 +171,40 @@ export default async function ProductPage({ params, searchParams }: Props) {
         </nav>
 
         <div className={styles.productLayout}>
-          <Gallery images={view.images} alt={listing.name} emoji={view.emoji} />
+          <div className={styles.galleryColumn}>
+            <Gallery images={view.images} alt={listing.name} emoji={view.emoji} />
+          </div>
 
           <div className={styles.details}>
             <h1>{listing.name}</h1>
-            <p className={styles.bigPrice}>{view.priceLabel}</p>
+            {(listing.seller_verified || sellerRating != null || deals > 0) && (
+              <ul className={styles.proofLine} aria-label="The seller's record">
+                {listing.seller_verified && (
+                  <li className={styles.proofVerified}>
+                    <Icon name="verified" size={15} /> Verified seller
+                  </li>
+                )}
+                {sellerRating != null && (
+                  <li>
+                    <Icon name="star" size={14} className={styles.proofStar} /> {sellerRating.toFixed(1)}/5{' '}
+                    <span className={styles.proofMuted}>({sellerReviews})</span>
+                  </li>
+                )}
+                {deals > 0 && (
+                  <li>
+                    <Icon name="handshake" size={14} /> {plural(deals, 'deal')} done
+                  </li>
+                )}
+              </ul>
+            )}
+            <div className={styles.priceRow}>
+              <p className={styles.bigPrice}>
+                <Price label={view.priceLabel} />
+              </p>
+              {stock && (
+                <span className={`${styles.stockPill} ${stock.low ? styles.stockLow : ''}`}>{stock.label}</span>
+              )}
+            </div>
             {facts.length > 0 && (
               <ul className={styles.facts}>
                 {facts.map((f) => (
@@ -179,24 +232,15 @@ export default async function ProductPage({ params, searchParams }: Props) {
               </p>
             )}
 
-            {unavailable === null && listing.listing_type !== 'auction' && (
-              <ProductBuyBox
-                storeId={store.id}
-                cartPath={cartPath}
-                line={{
-                  id: card.id,
-                  name: card.name,
-                  price: card.price,
-                  unit: card.unit,
-                  image: card.image,
-                  emoji: card.emoji,
-                  href: card.href,
-                  max: card.maxQuantity,
-                }}
-              />
+            {buyable && (
+              // The bar a phone keeps at hand once this has scrolled away
+              // (ProductStickyBar) watches it by its id.
+              <div id="buy-box">
+                <ProductBuyBox storeId={store.id} cartPath={cartPath} line={buyLine} />
+              </div>
             )}
             <div className={shopStyles.payNote}>
-              <Icon name="check" size={22} />
+              <Icon name="check" size={20} />
               <p>
                 <strong>{SEE_FIRST.lead}</strong> {PAY_LINE} {NO_DEPOSIT}
               </p>
@@ -262,6 +306,9 @@ export default async function ProductPage({ params, searchParams }: Props) {
               ))}
             </div>
           </section>
+        )}
+        {buyable && (
+          <ProductStickyBar storeId={store.id} cartPath={cartPath} line={buyLine} priceLabel={view.priceLabel} watch="buy-box" />
         )}
         <VisitBeacon storeId={store.id} via={via} campaign={campaign} productView />
         <script

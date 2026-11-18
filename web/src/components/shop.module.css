@@ -1,7 +1,13 @@
-/* The storefront as a shop's website: header, hero, perks, catalogue, cart
-   and checkout. Colours are BROKA's (globals.css); the violet used for
-   text is #b69cff, which reads at 7:1 on the dark background where
-   --violet doesn't. */
+/* The storefront as a shop's website: the header's controls, the catalogue
+   and its product cards, the cart drawer, the cart page, the product page's
+   buy box, the escrow box, the perks strip and the footer.
+
+   Storefront 3.0 rewrote this file in one pass. It had grown through five
+   override layers (aurora, website parity, clean hero, premium, 2.0), so
+   one rule said what the next one undid. Every class a component uses is
+   still here; the hero, perks and card language now come from the tokens
+   in globals.css (--glass, --edge, --cta, --font-display). Colours for text
+   keep 4.5:1 or better on the surfaces they sit on. */
 
 /* ── Header controls: icon buttons and the cart (StoreHeader.tsx; the header
    itself is in store-nav.module.css) ───────────────────────────────────── */
@@ -14,44 +20,75 @@
   width: 42px;
   height: 42px;
   padding: 0;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: rgb(17 29 53 / 0.7);
+  border: 1px solid transparent;
+  border-radius: 13px;
+  background:
+    linear-gradient(180deg, rgb(22 28 54 / 0.92), rgb(11 14 30 / 0.94)) padding-box,
+    var(--edge) border-box;
   color: var(--text-high);
   cursor: pointer;
-  transition: border-color 0.15s ease;
+  transition:
+    box-shadow 0.25s var(--ease),
+    transform 0.25s var(--ease);
 }
 
 .iconButton:hover {
-  border-color: var(--violet);
+  background:
+    linear-gradient(180deg, rgb(26 32 62 / 0.95), rgb(13 16 34 / 0.96)) padding-box,
+    var(--edge-strong) border-box;
+  box-shadow: 0 10px 26px -14px rgb(122 92 240 / 0.95);
+}
+
+.iconButton:active {
+  transform: scale(0.96);
 }
 
 .copiedTip {
   position: absolute;
-  top: calc(100% + 6px);
+  top: calc(100% + 8px);
   right: 0;
-  padding: 4px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: #0f1a31;
+  padding: 5px 10px;
+  border: 1px solid var(--border-accent);
+  border-radius: 9px;
+  background: var(--surface-solid);
+  box-shadow: var(--shadow-raised);
   font-size: 12px;
+  font-weight: 600;
   white-space: nowrap;
+  animation: fadeDown 0.2s ease;
 }
 
 .cartButton {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 10px;
   height: 42px;
-  padding: 0 14px 0 12px;
+  padding: 0 16px 0 13px;
   border: 0;
-  border-radius: 12px;
+  border-radius: 13px;
   background: var(--cta);
   color: #fff;
-  font-weight: 800;
+  font-family: var(--font-display);
   font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
   cursor: pointer;
-  box-shadow: 0 6px 20px rgb(139 92 246 / 0.35);
+  box-shadow:
+    0 12px 28px -12px rgb(122 92 240 / 0.9),
+    inset 0 1px rgb(255 255 255 / 0.22);
+  transition:
+    transform 0.25s var(--ease),
+    box-shadow 0.25s var(--ease);
+}
+
+.cartButton:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 16px 34px -12px rgb(122 92 240 / 1),
+    0 0 0 1px rgb(185 168 255 / 0.3),
+    inset 0 1px rgb(255 255 255 / 0.24);
 }
 
 .cartIcon {
@@ -62,20 +99,23 @@
 
 .cartBadge {
   position: absolute;
-  top: -8px;
-  right: -10px;
+  top: -9px;
+  right: -11px;
   min-width: 19px;
   height: 19px;
   padding: 0 5px;
   border-radius: 10px;
-  background: #f472b6;
+  background: linear-gradient(135deg, #f472b6, #c056f0);
   color: #fff;
+  font-family: var(--font-sans);
   font-size: 11px;
   font-weight: 800;
   line-height: 19px;
   text-align: center;
-  box-shadow: 0 0 0 2px #03040a;
-  animation: bump 0.35s ease;
+  box-shadow:
+    0 0 0 2px #05070f,
+    0 4px 12px -2px rgb(244 114 182 / 0.75);
+  animation: bump 0.4s var(--ease-out);
 }
 
 @media (max-width: 560px) {
@@ -101,17 +141,24 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  height: 46px;
+  height: 48px;
   padding: 0 5px 0 16px;
-  border-radius: 999px;
-  border: 1px solid rgb(59 130 246 / 0.4);
-  background: rgb(17 29 53 / 0.86);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background:
+    linear-gradient(180deg, rgb(15 19 39 / 0.96), rgb(8 11 24 / 0.97)) padding-box,
+    var(--edge) border-box;
+  box-shadow: inset 0 1px rgb(255 255 255 / 0.04);
+  transition: box-shadow 0.25s var(--ease);
 }
 
 .searchPill:focus-within {
-  border-color: rgb(59 130 246 / 0.85);
-  box-shadow: 0 0 0 4px rgb(59 130 246 / 0.15);
+  background:
+    linear-gradient(180deg, rgb(17 21 44 / 0.98), rgb(9 12 26 / 0.98)) padding-box,
+    var(--edge-strong) border-box;
+  box-shadow:
+    0 0 0 4px rgb(139 117 255 / 0.14),
+    0 14px 40px -20px rgb(122 92 240 / 0.95);
 }
 
 .searchLabel {
@@ -124,7 +171,7 @@
 
 .searchIcon {
   flex: none;
-  color: var(--text-mid);
+  color: var(--violet-text);
 }
 
 .searchLabel input {
@@ -135,27 +182,39 @@
   outline: none;
   background: transparent;
   color: var(--text-high);
+  font-family: var(--font-sans);
   font-size: 16px;
 }
 
 .searchLabel input::placeholder {
-  color: var(--text-mid);
+  color: var(--text-low);
 }
 
 .searchGo {
   flex: none;
-  height: 36px;
-  padding: 0 18px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--cta);
-  color: #fff;
-  font-weight: 700;
-  font-size: 13.5px;
-  cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  height: 38px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--cta);
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow:
+    0 8px 20px -10px rgb(122 92 240 / 0.9),
+    inset 0 1px rgb(255 255 255 / 0.2);
+  transition: box-shadow 0.25s var(--ease);
+}
+
+.searchGo:hover {
+  box-shadow:
+    0 10px 26px -10px rgb(122 92 240 / 1),
+    0 0 0 1px rgb(185 168 255 / 0.3),
+    inset 0 1px rgb(255 255 255 / 0.2);
 }
 
 .searchGoIcon {
@@ -167,7 +226,7 @@
      its place, a phone user saw a search field with no way to submit it
      but the keyboard's own key. */
   .searchGo {
-    width: 36px;
+    width: 38px;
     padding: 0;
   }
 
@@ -180,7 +239,8 @@
   }
 
   .searchPill {
-    padding-right: 5px;
+    height: 46px;
+    padding-right: 4px;
   }
 }
 
@@ -203,42 +263,55 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  height: 46px;
-  min-width: 46px;
-  padding: 0 14px;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: rgb(17 29 53 / 0.86);
+  height: 48px;
+  min-width: 48px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: 15px;
+  background:
+    linear-gradient(180deg, rgb(19 24 47 / 0.95), rgb(9 12 26 / 0.96)) padding-box,
+    var(--edge) border-box;
   color: var(--text-mid);
-  font-weight: 700;
   font-size: 14px;
+  font-weight: 650;
   cursor: pointer;
   user-select: none;
+  transition:
+    color 0.2s ease,
+    box-shadow 0.25s var(--ease);
+}
+
+.filterButton:hover {
+  color: var(--text-high);
+  box-shadow: 0 10px 26px -16px rgb(122 92 240 / 0.95);
 }
 
 .filterButtonActive,
 .filters[open] > .filterButton {
-  color: #b69cff;
+  color: var(--violet-text);
 }
 
 .filters[open] > .filterButton {
-  border-color: var(--violet);
-  background: rgb(139 92 246 / 0.2);
+  background:
+    linear-gradient(180deg, rgb(43 34 92 / 0.9), rgb(20 18 50 / 0.94)) padding-box,
+    var(--edge-strong) border-box;
 }
 
 .filterDot {
   position: absolute;
-  top: 7px;
-  right: 7px;
+  top: 8px;
+  right: 8px;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--violet);
-  box-shadow: 0 0 8px var(--violet);
+  box-shadow: 0 0 10px var(--violet);
 }
 
 @media (max-width: 560px) {
   .filterButton {
+    height: 46px;
+    min-width: 46px;
     padding: 0;
   }
 
@@ -252,68 +325,109 @@
   top: calc(100% + 10px);
   right: 0;
   z-index: 40;
-  width: min(430px, calc(100vw - 32px));
-  padding: 16px;
-  border-radius: 18px;
-  border: 1px solid var(--border);
-  background: rgb(7 11 22 / 0.98);
-  box-shadow: 0 24px 60px rgb(0 0 0 / 0.55);
-  animation: fadeDown 0.18s ease;
+  width: min(440px, calc(100vw - 32px));
+  padding: 18px;
+  border: 1px solid transparent;
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, #11152c, #090c19) padding-box,
+    var(--edge-strong) border-box;
+  box-shadow:
+    0 30px 70px -20px rgb(0 0 0 / 0.9),
+    0 0 60px -30px rgb(139 117 255 / 0.6);
+  animation: fadeDown 0.22s var(--ease-out);
 }
 
 .filterTitle {
-  margin: 0 0 8px;
-  color: var(--text-mid);
-  font-size: 11.5px;
-  font-weight: 800;
-  letter-spacing: 1.1px;
+  margin: 0 0 9px;
+  color: var(--text-low);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
 }
 
 .filterTitle:not(:first-child) {
-  margin-top: 14px;
+  margin-top: 16px;
 }
 
 .chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 7px;
 }
 
 .chip {
-  padding: 7px 12px;
-  border-radius: 14px;
+  padding: 7px 13px;
   border: 1px solid var(--border);
-  background: var(--bg-card);
+  border-radius: var(--radius-pill);
+  background: rgb(255 255 255 / 0.025);
   color: var(--text-mid);
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 550;
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease,
+    color 0.2s ease;
 }
 
 .chip:hover {
-  border-color: rgb(139 92 246 / 0.6);
+  border-color: var(--border-accent);
+  color: var(--text-high);
 }
 
 .chipOn {
-  border-color: var(--violet);
-  background: rgb(139 92 246 / 0.18);
-  color: #b69cff;
+  border-color: rgb(185 168 255 / 0.7);
+  background: linear-gradient(120deg, rgb(122 92 240 / 0.32), rgb(74 104 224 / 0.22));
+  box-shadow: 0 6px 18px -10px rgb(122 92 240 / 0.95);
+  color: #fff;
   font-weight: 700;
 }
 
 .resetFilters {
   display: block;
-  margin-top: 14px;
-  text-align: right;
-  color: #b69cff;
-  font-weight: 700;
+  margin-top: 16px;
+  color: var(--violet-text);
   font-size: 13px;
+  font-weight: 700;
+  text-align: right;
 }
 
-/* ── Page frame ─────────────────────────────────────────────────────────── */
+/* ── The page: the canvas every store page sits on ─────────────────────── */
 
-.storePage {
-  padding-top: 18px;
+.storefront {
+  position: relative;
+  z-index: 1;
+  isolation: isolate;
+  min-height: 100dvh;
+  color: var(--text-high);
+  color-scheme: dark;
+  font-family: var(--font-sans);
+}
+
+/* Light from above the fold: a violet and a cyan glow behind the header
+   and the first screen, on every store page. */
+.storefront::before {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: -1;
+  height: 820px;
+  background:
+    radial-gradient(55% 65% at 12% 0%, rgb(139 117 255 / 0.16), transparent 70%),
+    radial-gradient(42% 55% at 92% 6%, rgb(84 215 233 / 0.09), transparent 70%);
+  content: '';
+  pointer-events: none;
+}
+
+.storefront :global(.page) {
+  width: 100%;
+  max-width: calc(var(--shell) + 2 * var(--gutter));
+  margin-inline: auto;
+  padding: 0 var(--gutter) 64px;
+}
+
+.storefront .storePage {
+  padding-top: 22px;
 }
 
 .crumbs {
@@ -321,515 +435,103 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  margin: 0 0 16px;
-  color: var(--text-mid);
-  font-size: 13.5px;
+  margin: 0 0 14px;
+  color: var(--text-low);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.crumbs svg {
+  opacity: 0.6;
+}
+
+.crumbs a {
+  transition: color 0.2s ease;
 }
 
 .crumbs a:hover {
-  color: var(--text-high);
+  color: var(--violet-text);
 }
 
 .crumbs span[aria-current] {
   max-width: 40ch;
+  overflow: hidden;
   color: var(--text-high);
-  white-space: nowrap;
-  overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* ── Hero: the store's name in lights ───────────────────────────────────── */
+/* ── The catalogue (/shop) ─────────────────────────────────────────────── */
 
-.hero {
-  --hero-a: #22d3ee;
-  --hero-b: #3b82f6;
+/* The page's title block: the breadcrumb, "Shop <store>" and its count. */
+.catalogueHead {
   position: relative;
-  isolation: isolate;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  padding: 4px 0 6px;
+}
+
+.catalogueLead {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 24px;
-  min-height: 290px;
-  padding: 26px 22px 24px;
-  border-radius: 28px;
-  overflow: hidden;
-  background: #0b0820;
-  border: 1px solid rgb(255 255 255 / 0.12);
-  box-shadow:
-    0 30px 70px -30px var(--hero-a),
-    0 20px 60px -30px rgb(139 92 246 / 0.8);
+  gap: 6px 10px;
+  margin: 8px 0 0;
+  color: var(--text-mid);
+  font-size: 14.5px;
 }
 
-/* Phones: a shorter hero, so the first products come into view sooner. */
-@media (max-width: 600px) {
-  .hero {
-    min-height: 0;
-    padding: 18px 16px 16px;
-    border-radius: 24px;
-  }
-
-  .heroName {
-    margin-top: 12px;
-  }
-
-  .heroFoot {
-    flex-wrap: nowrap;
-    align-items: center;
-    margin-top: 16px;
-  }
-
-  .heroFacts {
-    min-width: 0;
-  }
-
-  /* The product count is over the grid too. */
-  .factProducts {
-    display: none !important;
-  }
-}
-
-@media (min-width: 860px) {
-  .hero {
-    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
-    min-height: 360px;
-    padding: 44px 48px;
-  }
-}
-
-.heroArt {
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  overflow: hidden;
-}
-
-.blob {
-  position: absolute;
+.catalogueLead span + span::before {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  margin-right: 10px;
   border-radius: 50%;
-  filter: blur(46px);
-  opacity: 0.8;
-  mix-blend-mode: screen;
-  animation: drift 16s ease-in-out infinite alternate;
-}
-
-.blob1 {
-  width: 60%;
-  aspect-ratio: 1;
-  left: -12%;
-  top: -45%;
-  background: var(--hero-a);
-}
-
-.blob2 {
-  width: 55%;
-  aspect-ratio: 1;
-  right: -14%;
-  top: -40%;
-  background: #8b5cf6;
-  animation-duration: 19s;
-  animation-delay: -4s;
-}
-
-.blob3 {
-  width: 50%;
-  aspect-ratio: 1;
-  left: 28%;
-  bottom: -60%;
-  background: #3b82f6;
-  animation-duration: 22s;
-  animation-delay: -9s;
-}
-
-.blob4 {
-  width: 34%;
-  aspect-ratio: 1;
-  right: 8%;
-  bottom: -40%;
-  background: #f472b6;
-  opacity: 0.55;
-  animation-duration: 14s;
-  animation-delay: -2s;
-}
-
-/* A dark wash where the words sit, whatever the colours are doing. */
-.heroArt::after {
+  background: var(--cyan);
+  box-shadow: 0 0 8px var(--cyan);
   content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(90deg, rgb(3 4 10 / 0.55), rgb(3 4 10 / 0.1) 70%);
+  vertical-align: 3px;
 }
 
-.orbit {
-  position: absolute;
-  aspect-ratio: 1;
-  border-radius: 50%;
-  border: 1.5px solid rgb(255 255 255 / 0.1);
-  border-top-color: rgb(34 211 238 / 0.9);
-  border-right-color: rgb(34 211 238 / 0.25);
+.catalogue {
+  margin-top: 18px;
 }
 
-.orbit1 {
-  width: 560px;
-  right: -160px;
-  top: -210px;
-  animation: orbit1 14s linear infinite;
+.homeSection {
+  margin-top: 8px;
 }
 
-.orbit2 {
-  width: 820px;
-  right: -300px;
-  top: -340px;
-  border-top-color: rgb(244 114 182 / 0.85);
-  border-right-color: rgb(244 114 182 / 0.2);
-  animation: orbit2 22s linear infinite;
-}
-
-.stars {
-  position: absolute;
-  inset: 0;
-  background-image:
-    radial-gradient(1.5px 1.5px at 8% 22%, #fff, transparent),
-    radial-gradient(1px 1px at 16% 70%, #fff, transparent),
-    radial-gradient(1.5px 1.5px at 27% 38%, #fff, transparent),
-    radial-gradient(1px 1px at 35% 85%, #fff, transparent),
-    radial-gradient(2px 2px at 44% 16%, #c4b5fd, transparent),
-    radial-gradient(1px 1px at 52% 58%, #fff, transparent),
-    radial-gradient(1.5px 1.5px at 61% 30%, #fff, transparent),
-    radial-gradient(1px 1px at 69% 78%, #fff, transparent),
-    radial-gradient(2px 2px at 77% 12%, #a5f3fc, transparent),
-    radial-gradient(1px 1px at 84% 52%, #fff, transparent),
-    radial-gradient(1.5px 1.5px at 91% 88%, #fff, transparent),
-    radial-gradient(1px 1px at 96% 34%, #fff, transparent);
-  animation: twinkle 3.5s ease-in-out infinite alternate;
-}
-
-.sheen {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(110deg, transparent 42%, rgb(255 255 255 / 0.09) 50%, transparent 58%);
-  background-size: 260% 100%;
-  animation: sheen 7s linear infinite;
-}
-
-.heroBody {
-  position: relative;
-  min-width: 0;
-}
-
-.heroLogo {
-  width: 64px;
-  height: 64px;
-  margin-bottom: 14px;
-  padding: 3px;
-  border-radius: 999px;
-  background: linear-gradient(140deg, rgb(255 255 255 / 0.55), var(--hero-a), var(--hero-b));
-  box-shadow: 0 12px 32px rgb(0 0 0 / 0.35);
-}
-
-.heroLogo img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  border-radius: 999px;
-  object-fit: cover;
-  background: rgb(10 10 18 / 0.9);
-}
-
-.heroChips {
+.sectionHead {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.glassChip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border-radius: 999px;
-  border: 1px solid rgb(255 255 255 / 0.16);
-  background: rgb(0 0 0 / 0.36);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.verified {
-  color: var(--green);
-}
-
-.online {
-  border-color: rgb(16 185 129 / 0.6);
-  background: rgb(16 185 129 / 0.16);
-  color: #34d399;
-}
-
-.liveDot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #34d399;
-  animation: live 1.8s ease-out infinite;
-}
-
-.away {
-  color: rgb(255 255 255 / 0.75);
-}
-
-.awayDot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-mid);
-}
-
-.heroName {
-  margin: 18px 0 0;
-  font-size: clamp(40px, 10vw, 80px);
-  font-weight: 900;
-  line-height: 1;
-  letter-spacing: -1.5px;
-  overflow-wrap: anywhere;
-  background: linear-gradient(100deg, #fff 0%, #e2d4ff 22%, #9ed8ff 42%, #fff 58%, #f9a8d4 78%, #fff 100%);
-  background-size: 250% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  filter: drop-shadow(0 0 24px rgb(139 92 246 / 0.65));
-  animation: shimmer 8s linear infinite;
-}
-
-.heroPlace {
-  margin: 10px 0 0;
-  color: rgb(255 255 255 / 0.84);
-  font-size: 15.5px;
-  font-weight: 500;
-}
-
-.heroFoot {
-  display: flex;
-  flex-wrap: wrap;
   align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
-  margin-top: 22px;
+  margin: 0 0 14px;
 }
 
-.heroFacts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.sectionHead h2 {
   margin: 0;
-  padding: 0;
-  list-style: none;
+  color: var(--text-high);
+  font-family: var(--font-display);
+  font-size: clamp(18px, 2vw, 22px);
+  font-weight: 700;
+  letter-spacing: -0.025em;
 }
 
-.starIcon {
-  color: #fbbf24;
-}
-
-/* The store score links to the buyer reviews behind it. */
-.factLink {
-  color: inherit;
-  text-decoration: none;
-}
-
-.factLink:hover,
-.factLink:focus-visible {
-  text-decoration: underline;
-}
-
-/* The review count beside the store rating: a smaller, dimmer number so it
-   reads as evidence for the rating rather than a second score. */
-.factMuted {
-  opacity: 0.62;
-  font-size: 0.86em;
-  font-weight: 500;
-}
-
-.dealIcon {
-  color: #22d3ee;
-}
-
-.bagIcon {
-  color: #f472b6;
-}
-
-/* Store details: where the eye lands after the name - a solid,
-   high-contrast pill at the hero's foot, always on the first screen.
-   White surface, dark text, larger than the glass chips, so it reads as a
-   button rather than a caption on any cover photo. */
-.moreWidget {
+.seeAll {
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 13px 18px 13px 20px;
-  border: 2px solid #fff;
-  border-radius: 999px;
-  background: #fff;
-  color: #0a1220;
-  font-size: 16px;
-  font-weight: 800;
-  box-shadow: 0 10px 28px rgb(0 0 0 / 0.45);
-  transition: transform 0.15s ease;
+  gap: 4px;
+  color: var(--violet-text);
+  font-size: 13.5px;
+  font-weight: 650;
+  transition:
+    color 0.2s ease,
+    gap 0.25s var(--ease);
 }
 
-.moreWidget svg {
-  color: #0a1220;
-}
-
-.moreWidget:hover {
-  transform: translateY(-2px);
-}
-
-.moreWidget:focus-visible {
-  outline: 3px solid #fff;
-  outline-offset: 3px;
-}
-
-/* The store's first products, fanned out beside the name. */
-.showcase {
-  display: none;
-}
-
-@media (min-width: 860px) {
-  .showcase {
-    display: block;
-    position: relative;
-    height: 270px;
-  }
-
-  .showcase img {
-    position: absolute;
-    width: 46%;
-    max-width: 190px;
-    aspect-ratio: 4 / 5;
-    object-fit: cover;
-    border-radius: 20px;
-    border: 3px solid rgb(255 255 255 / 0.85);
-    box-shadow: 0 24px 50px rgb(0 0 0 / 0.55);
-    animation: float 6s ease-in-out infinite alternate;
-  }
-
-  .showcase .card1 {
-    left: 2%;
-    top: 34px;
-    rotate: -10deg;
-  }
-
-  .showcase .card2 {
-    left: 27%;
-    top: 0;
-    z-index: 1;
-    animation-delay: -2s;
-  }
-
-  .showcase .card3 {
-    left: 52%;
-    top: 44px;
-    rotate: 11deg;
-    animation-delay: -4s;
-  }
-}
-
-.paused {
-  grid-column: 1 / -1;
-  margin: 0;
-  padding: 14px 16px;
-  border-radius: 14px;
-  border: 1px solid rgb(245 158 11 / 0.5);
-  background: rgb(245 158 11 / 0.14);
-  font-size: 14px;
-}
-
-/* ── Perks strip ────────────────────────────────────────────────────────── */
-
-.perks {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 10px;
-  margin: 14px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.perks li {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  border-radius: 16px;
-  border: 1px solid rgb(30 45 71 / 0.9);
-  background: rgb(17 29 53 / 0.62);
-}
-
-.perks strong {
-  display: block;
-  font-size: 14px;
-}
-
-.perks small {
-  display: block;
-  color: var(--text-mid);
-  font-size: 12px;
-}
-
-.perkIcon {
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, rgb(139 92 246 / 0.25), rgb(59 130 246 / 0.18));
-  color: #b69cff;
-}
-
-/* Phones: the perks side by side, icon over title. */
-@media (max-width: 600px) {
-  .perks {
-    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
-    gap: 8px;
-  }
-
-  .perks li {
-    flex-direction: column;
-    gap: 6px;
-    padding: 10px 6px;
-    text-align: center;
-  }
-
-  .perks strong {
-    font-size: 12px;
-    line-height: 1.25;
-  }
-
-  .perks small {
-    display: none;
-  }
-
-  .perkIcon {
-    width: 30px;
-    height: 30px;
-  }
-
-  .perks li {
-    padding: 8px 4px;
-  }
-
-  /* The hero already says "Verified store". */
-  .perkVerified {
-    display: none !important;
-  }
-}
-
-/* ── Catalogue ──────────────────────────────────────────────────────────── */
-
-.catalogue {
-  margin-top: 8px;
+.seeAll:hover {
+  gap: 7px;
+  color: #fff;
 }
 
 .toolbar {
@@ -837,25 +539,33 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  margin: 20px 0 4px;
+  gap: 10px 14px;
+  margin: 30px 0 4px;
 }
 
 .toolbar h2 {
   display: flex;
   align-items: center;
   margin: 0;
-  font-size: 20px;
-  font-weight: 800;
+  color: var(--text-high);
+  font-family: var(--font-display);
+  font-size: clamp(19px, 2.2vw, 24px);
+  font-weight: 700;
+  letter-spacing: -0.025em;
 }
 
 .countTag {
   margin-left: 10px;
-  padding: 2px 9px;
-  border-radius: 10px;
-  background: rgb(139 92 246 / 0.18);
-  color: #b69cff;
-  font-size: 13px;
+  padding: 2px 10px;
+  border: 1px solid rgb(185 168 255 / 0.3);
+  border-radius: var(--radius-pill);
+  background: rgb(139 117 255 / 0.14);
+  color: #e3dcff;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
 }
 
 .applied {
@@ -871,162 +581,41 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 10px;
-  border-radius: 999px;
-  border: 1px solid rgb(139 92 246 / 0.5);
-  background: rgb(139 92 246 / 0.14);
+  padding: 6px 12px;
+  border: 1px solid rgb(185 168 255 / 0.45);
+  border-radius: var(--radius-pill);
+  background: rgb(139 117 255 / 0.14);
   font-size: 12.5px;
   font-weight: 600;
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease;
+}
+
+.applied a:hover {
+  border-color: rgb(239 68 68 / 0.6);
+  background: rgb(239 68 68 / 0.12);
 }
 
 .grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
-  margin-top: 14px;
+  margin-top: 16px;
 }
 
 @media (min-width: 640px) {
   .grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
   }
 }
 
-@media (min-width: 960px) {
+@media (min-width: 1000px) {
   .grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 18px;
+    gap: 20px;
   }
-}
-
-.product {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  border-radius: 18px;
-  overflow: hidden;
-  background: rgb(17 29 53 / 0.8);
-  border: 1px solid rgb(30 45 71 / 0.9);
-  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
-}
-
-.product:hover {
-  transform: translateY(-3px);
-  border-color: rgb(139 92 246 / 0.6);
-  box-shadow: 0 18px 40px -18px rgb(139 92 246 / 0.7);
-}
-
-.productLink {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-}
-
-.productImage {
-  position: relative;
-  aspect-ratio: 1;
-  overflow: hidden;
-  display: grid;
-  place-items: center;
-  background: var(--bg-mid);
-}
-
-.productImage img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  transition: transform 0.4s ease;
-}
-
-.product:hover .productImage img {
-  transform: scale(1.06);
-}
-
-.productEmoji {
-  font-size: 44px;
-  opacity: 0.85;
-}
-
-.badges {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.badge {
-  padding: 3px 8px;
-  border-radius: 8px;
-  border: 1px solid rgb(59 130 246 / 0.7);
-  background: rgb(3 4 10 / 0.82);
-  color: #bfdbfe;
-  font-size: 11px;
-  font-weight: 800;
-}
-
-.badgeAuction {
-  border-color: rgb(239 68 68 / 0.7);
-  color: #fca5a5;
-}
-
-.productBody {
-  padding: 10px 12px 4px;
-}
-
-.productName {
-  margin: 0;
-  min-height: 2.6em;
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.3;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.productPrice {
-  margin: 6px 0 0;
-  color: #b69cff;
-  font-size: 17px;
-  font-weight: 900;
-}
-
-.productAction {
-  padding: 8px 12px 12px;
-}
-
-.addToCart,
-.viewButton {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: 100%;
-  height: 40px;
-  border-radius: 12px;
-  font-size: 14px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.addToCart {
-  border: 0;
-  background: var(--cta);
-  color: #fff;
-  box-shadow: 0 6px 18px -6px rgb(139 92 246 / 0.7);
-  transition: filter 0.15s ease;
-}
-
-.addToCart:hover {
-  filter: brightness(1.12);
-}
-
-.viewButton {
-  border: 1px solid var(--border);
-  background: rgb(3 4 10 / 0.4);
 }
 
 .more {
@@ -1034,17 +623,282 @@
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  margin-top: 24px;
+  margin-top: 32px;
+}
+
+.catalogueEmpty {
+  margin-top: 22px;
+}
+
+/* ── Product card ───────────────────────────────────────────────────────────
+   The photo first and square, framed inside the card; the name in at most
+   two lines (every card's text block is the same height, so prices and
+   buttons line up along a row); the price; the stock; then the one action.
+   One look on the store's home, the catalogue and "More from" alike. */
+
+.product {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, #10152b, #090c19) padding-box,
+    var(--edge) border-box;
+  box-shadow: var(--shadow-card);
+  transition:
+    transform 0.4s var(--ease-out),
+    box-shadow 0.4s var(--ease-out);
+}
+
+.product:hover,
+.product:focus-within {
+  background:
+    linear-gradient(180deg, #121832, #0a0d1c) padding-box,
+    var(--edge-strong) border-box;
+}
+
+.product:hover {
+  transform: translateY(-5px);
+  box-shadow:
+    0 34px 60px -34px rgb(0 0 0 / 0.95),
+    0 24px 54px -30px rgb(122 92 240 / 0.7);
+}
+
+.productLink {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  border-radius: 22px 22px 0 0;
+}
+
+.productImage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  margin: 6px 6px 0;
+  overflow: hidden;
+  border-radius: 17px;
+  background:
+    radial-gradient(circle at 50% 30%, #1c2346, #0b0e1d 72%);
+  isolation: isolate;
+}
+
+/* A thin inner line, so a dark photo still has an edge against the card. */
+.productImage::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.06);
+  content: '';
+  pointer-events: none;
+}
+
+.productImage img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.8s var(--ease-out);
+}
+
+.product:hover .productImage img {
+  transform: scale(1.07);
+}
+
+.productEmoji {
+  font-size: 46px;
+  filter: drop-shadow(0 10px 18px rgb(0 0 0 / 0.5));
+}
+
+.badges {
+  position: absolute;
+  top: 9px;
+  left: 9px;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  max-width: calc(100% - 18px);
+}
+
+.badge {
+  padding: 3px 9px;
+  border: 1px solid rgb(255 255 255 / 0.16);
+  border-radius: var(--radius-pill);
+  background: rgb(5 7 16 / 0.74);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  color: #ece8ff;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
+.badgeAuction {
+  border-color: rgb(244 114 182 / 0.6);
+  color: #fbcfe8;
+}
+
+.badgeEnding {
+  border-color: rgb(245 158 11 / 0.65);
+  color: #fcd34d;
+}
+
+.productBody {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  padding: 12px 14px 4px;
+}
+
+.productName {
+  display: -webkit-box;
+  min-height: 2.6em;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-high);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.productPrice {
+  margin: 2px 0 0;
+  color: #fff;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.productPrice > span > span:first-child {
+  color: var(--violet-text);
+  opacity: 1;
+}
+
+/* Stock, with a dot of its colour: amber for the last few, green for
+   plenty. */
+.stockLine {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: #f6c46a;
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.stockLine::before {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+  content: '';
+}
+
+.stockLineIn {
+  color: #5ee0ad;
+}
+
+.productAction {
+  padding: 10px 14px 14px;
+}
+
+.addToCart,
+.viewButton {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 42px;
+  overflow: hidden;
+  border-radius: 13px;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: none;
+  transition:
+    box-shadow 0.25s var(--ease),
+    transform 0.25s var(--ease);
+}
+
+.addToCart {
+  border: 0;
+  background: var(--cta);
+  color: #fff;
+  box-shadow:
+    0 10px 24px -14px rgb(122 92 240 / 0.95),
+    inset 0 1px rgb(255 255 255 / 0.2);
+}
+
+/* The light that crosses the button on hover (globals.css .button). */
+.addToCart::after {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(105deg, transparent 32%, rgb(255 255 255 / 0.22) 50%, transparent 68%);
+  content: '';
+  transform: translateX(-120%);
+  transition: transform 0.7s var(--ease-out);
+}
+
+.addToCart:hover {
+  box-shadow:
+    0 14px 30px -14px rgb(122 92 240 / 1),
+    0 0 0 1px rgb(185 168 255 / 0.3),
+    inset 0 1px rgb(255 255 255 / 0.22);
+}
+
+.addToCart:hover::after {
+  transform: translateX(120%);
+}
+
+.addToCart:active {
+  transform: scale(0.98);
+}
+
+/* A product that can't go in the cart here (an auction, out of stock,
+   paused): its button reads as the way to the product, not as a purchase. */
+.viewButton {
+  border: 1px solid var(--border-strong);
+  background: rgb(255 255 255 / 0.03);
+  color: var(--text-high);
+}
+
+.viewButton:hover {
+  border-color: var(--border-accent);
+  background: rgb(139 117 255 / 0.08);
+}
+
+.addToCart:focus-visible,
+.viewButton:focus-visible {
+  outline: 3px solid #b8adff;
+  outline-offset: 2px;
 }
 
 /* − n + */
 .stepper {
   display: inline-flex;
   align-items: center;
-  height: 40px;
-  border-radius: 999px;
-  border: 1.5px solid rgb(139 92 246 / 0.6);
-  background: rgb(3 4 10 / 0.6);
+  height: 42px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background:
+    linear-gradient(180deg, rgb(28 26 66 / 0.95), rgb(14 14 36 / 0.96)) padding-box,
+    var(--edge-strong) border-box;
+  box-shadow: 0 10px 24px -16px rgb(122 92 240 / 0.95);
 }
 
 .productAction .stepper {
@@ -1054,19 +908,29 @@
 }
 
 .stepperCompact {
-  height: 36px;
+  height: 38px;
+}
+
+.productAction .stepperCompact {
+  height: 42px;
 }
 
 .stepperButton {
   display: grid;
   place-items: center;
-  width: 40px;
+  width: 42px;
   height: 100%;
   padding: 0;
   border: 0;
+  border-radius: var(--radius-pill);
   background: none;
   color: var(--text-high);
   cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.stepperButton:hover:not(:disabled) {
+  background: rgb(255 255 255 / 0.06);
 }
 
 .stepperButton:disabled {
@@ -1076,74 +940,132 @@
 
 .stepperQty {
   min-width: 28px;
-  text-align: center;
+  font-family: var(--font-display);
   font-size: 15px;
-  font-weight: 800;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 
-.catalogueEmpty {
-  margin-top: 20px;
+@media (max-width: 600px) {
+  .product {
+    border-radius: 19px;
+  }
+
+  .productLink {
+    border-radius: 19px 19px 0 0;
+  }
+
+  .productImage {
+    margin: 5px 5px 0;
+    border-radius: 15px;
+  }
+
+  .productBody {
+    padding: 10px 11px 3px;
+  }
+
+  .productName {
+    font-size: 13.5px;
+  }
+
+  .productPrice {
+    font-size: 16.5px;
+  }
+
+  .productAction {
+    padding: 8px 10px 11px;
+  }
+
+  .badge {
+    padding: 2px 7px;
+    font-size: 9.5px;
+  }
 }
 
-.emptyCartIcon {
-  display: inline-grid;
-  place-items: center;
-  width: 84px;
-  height: 84px;
-  border-radius: 50%;
-  border: 1px solid rgb(139 92 246 / 0.5);
-  background: linear-gradient(135deg, rgb(139 92 246 / 0.25), rgb(59 130 246 / 0.15));
-  color: #b69cff;
+/* Cards rise into place as they scroll into view, where the browser
+   drives an animation by scroll (no script, nothing to load). Opacity and
+   translate only, so the hover lift (transform) is untouched; reduced
+   motion, and browsers without scroll timelines, show them in place. */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .product {
+      animation-name: cardIn;
+      animation-fill-mode: both;
+      animation-timing-function: linear;
+      animation-timeline: view();
+      animation-range: entry 0% entry 40%;
+    }
+  }
 }
 
-/* ── Cart bar, "Added" note and drawer ──────────────────────────────────── */
+/* ── "Added to cart", and the cart drawer ──────────────────────────────── */
 
 .addedNote {
   position: fixed;
+  top: calc(12px + env(safe-area-inset-top));
   left: 50%;
-  bottom: calc(92px + env(safe-area-inset-bottom));
   z-index: 45;
   display: flex;
   align-items: center;
   gap: 10px;
+  width: max-content;
   max-width: calc(100vw - 24px);
-  padding: 10px 12px 10px 14px;
-  border-radius: 14px;
-  border: 1px solid rgb(16 185 129 / 0.55);
-  background: #0f1a31;
-  box-shadow: 0 12px 40px rgb(0 0 0 / 0.55);
+  padding: 9px 10px 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, #121830, #0a0d1b) padding-box,
+    linear-gradient(140deg, rgb(52 211 153 / 0.7), rgb(84 215 233 / 0.35) 60%, rgb(139 117 255 / 0.4)) border-box;
+  box-shadow:
+    0 24px 50px -18px rgb(0 0 0 / 0.95),
+    0 0 40px -16px rgb(52 211 153 / 0.45);
   font-size: 14px;
   transform: translateX(-50%);
-  animation: noteIn 0.25s ease;
+  animation: noteIn 0.35s var(--ease-out);
 }
 
 .addedNote > svg {
   flex: none;
-  color: var(--green);
+  box-sizing: content-box;
+  padding: 5px;
+  border-radius: 50%;
+  background: rgb(16 185 129 / 0.18);
+  box-shadow: 0 0 14px rgb(16 185 129 / 0.45);
+  color: #34d399;
 }
 
 .addedName {
   min-width: 0;
-  white-space: nowrap;
   overflow: hidden;
+  font-weight: 550;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .addedNote button {
   flex: none;
-  border: 0;
-  background: none;
-  color: #b69cff;
-  font-weight: 800;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgb(185 168 255 / 0.45);
+  border-radius: 10px;
+  background: rgb(139 117 255 / 0.16);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
   cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.addedNote button:hover {
+  background: rgb(139 117 255 / 0.3);
 }
 
 @media (min-width: 861px) {
   .addedNote {
-    left: auto;
+    top: 128px;
     right: 24px;
-    top: 92px;
-    bottom: auto;
+    left: auto;
     transform: none;
   }
 }
@@ -1152,10 +1074,10 @@
   position: fixed;
   inset: 0;
   z-index: 60;
-  background: rgb(3 4 10 / 0.62);
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
-  animation: fadeIn 0.2s ease;
+  background: rgb(2 3 8 / 0.66);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  animation: fadeIn 0.25s ease;
 }
 
 .drawer {
@@ -1165,11 +1087,14 @@
   bottom: 0;
   display: flex;
   flex-direction: column;
-  width: min(430px, 100%);
-  border-left: 1px solid var(--border);
-  background: var(--bg-mid);
-  box-shadow: -20px 0 60px rgb(0 0 0 / 0.5);
-  animation: slideIn 0.25s ease;
+  width: min(440px, 100%);
+  overflow: hidden;
+  border-left: 1px solid rgb(185 168 255 / 0.22);
+  background:
+    radial-gradient(90% 40% at 100% 0%, rgb(139 117 255 / 0.16), transparent 70%),
+    linear-gradient(180deg, #0c1022, #070914);
+  box-shadow: -30px 0 80px rgb(0 0 0 / 0.6);
+  animation: slideIn 0.4s var(--ease-out);
 }
 
 .drawerHead {
@@ -1177,18 +1102,21 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 16px 18px;
+  padding: 18px 20px;
   border-bottom: 1px solid var(--border);
 }
 
 .drawerHead h2 {
   margin: 0;
-  font-size: 19px;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 .drawerHead p {
   margin: 2px 0 0;
-  color: var(--text-mid);
+  color: var(--text-low);
   font-size: 13px;
 }
 
@@ -1198,7 +1126,7 @@
   flex-direction: column;
   gap: 10px;
   margin: 0;
-  padding: 14px 18px;
+  padding: 16px 20px;
   overflow-y: auto;
   list-style: none;
 }
@@ -1206,23 +1134,25 @@
 .drawerLine,
 .checkoutLine {
   display: flex;
-  gap: 12px;
+  gap: 14px;
   padding: 10px;
-  border-radius: 16px;
-  border: 1px solid rgb(30 45 71 / 0.9);
-  background: rgb(17 29 53 / 0.8);
+  border: 1px solid transparent;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgb(20 25 49 / 0.9), rgb(10 13 27 / 0.94)) padding-box,
+    var(--edge) border-box;
 }
 
 .lineThumb {
   display: grid;
   place-items: center;
   flex: none;
-  width: 72px;
-  height: 72px;
-  border-radius: 12px;
+  width: 76px;
+  height: 76px;
   overflow: hidden;
-  background: var(--bg);
-  font-size: 28px;
+  border-radius: 13px;
+  background: radial-gradient(circle at 50% 30%, #1c2346, #0b0e1d 72%);
+  font-size: 30px;
 }
 
 .lineThumb img {
@@ -1246,23 +1176,25 @@
 }
 
 .lineName {
-  font-size: 14.5px;
-  font-weight: 700;
-  line-height: 1.3;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
   overflow: hidden;
+  font-size: 14.5px;
+  font-weight: 650;
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  transition: color 0.2s ease;
 }
 
 .lineName:hover {
-  color: #b69cff;
+  color: var(--violet-text);
 }
 
 .lineUnit {
   margin: 0;
-  color: var(--text-mid);
+  color: var(--text-low);
   font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
 
 .lineFoot {
@@ -1270,21 +1202,26 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-top: 6px;
+  margin-top: auto;
+  padding-top: 8px;
 }
 
 .lineFoot strong {
-  color: #b69cff;
+  color: #fff;
+  font-family: var(--font-display);
   font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
 }
 
 .drawerFoot {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 14px 18px calc(18px + env(safe-area-inset-bottom));
+  gap: 12px;
+  padding: 16px 20px calc(20px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--border);
-  background: var(--bg);
+  background: linear-gradient(180deg, #0a0d1c, #06080f);
 }
 
 .drawerTotal {
@@ -1292,39 +1229,56 @@
   align-items: baseline;
   justify-content: space-between;
   margin: 0;
-  font-size: 16px;
+  color: var(--text-mid);
+  font-size: 15px;
 }
 
 .drawerTotal strong {
-  font-size: 22px;
+  color: #fff;
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
 }
 
 .drawerNote {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   margin: 0;
+  padding: 10px 12px;
+  border: 1px solid rgb(16 185 129 / 0.28);
+  border-radius: 12px;
+  background: rgb(16 185 129 / 0.07);
   color: var(--text-mid);
   font-size: 12.5px;
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 .drawerNote svg {
   flex: none;
-  color: var(--green);
+  margin-top: 1px;
+  color: #34d399;
 }
 
 .drawerCheckout {
   width: 100%;
+  min-height: 52px;
+  font-size: 16px;
 }
 
 .linkButton {
   padding: 6px;
   border: 0;
   background: none;
-  color: #b69cff;
-  font-weight: 700;
+  color: var(--violet-text);
   font-size: 14px;
+  font-weight: 650;
   cursor: pointer;
+}
+
+.linkButton:hover {
+  color: #fff;
 }
 
 .drawerEmpty,
@@ -1333,33 +1287,51 @@
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  padding: 48px 24px;
+  padding: 56px 24px;
   text-align: center;
 }
 
 .drawerEmpty h3,
 .checkoutEmpty h1 {
-  margin: 8px 0 0;
-  font-size: 20px;
+  margin: 10px 0 0;
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 .drawerEmpty p,
 .checkoutEmpty p {
-  margin: 0 0 10px;
+  margin: 0 0 12px;
   color: var(--text-mid);
+}
+
+.emptyCartIcon {
+  display: inline-grid;
+  place-items: center;
+  width: 88px;
+  height: 88px;
+  border: 1px solid var(--border-accent);
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 25%, rgb(185 168 255 / 0.3), rgb(96 140 255 / 0.08) 70%);
+  box-shadow:
+    0 0 0 10px rgb(139 117 255 / 0.06),
+    0 0 50px -6px rgb(139 117 255 / 0.55);
+  color: var(--violet-text);
 }
 
 /* ── Cart page ──────────────────────────────────────────────────────────── */
 
 .checkout {
   display: grid;
-  gap: 20px;
+  gap: 22px;
 }
 
-@media (min-width: 920px) {
+@media (min-width: 940px) {
   .checkout {
-    grid-template-columns: minmax(0, 1fr) 380px;
+    grid-template-columns: minmax(0, 1fr) 410px;
     align-items: start;
+    gap: 28px;
   }
 }
 
@@ -1372,51 +1344,83 @@
 
 .checkoutHead h1 {
   margin: 0;
-  font-size: clamp(24px, 5vw, 30px);
+  font-family: var(--font-display);
+  font-size: clamp(26px, 4.4vw, 38px);
+  font-weight: 700;
+  letter-spacing: -0.035em;
 }
 
 .checkoutHead h1 span {
-  color: var(--text-mid);
-  font-weight: 600;
+  color: var(--text-low);
+  font-weight: 500;
 }
 
 .checkoutLines ul {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin: 14px 0 0;
+  gap: 12px;
+  margin: 16px 0 0;
   padding: 0;
   list-style: none;
 }
 
+.checkoutLine {
+  padding: 12px;
+  border-radius: 20px;
+}
+
 .checkoutLine .lineThumb {
-  width: 96px;
-  height: 96px;
+  width: 104px;
+  height: 104px;
+  border-radius: 15px;
 }
 
 .keepShopping {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 16px;
-  color: #b69cff;
-  font-weight: 700;
+  gap: 8px;
+  margin-top: 18px;
+  color: var(--violet-text);
+  font-weight: 650;
+  transition: gap 0.25s var(--ease);
+}
+
+.keepShopping:hover {
+  gap: 11px;
+  color: #fff;
 }
 
 .summary {
-  padding: 18px;
+  position: relative;
+  overflow: hidden;
+  padding: 22px;
+  border-radius: var(--radius-xl);
 }
 
-@media (min-width: 920px) {
+/* The aurora along the summary's top edge. */
+.summary::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 2px;
+  background: var(--line-aurora);
+  content: '';
+}
+
+@media (min-width: 940px) {
   .summary {
     position: sticky;
-    top: 96px;
+    top: 136px;
   }
 }
 
 .summary h2 {
-  margin: 0 0 8px;
-  font-size: 18px;
+  margin: 0 0 10px;
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 .summary dl {
@@ -1427,8 +1431,8 @@
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  padding: 9px 0;
-  border-bottom: 1px solid rgb(30 45 71 / 0.6);
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
 }
 
 .summary dt {
@@ -1442,50 +1446,89 @@
 }
 
 .summary .summaryTotal {
+  align-items: baseline;
+  padding-top: 14px;
   border-bottom: 0;
-  padding-top: 12px;
 }
 
 .summaryTotal dt {
   color: var(--text-high);
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .summaryTotal dd {
-  font-size: 22px;
-  font-weight: 900;
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.025em;
 }
 
 .checkoutButton {
   width: 100%;
+  min-height: 52px;
   margin-top: 14px;
 }
 
 .checkoutElsewhere p {
   margin: 14px 0 0;
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .getApp {
   display: block;
-  margin-top: 10px;
-  color: #b69cff;
-  font-weight: 700;
+  margin-top: 12px;
+  color: var(--violet-text);
   font-size: 14px;
+  font-weight: 650;
   text-align: center;
 }
 
+/* How it goes from here, as a numbered rail. */
 .steps {
-  margin: 18px 0 0;
-  padding-left: 20px;
+  display: grid;
+  gap: 12px;
+  margin: 20px 0 0;
+  padding: 0;
   color: var(--text-mid);
+  counter-reset: step;
   font-size: 13.5px;
-  line-height: 1.45;
+  line-height: 1.5;
+  list-style: none;
 }
 
-.steps li + li {
-  margin-top: 6px;
+.steps li {
+  position: relative;
+  padding-left: 36px;
+  counter-increment: step;
+}
+
+.steps li::before {
+  position: absolute;
+  top: -1px;
+  left: 0;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid var(--border-accent);
+  border-radius: 50%;
+  background: rgb(139 117 255 / 0.14);
+  color: var(--violet-text);
+  content: counter(step);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.steps li:not(:last-child)::after {
+  position: absolute;
+  top: 26px;
+  bottom: -12px;
+  left: 11.5px;
+  width: 1px;
+  background: linear-gradient(180deg, rgb(139 117 255 / 0.5), rgb(139 117 255 / 0.05));
+  content: '';
 }
 
 .steps strong {
@@ -1493,23 +1536,23 @@
 }
 
 .stepsNote {
-  margin: 12px 0 0;
+  margin: 14px 0 0;
   color: var(--text-mid);
   font-size: 13px;
-  line-height: 1.45;
+  line-height: 1.5;
 }
 
 .stepsNote strong {
   color: var(--text-high);
 }
 
-/* ── Product page ───────────────────────────────────────────────────────── */
+/* ── Product page: buying ──────────────────────────────────────────────── */
 
 .buyBox {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  margin-top: 18px;
+  gap: 14px;
+  margin-top: 22px;
 }
 
 .buyQty {
@@ -1522,10 +1565,11 @@
 .buyQty span {
   color: var(--text-mid);
   font-size: 14px;
+  font-weight: 550;
 }
 
 .buyQty small {
-  color: var(--text-mid);
+  color: var(--text-low);
   font-size: 12.5px;
 }
 
@@ -1535,8 +1579,20 @@
   gap: 10px;
 }
 
+.buyButtons > * {
+  min-height: 54px;
+  border-radius: 16px;
+  font-size: 15.5px;
+}
+
 .buyAdd {
-  border-color: rgb(139 92 246 / 0.7);
+  background:
+    linear-gradient(180deg, rgb(30 27 70 / 0.95), rgb(15 15 38 / 0.96)) padding-box,
+    var(--edge-strong) border-box;
+}
+
+.buyNow {
+  font-size: 16px;
 }
 
 .inCartNote {
@@ -1544,56 +1600,72 @@
   align-items: center;
   gap: 6px;
   margin: 0;
-  color: var(--green);
+  color: #5ee0ad;
   font-size: 14px;
 }
 
 .inCartNote a {
-  color: #b69cff;
+  color: var(--violet-text);
   font-weight: 700;
 }
 
+/* "See it before you pay": said beside the buttons, on the green of
+   paying safely. */
 .payNote {
   display: flex;
   gap: 12px;
-  margin-top: 16px;
+  margin-top: 18px;
   padding: 14px 16px;
-  border-radius: 16px;
-  border: 1px solid rgb(16 185 129 / 0.4);
-  background: rgb(16 185 129 / 0.08);
+  border: 1px solid transparent;
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgb(16 185 129 / 0.12), rgb(10 13 27 / 0.92) 60%) padding-box,
+    linear-gradient(140deg, rgb(52 211 153 / 0.6), rgb(52 211 153 / 0.1) 60%, rgb(84 215 233 / 0.3)) border-box;
 }
 
 .payNote svg {
   flex: none;
-  color: var(--green);
+  box-sizing: content-box;
+  padding: 6px;
+  border-radius: 50%;
+  background: rgb(16 185 129 / 0.16);
+  color: #34d399;
 }
 
 .payNote p {
   margin: 0;
+  color: var(--text-mid);
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.55;
+}
+
+.payNote strong {
+  color: var(--text-high);
 }
 
 .descr {
-  margin-top: 22px;
+  margin-top: 26px;
 }
 
 .descr h2 {
   margin: 0;
-  font-size: 16px;
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 .offerLink {
-  color: #b69cff;
-  font-weight: 700;
+  color: var(--violet-text);
   font-size: 14px;
+  font-weight: 700;
 }
 
 /* "Ask the store about this product": the conversation is the next step
    for a buyer with a question, so it is a button, not a line of text. */
 .askButton {
   width: 100%;
-  min-height: 48px;
+  min-height: 50px;
 }
 
 /* "Sold by": the store's sign and name, and the way into its shop. */
@@ -1613,15 +1685,20 @@
 
 .sellerHead h2 small {
   color: var(--text-low);
-  font-size: 12px;
-  font-weight: 600;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .sellerHead h2 a {
   overflow: hidden;
   color: var(--text-high);
-  font-size: 16px;
-  font-weight: 800;
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1632,21 +1709,354 @@
   flex: none;
   align-items: center;
   gap: 2px;
-  color: var(--violet-text);
-  font-size: 13.5px;
-  font-weight: 700;
+  padding: 7px 12px;
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-pill);
+  background: rgb(139 117 255 / 0.1);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 650;
+  transition: background 0.2s ease;
+}
+
+.sellerHead .sellerShop:hover {
+  background: rgb(139 117 255 / 0.22);
 }
 
 .moreFrom {
-  margin-top: 44px;
+  margin-top: clamp(48px, 7vw, 80px);
 }
 
-.seeAll {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: #b69cff;
+/* On a phone, once the buy box has scrolled away: the product, its price
+   and Buy now, in a bar above the store's own (ProductStickyBar). */
+.stickyBuy {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .stickyBuy {
+    position: fixed;
+    right: 10px;
+    bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom));
+    left: 10px;
+    z-index: 34;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 7px 7px 8px;
+    border: 1px solid transparent;
+    border-radius: 20px;
+    background:
+      linear-gradient(180deg, #151a36, #0b0e1e) padding-box,
+      var(--edge-strong) border-box;
+    box-shadow:
+      0 20px 40px -14px rgb(0 0 0 / 0.95),
+      0 0 40px -18px rgb(139 117 255 / 0.7);
+    animation: stickyIn 0.35s var(--ease-out);
+  }
+}
+
+.stickyThumb {
+  display: grid;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  place-items: center;
+  border-radius: 12px;
+  background: radial-gradient(circle at 50% 30%, #1c2346, #0b0e1d 72%);
+  font-size: 22px;
+}
+
+.stickyThumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.stickyText {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.stickyText strong {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stickyText > span {
+  color: #fff;
+  font-family: var(--font-display);
+  font-size: 15.5px;
   font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.stickyButton {
+  flex: none;
+  min-height: 44px;
+  padding: 0 18px;
+  font-size: 14.5px;
+}
+
+/* ── Pay with escrow (EscrowBox.tsx) ─────────────────────────────────────
+   Loud on purpose: the one way a buyer who can't see the item first is
+   protected, while BROKA holds no payments (lib/safety.ts). */
+
+.escrowBox {
+  position: relative;
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid transparent;
+  border-radius: 20px;
+  background:
+    radial-gradient(80% 60% at 0% 0%, rgb(16 185 129 / 0.16), transparent 70%) padding-box,
+    linear-gradient(180deg, rgb(12 20 30 / 0.95), rgb(8 12 22 / 0.96)) padding-box,
+    linear-gradient(150deg, rgb(52 211 153 / 0.85), rgb(16 185 129 / 0.25) 45%, rgb(84 215 233 / 0.45)) border-box;
+  box-shadow: 0 0 40px -18px rgb(16 185 129 / 0.55);
+}
+
+.escrowTitle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  color: #5ee0ad;
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+.escrowTitle svg {
+  flex: none;
+  box-sizing: content-box;
+  padding: 6px;
+  border-radius: 10px;
+  background: rgb(16 185 129 / 0.16);
+  box-shadow: 0 0 16px -2px rgb(16 185 129 / 0.5);
+}
+
+.escrowLead {
+  margin: 10px 0 0;
+  color: var(--text-high);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.escrowList {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.escrowList li {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid rgb(52 211 153 / 0.2);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 0.02);
+}
+
+.escrowList a {
+  color: var(--text-high);
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.escrowList a:hover strong,
+.escrowList a:focus-visible strong {
+  text-decoration: underline;
+}
+
+.escrowList a span {
+  color: var(--cyan);
+  font-size: 12.5px;
+}
+
+.escrowList small {
+  color: var(--text-low);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.escrowRule {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid rgb(239 68 68 / 0.42);
+  border-radius: 12px;
+  background: rgb(239 68 68 / 0.08);
+  color: var(--text-high);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.escrowRule svg {
+  flex: none;
+  margin-top: 2px;
+  color: #f87171;
+}
+
+.escrowZeno {
+  margin: 12px 0 0;
+  color: var(--violet-text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.escrowDisclaimer {
+  margin: 8px 0 0;
+  color: var(--text-low);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+/* ── Perks strip: what buying from a store on BROKA means (Perks.tsx) ──── */
+
+/* One column per perk, however many there are (three, or four with
+   "Verified seller"). */
+.perks {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xl);
+  background:
+    linear-gradient(180deg, rgb(17 22 44 / 0.9), rgb(9 12 25 / 0.94)) padding-box,
+    var(--edge) border-box;
+  box-shadow: var(--shadow-card);
+  list-style: none;
+}
+
+.perks li {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px 20px;
+}
+
+.perks li + li::before {
+  position: absolute;
+  top: 22%;
+  bottom: 22%;
+  left: 0;
+  width: 1px;
+  background: linear-gradient(180deg, transparent, rgb(196 204 232 / 0.18), transparent);
+  content: '';
+}
+
+.perks strong {
+  display: block;
+  color: var(--text-high);
+  font-family: var(--font-display);
+  font-size: 14.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.perks small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-low);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.perkIcon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 42px;
+  height: 42px;
+  border: 1px solid rgb(185 168 255 / 0.28);
+  border-radius: 13px;
+  background: radial-gradient(circle at 30% 20%, rgb(185 168 255 / 0.3), rgb(96 140 255 / 0.08) 70%);
+  box-shadow: 0 8px 20px -12px rgb(122 92 240 / 0.9);
+  color: var(--violet-text);
+}
+
+.perks li:nth-child(2) .perkIcon {
+  border-color: rgb(52 211 153 / 0.32);
+  background: radial-gradient(circle at 30% 20%, rgb(52 211 153 / 0.3), rgb(16 185 129 / 0.06) 70%);
+  color: #5ee0ad;
+}
+
+.perks li:nth-child(3) .perkIcon {
+  border-color: rgb(84 215 233 / 0.32);
+  background: radial-gradient(circle at 30% 20%, rgb(84 215 233 / 0.3), rgb(96 140 255 / 0.06) 70%);
+  color: #7fe3f2;
+}
+
+.perks li:nth-child(4) .perkIcon {
+  border-color: rgb(52 211 153 / 0.32);
+  color: #34d399;
+}
+
+/* Tablets: two by two, so each perk keeps room for its line. */
+@media (min-width: 701px) and (max-width: 1040px) {
+  .perks {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .perks li:nth-child(odd)::before {
+    display: none;
+  }
+
+  .perks li:nth-child(n + 3) {
+    border-top: 1px solid var(--border);
+  }
+}
+
+/* Phones: three across, icon over a short title; the hero already says
+   "Verified". */
+@media (max-width: 700px) {
+  .perks {
+    border-radius: 20px;
+  }
+
+  .perks li {
+    flex-direction: column;
+    gap: 8px;
+    padding: 14px 6px;
+    text-align: center;
+  }
+
+  .perks strong {
+    font-size: 12px;
+    line-height: 1.25;
+  }
+
+  .perks small {
+    display: none;
+  }
+
+  .perkIcon {
+    width: 36px;
+    height: 36px;
+    border-radius: 11px;
+  }
+
+  .perkVerified {
+    display: none !important;
+  }
 }
 
 /* ── Footer ─────────────────────────────────────────────────────────────── */
@@ -1654,36 +2064,54 @@
 .footer {
   position: relative;
   z-index: 1;
-  margin-top: 56px;
-  padding: 34px 16px 22px;
-  border-top: 1px solid var(--border);
-  background: rgb(7 11 22 / 0.94);
+  margin-top: 88px;
+  padding: 64px var(--gutter) 30px;
+  overflow: hidden;
+  background:
+    radial-gradient(50% 120% at 12% 0%, rgb(139 117 255 / 0.12), transparent 70%),
+    radial-gradient(40% 100% at 95% 100%, rgb(84 215 233 / 0.06), transparent 70%),
+    linear-gradient(180deg, rgb(6 8 17 / 0.94), #04050b);
+}
+
+/* The aurora along the footer's top. */
+.footer::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: var(--line-aurora);
+  content: '';
+  opacity: 0.7;
 }
 
 .footerGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 26px;
-  max-width: var(--page-width);
+  grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr));
+  gap: 40px;
+  max-width: var(--shell);
   margin: 0 auto;
 }
 
 .footerBrand {
-  margin: 0 0 6px;
-  font-size: 21px;
-  font-weight: 900;
-  background: linear-gradient(90deg, #fff, #b69cff, #7db3ff);
+  margin: 0 0 10px;
+  background: var(--aurora-text);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+  font-family: var(--font-display);
+  font-size: clamp(24px, 2.6vw, 30px);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.1;
 }
 
 .footerTitle {
-  margin: 0 0 10px;
-  color: var(--text-mid);
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 1.2px;
+  margin: 0 0 14px;
+  color: var(--text-low);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
 }
 
@@ -1694,132 +2122,373 @@
 }
 
 .footer li + li {
-  margin-top: 7px;
+  margin-top: 9px;
 }
 
 .footer li a {
-  color: rgb(227 217 247 / 0.9);
+  color: var(--text-mid);
   font-size: 14px;
+  transition: color 0.2s ease;
 }
 
 .footer li a:hover {
-  color: #b69cff;
+  color: #fff;
 }
 
 .footerMuted {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   margin: 4px 0;
-  color: var(--text-mid);
+  color: var(--text-low);
   font-size: 13.5px;
+  line-height: 1.55;
 }
 
 .footerPay {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  margin: 0 0 8px;
+  margin: 0 0 12px;
 }
 
 .mpesa {
-  padding: 4px 10px;
+  padding: 5px 11px;
   border-radius: 8px;
-  background: #16a34a;
+  background: linear-gradient(135deg, #22c55e, #15803d);
+  box-shadow: 0 6px 16px -8px rgb(34 197 94 / 0.8);
   color: #fff;
   font-size: 12px;
   font-weight: 900;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.06em;
 }
 
 .payTag {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   padding: 4px 10px;
+  border: 1px solid rgb(52 211 153 / 0.45);
   border-radius: 8px;
-  border: 1px solid rgb(16 185 129 / 0.5);
-  color: var(--green);
+  background: rgb(16 185 129 / 0.08);
+  color: #5ee0ad;
   font-size: 12px;
   font-weight: 700;
 }
 
 .footerBase {
-  max-width: var(--page-width);
-  margin: 26px auto 0;
-  padding-top: 16px;
-  border-top: 1px solid rgb(30 45 71 / 0.7);
-  color: var(--text-mid);
+  max-width: var(--shell);
+  margin: 44px auto 0;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+  color: var(--text-low);
   font-size: 12.5px;
   text-align: center;
 }
 
 .footerBase a {
-  color: #b69cff;
+  background: linear-gradient(90deg, #b9a8ff, #8fb2ff 60%, #7fdeee);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+@media (max-width: 900px) {
+  .footerGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 32px 24px;
+  }
+
+  .footerGrid > :first-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 560px) {
+  .footer {
+    margin-top: 64px;
+    padding-top: 48px;
+  }
+
+  .footerGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 860px) {
+  /* Room under the footer's last line for the bar along the bottom of a
+     phone (StoreBottomNav), which would otherwise sit on it. */
+  .storefront .footer {
+    padding-bottom: calc(var(--bottom-nav-h) + 28px + env(safe-area-inset-bottom));
+  }
+}
+
+/* ── The store card (StoreHero.tsx: the app's store header, as a card) ─────
+   Not on a page at the moment - the store's home has its own hero
+   (StoreLanding) - but kept drawn in the same language. */
+
+.storeCard {
+  position: relative;
+  isolation: isolate;
+  margin: 12px 0 16px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xl);
+  background:
+    var(--glass) padding-box,
+    var(--edge) border-box;
+  box-shadow: var(--shadow-raised);
+}
+
+.storeBanner {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  overflow: hidden;
+}
+
+.storeBanner img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: saturate(0.92) brightness(0.62);
+}
+
+.storeBanner::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgb(5 7 16 / 0.8), rgb(5 7 16 / 0.4) 65%, rgb(5 7 16 / 0.25));
+  content: '';
+}
+
+.storeCardBody {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 10px;
+  padding: 22px;
+}
+
+.storeHead {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.storeAvatar {
+  flex: none;
+  width: 64px;
+  height: 64px;
+  padding: 2px;
+  border-radius: 20px;
+  background: conic-gradient(from 210deg, #8b75ff, #54d7e9, #608cff, #8b75ff);
+}
+
+.storeAvatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 18px;
+  object-fit: cover;
+  background: var(--surface-solid);
+}
+
+.storeHeadText {
+  min-width: 0;
+}
+
+.storeName {
+  margin: 0;
+  color: #fff;
+  font-family: var(--font-display);
+  font-size: clamp(26px, 5vw, 38px);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+  overflow-wrap: anywhere;
+}
+
+.storePlace {
+  margin: 4px 0 0;
+  color: var(--text-mid);
+  font-size: 13.5px;
+}
+
+.heroChips,
+.heroFacts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.glassChip,
+.fact {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid rgb(255 255 255 / 0.16);
+  border-radius: var(--radius-pill);
+  background: rgb(5 7 16 / 0.62);
+  color: var(--text-high);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.chipVerified,
+.verified {
+  color: #34d399;
+}
+
+.chipVerified {
+  border-color: rgb(52 211 153 / 0.4);
+}
+
+.online {
+  border-color: rgb(52 211 153 / 0.4);
+  color: #86efc5;
+}
+
+.liveDot,
+.awayDot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+}
+
+.liveDot {
+  background: #34d399;
+  animation: live 1.8s ease-out infinite;
+}
+
+.away {
+  color: var(--text-mid);
+}
+
+.awayDot {
+  background: var(--text-low);
+}
+
+.factLink {
+  color: inherit;
+}
+
+.factLink:hover,
+.factLink:focus-visible {
+  color: var(--violet-text);
+  text-decoration: underline;
+}
+
+/* The review count beside the store rating: a smaller, dimmer number so it
+   reads as evidence for the rating rather than a second score. */
+.factMuted {
+  font-size: 0.88em;
+  font-weight: 500;
+  opacity: 0.66;
+}
+
+.starIcon {
+  color: #fbbf24;
+}
+
+.dealIcon {
+  color: #54d7e9;
+}
+
+.bagIcon {
+  color: var(--violet-text);
+}
+
+.heroCtas {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  width: min(100%, 470px);
+}
+
+.heroShop,
+.moreWidget {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 13px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.moreWidget {
+  border: 1px solid var(--border-accent);
+  background: rgb(5 7 16 / 0.7);
+  color: var(--text-high);
+}
+
+.paused {
+  position: relative;
+  z-index: 2;
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 14px 16px;
+  border-top: 1px solid rgb(245 158 11 / 0.3);
+  background: rgb(60 38 9 / 0.8);
+  color: #ffe1a3;
+  font-size: 14px;
+}
+
+@media (max-width: 600px) {
+  /* The product count is over the grid too. */
+  .factProducts {
+    display: none !important;
+  }
+}
+
+/* ── The messages page (MessagingWorkspace) ──────────────────────────────
+   On a wide screen the two panels fill the window under the header; on a
+   phone, a chat screen - edge to edge, with no breadcrumb, footer or bottom
+   bar around the conversation (store-nav.module.css hides the store's
+   header there). */
+
+.storefront[data-layout='chat'] :global(.page) {
+  padding-bottom: 28px;
+}
+
+.storefront[data-layout='chat'] .crumbs {
+  margin-bottom: 12px;
+}
+
+@media (max-width: 860px) {
+  .storefront[data-layout='chat'] :global(.page) {
+    padding: 0;
+  }
+
+  .storefront[data-layout='chat'] .crumbs,
+  .storefront[data-layout='chat'] .footer {
+    display: none;
+  }
 }
 
 /* ── Motion ─────────────────────────────────────────────────────────────── */
 
-@keyframes shimmer {
+@keyframes cardIn {
   from {
-    background-position: 0% 50%;
-  }
-  to {
-    background-position: 250% 50%;
-  }
-}
-
-@keyframes drift {
-  from {
-    transform: translate(0, 0) scale(1);
-  }
-  to {
-    transform: translate(12%, 18%) scale(1.15);
-  }
-}
-
-@keyframes orbit1 {
-  from {
-    transform: rotate(-14deg) scaleY(0.4) rotate(0deg);
-  }
-  to {
-    transform: rotate(-14deg) scaleY(0.4) rotate(360deg);
-  }
-}
-
-@keyframes orbit2 {
-  from {
-    transform: rotate(10deg) scaleY(0.34) rotate(360deg);
-  }
-  to {
-    transform: rotate(10deg) scaleY(0.34) rotate(0deg);
-  }
-}
-
-@keyframes twinkle {
-  from {
-    opacity: 0.45;
+    opacity: 0;
+    translate: 0 26px;
   }
   to {
     opacity: 1;
-  }
-}
-
-@keyframes sheen {
-  from {
-    background-position: 130% 0;
-  }
-  to {
-    background-position: -130% 0;
-  }
-}
-
-@keyframes glow {
-  0%,
-  100% {
-    box-shadow: 0 0 18px rgb(139 92 246 / 0.45);
-  }
-  50% {
-    box-shadow: 0 0 30px rgb(244 114 182 / 0.6);
+    translate: 0 0;
   }
 }
 
@@ -1832,18 +2501,9 @@
   }
 }
 
-@keyframes float {
-  from {
-    translate: 0 0;
-  }
-  to {
-    translate: 0 -12px;
-  }
-}
-
 @keyframes bump {
   0% {
-    transform: scale(0.6);
+    transform: scale(0.5);
   }
   60% {
     transform: scale(1.25);
@@ -1862,7 +2522,7 @@
 @keyframes fadeDown {
   from {
     opacity: 0;
-    transform: translateY(-6px);
+    transform: translateY(-8px);
   }
 }
 
@@ -1872,1076 +2532,16 @@
   }
 }
 
-@keyframes slideUp {
-  from {
-    opacity: 0;
-    transform: translateY(16px);
-  }
-}
-
 @keyframes noteIn {
   from {
     opacity: 0;
-    margin-bottom: -10px;
+    translate: 0 -14px;
   }
 }
 
-
-/* ========================================================================
-   BROKA WEBSITE PARITY PASS
-   Preserve route, query, cart, and API contracts; tune only the visual layer.
-   ======================================================================== */
-
-.iconButton,
-.filterButton,
-.searchPill {
-  border-color: var(--border-strong);
-  background: rgb(12 16 32 / 0.78);
-}
-
-.iconButton:hover,
-.filterButton:hover { border-color: #a895ff; }
-
-.searchPill {
-  height: 44px;
-  border-color: rgb(96 140 255 / 0.42);
-}
-
-.searchPill:focus-within {
-  border-color: #8b75ff;
-  box-shadow: 0 0 0 3px rgb(139 117 255 / 0.18);
-}
-
-.searchLabel input { font-family: var(--font-sans); }
-.searchGo { background: var(--cta); }
-
-.filterPanel {
-  border-color: var(--border-strong);
-  background: rgb(8 10 20 / 0.98);
-  box-shadow: 0 24px 60px rgb(0 0 0 / 0.48);
-}
-
-.storePage {
-  width: min(1280px, calc(100% - clamp(32px, 8vw, 104px)));
-  max-width: none;
-  padding-top: 20px;
-}
-
-.hero {
-  min-height: 300px;
-  padding: 34px clamp(24px, 4vw, 52px);
-  border-radius: 24px;
-  background: #080a14;
-  border-color: var(--border);
-  box-shadow: 0 28px 70px -44px rgb(0 0 0 / 0.9), inset 0 1px rgb(255 255 255 / 0.05);
-}
-
-.heroArt {
-  background:
-    radial-gradient(ellipse 65% 100% at 12% 50%, rgb(84 215 233 / 0.10), transparent 70%),
-    radial-gradient(ellipse 62% 110% at 88% 45%, rgb(139 117 255 / 0.14), transparent 72%),
-    #080a14;
-}
-
-.heroArt::after {
-  background: linear-gradient(90deg, rgb(5 6 13 / 0.38), rgb(5 6 13 / 0.16) 78%);
-}
-
-.blob { filter: blur(72px); opacity: 0.12; mix-blend-mode: normal; }
-.blob4 { opacity: 0.06; }
-.orbit { opacity: 0.24; }
-.sheen { opacity: 0.12; }
-
-.glassChip {
-  padding: 6px 11px;
-  border-color: rgb(195 202 226 / 0.18);
-  background: rgb(8 10 20 / 0.54);
-  color: var(--text-high);
-  font-family: var(--font-sans);
-  font-size: 12px;
-}
-
-.heroName {
-  font-family: var(--font-display);
-  font-size: clamp(42px, 7vw, 76px);
-  letter-spacing: -0.045em;
-  background: linear-gradient(100deg, #f7f7fc 0%, #ded8ff 50%, #b3a7ff 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  filter: drop-shadow(0 0 18px rgb(139 117 255 / 0.32));
-}
-
-.heroPlace { color: var(--text-mid); }
-.moreWidget {
-  padding: 9px 13px 9px 16px;
-  background: rgb(12 16 32 / 0.84);
-  border-color: #8b75ff;
-  animation: none;
-  box-shadow: 0 8px 24px -16px rgb(139 117 255 / 0.9);
-}
-
-.perks {
-  gap: 12px;
-  margin-top: 16px;
-}
-
-.perks li {
-  border-color: var(--border);
-  background: rgb(12 16 32 / 0.82);
-}
-
-.perkIcon {
-  background: rgb(139 117 255 / 0.12);
-  color: #b3a7ff;
-}
-
-.catalogue { margin-top: 28px; }
-.toolbar { margin: 0 0 6px; }
-.toolbar h2,
-.empty h2 { font-family: var(--font-display); }
-.countTag { background: rgb(139 117 255 / 0.16); color: #ded8ff; }
-
-.grid { gap: 14px; margin-top: 16px; }
-
-.product {
-  border-color: var(--border);
-  background: rgb(12 16 32 / 0.76);
-  box-shadow: 0 12px 28px -24px rgb(0 0 0 / 0.9);
-}
-
-.product:hover {
-  border-color: rgb(139 117 255 / 0.58);
-  box-shadow: 0 18px 36px -22px rgb(139 117 255 / 0.48);
-}
-
-.productImage {
-  aspect-ratio: 4 / 3;
-  background: #0c1020;
-}
-
-.badge {
-  border-color: rgb(195 202 226 / 0.22);
-  background: rgb(5 6 13 / 0.78);
-  color: #ded8ff;
-}
-
-.productBody { padding: 12px 13px 4px; }
-.productName {
-  font-family: var(--font-display);
-  font-size: 14px;
-  font-weight: 700;
-}
-.productPrice { color: #b3a7ff; font-family: var(--font-display); }
-.productAction { padding: 8px 13px 13px; }
-.addToCart { box-shadow: 0 8px 22px -12px rgb(139 117 255 / 0.88); }
-.viewButton { border-color: var(--border-strong); }
-
-.empty {
-  border-color: var(--border);
-  background: rgb(12 16 32 / 0.68);
-}
-
-.footer {
-  margin-top: 72px;
-  padding: 56px clamp(16px, 4vw, 52px) 28px;
-  border-top-color: var(--border);
-  background: rgb(5 6 13 / 0.88);
-}
-
-.footerGrid {
-  max-width: 1280px;
-  gap: 36px;
-}
-
-.footerBrand {
-  font-family: var(--font-display);
-  letter-spacing: -0.02em;
-}
-.footerTitle { color: var(--text-low); }
-.footer li a { color: var(--text-mid); }
-.footer li a:hover { color: #b3a7ff; }
-.footerMuted { color: var(--text-low); }
-.footerBase { border-top-color: var(--border); color: var(--text-low); }
-.footerBase a { color: #b3a7ff; }
-
-@media (max-width: 860px) {
-  .storePage { width: calc(100% - 32px); }
-}
-
-@media (max-width: 600px) {
-  .storePage { width: calc(100% - 24px); padding-top: 14px; }
-  .hero { padding: 20px 18px 18px; border-radius: 20px; }
-  .heroName { font-size: clamp(38px, 13vw, 58px); }
-  .grid { gap: 10px; }
-  .productBody { padding: 10px 10px 3px; }
-  .productAction { padding: 7px 10px 10px; }
-  .footer { margin-top: 52px; padding-top: 42px; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .heroName { animation: none; }
-}
-
-/* ── Pay with escrow (EscrowBox.tsx) ─────────────────────────────────────
-   Loud on purpose: the one way a buyer who can't see the item first is
-   protected, while BROKA holds no payments (lib/safety.ts). */
-
-.escrowBox {
-  margin-top: 18px;
-  padding: 16px;
-  border: 1.5px solid rgb(16 185 129 / 0.75);
-  border-radius: var(--radius);
-  background: linear-gradient(135deg, rgb(16 185 129 / 0.16), var(--bg-card) 60%);
-  box-shadow: 0 0 22px rgb(16 185 129 / 0.18);
-}
-
-.escrowTitle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  color: var(--green);
-  font-size: 17px;
-  font-weight: 800;
-}
-
-.escrowLead {
-  margin: 8px 0 0;
-  color: var(--text-high);
-  font-size: 13.5px;
-  line-height: 1.45;
-}
-
-.escrowList {
-  margin: 12px 0 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: 8px;
-}
-
-.escrowList li {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.escrowList a {
-  color: var(--text-high);
-  text-decoration: none;
-  overflow-wrap: anywhere;
-}
-
-.escrowList a:hover strong,
-.escrowList a:focus-visible strong {
-  text-decoration: underline;
-}
-
-.escrowList a span {
-  color: var(--cyan);
-  font-size: 12.5px;
-}
-
-.escrowList small {
-  color: var(--text-low);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.escrowRule {
-  display: flex;
-  gap: 6px;
-  align-items: flex-start;
-  margin: 12px 0 0;
-  padding: 10px 12px;
-  border: 1px solid rgb(239 68 68 / 0.45);
-  border-radius: 12px;
-  background: rgb(239 68 68 / 0.08);
-  color: var(--text-high);
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.escrowRule svg {
-  flex: none;
-  margin-top: 2px;
-  color: var(--danger);
-}
-
-.escrowZeno {
-  margin: 10px 0 0;
-  color: var(--violet);
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.escrowDisclaimer {
-  margin: 8px 0 0;
-  color: var(--text-low);
-  font-size: 11.5px;
-  line-height: 1.4;
-}
-
-.badgeEnding {
-  border-color: rgb(245 158 11 / 0.7);
-  color: #fcd34d;
-}
-
-/* ── Clean shop hero: the store's own cover photo, flat chips, solid name.
-   Overrides the aurora treatment above: a shop reads as a shop, and
-   nothing animates. Later rules win at equal specificity. ─────────────── */
-
-.hero {
-  min-height: 0;
-  padding: 0;
-  background-color: #0d1526;
-  background-size: cover;
-  background-position: center;
-  border: 1px solid var(--border);
-  box-shadow: none;
-}
-
-.heroShade {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  background: linear-gradient(180deg, rgb(3 4 10 / 0.62), rgb(3 4 10 / 0.82));
-}
-
-.heroBody {
-  z-index: 1;
-  padding: 26px 22px 24px;
-}
-
-@media (min-width: 860px) {
-  .heroBody {
-    padding: 40px 44px;
-  }
-}
-
-.heroLogo {
-  background: #fff;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.4);
-}
-
-.glassChip {
-  background: rgb(3 4 10 / 0.55);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
-
-.heroName {
-  font-size: clamp(32px, 6vw, 54px);
-  letter-spacing: -0.5px;
-  background: none;
-  -webkit-background-clip: border-box;
-  background-clip: border-box;
-  color: #fff;
-  filter: none;
-  animation: none;
-}
-
-
-
-.showcase img {
-  animation: none;
-}
-
-/* ── Homepage sections ──────────────────────────────────────────────────── */
-
-.homeSection {
-  margin-top: 26px;
-}
-
-.sectionHead {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 0 0 12px;
-}
-
-.sectionHead h2 {
-  margin: 0;
-  font-size: 21px;
-  font-weight: 800;
-  letter-spacing: -0.3px;
-}
-
-.seeAll {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 14px;
-  font-weight: 700;
-  color: #b69cff;
-  text-decoration: none;
-}
-
-.seeAll:hover {
-  text-decoration: underline;
-}
-
-.aboutTeaser {
-  margin-top: 26px;
-}
-
-.aboutTeaserCard {
-  display: grid;
-  gap: 10px;
-}
-
-.aboutTeaserCard h2 {
-  margin: 0;
-  font-size: 21px;
-  font-weight: 800;
-}
-
-.aboutTeaserCard p {
-  margin: 0;
-  color: var(--text-mid);
-  font-size: 15px;
-  line-height: 1.55;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-
-/* ── Store banner card (as the app opens a store) + department bar ─────── */
-
-.storeCard {
-  border: 1px solid var(--border);
-  border-radius: 24px;
-  background: var(--bg-card);
-  overflow: hidden;
-}
-
-.storeBanner img {
-  width: 100%;
-  height: 210px;
-  object-fit: cover;
-}
-
-@media (max-width: 600px) {
-  .storeBanner img {
-    height: 150px;
-  }
-}
-
-.storeCardBody {
-  padding: 18px 20px 20px;
-}
-
-.storeHead {
-  display: flex;
-  gap: 14px;
-  align-items: flex-start;
-}
-
-.storeAvatar {
-  width: 72px;
-  height: 72px;
-  margin-top: -44px;
-  padding: 3px;
-  border-radius: 999px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  flex: none;
-}
-
-.storeAvatar img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  border-radius: 999px;
-  object-fit: cover;
-}
-
-.storeHeadText {
-  min-width: 0;
-  padding-top: 2px;
-}
-
-.storeName {
-  margin: 8px 0 0;
-  font-size: clamp(30px, 5vw, 42px);
-  line-height: 1.05;
-  letter-spacing: -0.6px;
-  color: var(--text-high);
-  overflow-wrap: anywhere;
-}
-
-.storePlace {
-  margin: 6px 0 0;
-  color: var(--text-mid);
-  font-size: 15px;
-}
-
-.fact {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 12px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: rgb(17 29 53 / 0.6);
-  color: var(--text-high);
-  font-size: 13.5px;
-  font-weight: 700;
-}
-
-.chipVerified {
-  border-color: rgb(16 185 129 / 0.55);
-  color: #34d399;
-}
-
-.heroCtas {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  margin-top: 18px;
-}
-
-.heroShop {
-  min-height: 46px;
-}
-
-.sellGrid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-@media (min-width: 700px) {
-  .sellGrid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
-.sellTile {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 16px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  color: var(--text-high);
-  font-weight: 700;
-  font-size: 15px;
-  text-decoration: none;
-}
-
-.sellTile:hover {
-  border-color: var(--violet);
-}
-
-.sellEmoji {
-  font-size: 26px;
-  line-height: 1;
-}
-
-.sellName {
-  min-width: 0;
-}
-
-
-/* ── Premium BROKA storefront: ink-navy canvas, compact app-led geometry ── */
-.storefront {
-  position: relative;
-  z-index: 1;
-  isolation: isolate;
-  min-height: 100dvh;
-  color: #f4f3ff;
-  color-scheme: dark;
-  background: transparent;
-  font-family: var(--font-sans);
-}
-.storefront :global(.page) {
-  width: min(100%, 1280px);
-  margin-inline: auto;
-  padding: 0 clamp(13px, 2.6vw, 30px) 44px;
-}
-.storefront :global(.button) {
-  border-radius: 13px;
-  font-weight: 800;
-}
-.storefront .searchPill {
-  min-height: 46px;
-  border-color: rgb(74 117 196 / 60%);
-  border-radius: 999px;
-  background: rgb(14 24 47 / 88%);
-  box-shadow: inset 0 1px rgb(255 255 255 / 4%);
-}
-.storefront .searchPill:focus-within {
-  border-color: #8d80ff;
-  box-shadow: 0 0 0 3px rgb(141 128 255 / 20%);
-}
-.storefront .crumbs { margin-bottom: 2px; }
-.storefront .catalogue { margin-top: 14px; }
-.storefront .catalogue > .homeSection { margin-top: 22px; }
-.storefront .catalogue > .toolbar { margin-top: -2px; }
-.storefront .catalogue .grid { margin-top: 13px; }
-
-.storefront .storeCard {
-  position: relative;
-  isolation: isolate;
-  min-height: 0;
-  margin: 12px 0 15px;
-  overflow: hidden;
-  border: 1px solid rgb(141 153 194 / 20%);
-  border-radius: 20px;
-  background: linear-gradient(145deg, #11172a, #080b16 78%);
-  box-shadow: 0 16px 38px -27px rgb(0 0 0 / 90%), inset 0 1px rgb(255 255 255 / 5%);
-}
-.storefront .storeBanner {
-  position: absolute;
-  z-index: 0;
-  inset: 0;
-  height: 100%;
-  overflow: hidden;
-  background: radial-gradient(ellipse at 78% 16%, rgb(73 94 181 / 35%), transparent 40%),
-    radial-gradient(ellipse at 10% 88%, rgb(94 48 164 / 26%), transparent 38%);
-}
-.storefront .storeBanner img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: center 42%;
-  filter: saturate(.92) brightness(.66);
-}
-.storefront .storeBanner::after {
-  position: absolute;
-  inset: 0;
-  content: '';
-  background: linear-gradient(90deg, rgb(5 7 16 / 74%), rgb(5 7 16 / 44%) 62%, rgb(5 7 16 / 27%)),
-    linear-gradient(0deg, rgb(5 7 16 / 82%), transparent 68%);
-}
-.storefront .storeCardBody {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  gap: 8px;
-  min-height: 224px;
-  padding: 15px 16px 14px;
-  background: linear-gradient(90deg, rgb(5 7 16 / 28%), transparent 85%);
-}
-.storefront .storeHead {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-.storefront .storeAvatar {
-  flex: none;
-  width: 60px;
-  height: 60px;
-  margin: 0;
-  padding: 2px;
-  border: 0;
-  border-radius: 50%;
-  background: linear-gradient(140deg, #7d65ff, #24d6e8 90%);
-  box-shadow: 0 4px 18px rgb(22 19 70 / 55%);
-}
-.storefront .storeAvatar img {
-  width: 100%;
-  height: 100%;
-  border: 2px solid #0b1020;
-  border-radius: 50%;
-  background: #0b1020;
-}
-.storefront .storeHeadText {
-  min-width: 0;
-  padding: 0;
-}
-.storefront .storeName {
-  margin: 0;
-  color: #fff;
-  font-family: var(--font-display);
-  font-size: clamp(25px, 5vw, 34px);
-  font-weight: 800;
-  line-height: 1.04;
-  letter-spacing: -.4px;
-  overflow-wrap: anywhere;
-  text-shadow: 0 2px 16px rgb(0 0 0 / 52%);
-}
-.storefront .storePlace {
-  margin: 4px 0 0;
-  color: rgb(229 231 247 / 83%);
-  font-size: 12.5px;
-  line-height: 1.3;
-}
-.storefront .heroChips,
-.storefront .heroFacts {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.storefront .heroChips {
-  min-height: 0;
-}
-.storefront .glassChip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 27px;
-  padding: 4px 9px;
-  border: 1px solid rgb(200 205 230 / 19%);
-  border-radius: 999px;
-  background: rgb(4 7 17 / 62%);
-  color: #f5f4ff;
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1.25;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-}
-.storefront .chipVerified {
-  border-color: rgb(49 211 163 / 35%);
-  color: #8be2c4;
-}
-.storefront .online {
-  border-color: rgb(27 196 145 / 38%);
-  background: rgb(3 39 35 / 64%);
-  color: #8de8c7;
-}
-.storefront .away {
-  color: #d5d8e9;
-}
-.storefront .liveDot,
-.storefront .awayDot {
-  width: 7px;
-  height: 7px;
-  flex: none;
-  border-radius: 50%;
-}
-.storefront .liveDot { background: #34d399; }
-.storefront .awayDot { background: #9aa6c8; }
-.storefront .heroFacts {
-  gap: 6px;
-}
-.storefront .fact {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-height: 27px;
-  padding: 4px 9px;
-  border: 1px solid rgb(180 191 225 / 18%);
-  border-radius: 999px;
-  background: rgb(5 8 19 / 62%);
-  color: #f3f2fc;
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1.2;
-  white-space: nowrap;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-}
-.storefront .fact a,
-.storefront .factLink {
-  color: inherit;
-  text-decoration: none;
-}
-.storefront .factLink:hover,
-.storefront .factLink:focus-visible {
-  color: #c4b5fd;
-  text-decoration: underline;
-}
-.storefront .factMuted {
-  opacity: .68;
-  font-size: .88em;
-}
-.storefront .starIcon { color: #f6bd37; }
-.storefront .dealIcon { color: #32d6c3; }
-.storefront .bagIcon { color: #a9a4ff; }
-.storefront .heroCtas {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  width: min(100%, 470px);
-  margin: 2px 0 0;
-}
-.storefront .heroShop,
-.storefront .moreWidget {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  min-width: 0;
-  min-height: 43px;
-  margin: 0;
-  padding: 0 10px;
-  border: 1px solid rgb(151 130 255 / 50%);
-  border-radius: 12px;
-  background: var(--cta);
-  color: #fff;
-  font-size: 12.5px;
-  font-weight: 800;
-  line-height: 1.1;
-  text-align: center;
-  text-decoration: none;
-  box-shadow: 0 7px 18px rgb(66 61 164 / 22%);
-  transition: transform .16s ease, filter .16s ease, border-color .16s ease;
-}
-.storefront .moreWidget {
-  border-color: rgb(137 107 235 / 56%);
-  background: rgb(5 8 18 / 76%);
-  color: #f6f3ff;
-  box-shadow: none;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-}
-.storefront .heroShop:hover,
-.storefront .moreWidget:hover {
-  transform: translateY(-1px);
-  filter: brightness(1.1);
-}
-.storefront .heroShop:focus-visible,
-.storefront .moreWidget:focus-visible {
-  outline: 3px solid #b8adff;
-  outline-offset: 3px;
-}
-.storefront .showcase { display: none; }
-.storefront .paused {
-  position: relative;
-  z-index: 2;
-  margin: 0;
-  border: 0;
-  border-top: 1px solid rgb(245 158 11 / 28%);
-  border-radius: 0;
-  background: rgb(60 38 9 / 78%);
-  color: #ffe1a3;
-}
-
-/* Trust signals read as a single quiet service strip, not three large cards. */
-.storefront .perks {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0;
-  margin: 10px 0 16px;
-  overflow: hidden;
-  border: 1px solid rgb(119 145 197 / 22%);
-  border-radius: 15px;
-  background: rgb(12 18 35 / 78%);
-}
-.storefront .perks li {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  min-width: 0;
-  padding: 9px 6px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  text-align: center;
-}
-.storefront .perks li + li { border-left: 1px solid rgb(135 151 194 / 16%); }
-.storefront .perks strong {
-  overflow: hidden;
-  color: #e4e5f7;
-  font-size: 10.5px;
-  font-weight: 750;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.storefront .perks small { display: none; }
-.storefront .perkIcon {
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  background: transparent;
-  color: #39d6c1;
-}
-.storefront .perks li:nth-child(2) .perkIcon { color: #a9a4ff; }
-.storefront .perks li:nth-child(3) .perkIcon { color: #4cb9ff; }
-.storefront .perks li:nth-child(4) .perkIcon { color: #f6bd37; }
-
-/* Product cards: the photo first and square, the name in at most two lines
-   (every card's text block is the same height, so prices and buttons line
-   up along a row), the price in the readable violet, then the one action.
-   One look on the store's home, the catalogue and "More from" alike. */
-.storefront .product {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: linear-gradient(165deg, #11182b, #090d19 78%);
-  box-shadow: var(--shadow-card);
-}
-.storefront .product:hover,
-.storefront .product:focus-within {
-  border-color: var(--border-accent);
-}
-.storefront .product:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 16px 32px -22px rgb(125 102 255 / 66%);
-}
-.storefront .productImage {
-  aspect-ratio: 1 / 1;
-  background: #0d1424;
-}
-.storefront .productBody {
-  display: grid;
-  align-content: start;
-  gap: 4px;
-  padding: 11px 12px 4px;
-}
-.storefront .productName {
-  min-height: 2.5em;
-  color: var(--text-high);
-  font-family: var(--font-sans);
-  font-size: 14px;
-  font-weight: 650;
-  line-height: 1.25;
-}
-.storefront .productPrice {
-  margin: 0;
-  color: var(--violet-text);
-  font-family: var(--font-display);
-  font-size: 16.5px;
-  font-weight: 800;
-  line-height: 1.2;
-  font-variant-numeric: tabular-nums;
-}
-.storefront .stockLine {
-  margin: 0;
-  color: #f3b344;
-  font-size: 11.5px;
-  font-weight: 700;
-}
-.storefront .stockLineIn { color: #52d6a3; }
-.storefront .stockLineOut { color: #9da5bb; }
-.storefront .productAction { padding: 8px 12px 12px; }
-.storefront .addToCart,
-.storefront .viewButton {
-  min-height: 40px;
-  border: 1px solid rgb(161 141 255 / 42%);
-  border-radius: var(--radius-sm);
-  background: var(--cta);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 750;
-  text-decoration: none;
-  box-shadow: var(--glow-accent);
-}
-/* A product that can't go in the cart here (an auction, out of stock,
-   paused): its button reads as the way to the product, not as a purchase. */
-.storefront .viewButton {
-  border-color: var(--border-strong);
-  background: rgb(255 255 255 / 0.04);
-  box-shadow: none;
-  color: var(--text-high);
-}
-.storefront .addToCart:hover,
-.storefront .viewButton:hover { filter: brightness(1.12); }
-.storefront .addToCart:focus-visible,
-.storefront .viewButton:focus-visible { outline: 3px solid #b8adff; outline-offset: 2px; }
-@media (max-width: 600px) {
-  .storefront .productBody { padding: 9px 10px 3px; }
-  .storefront .productName { font-size: 13.5px; }
-  .storefront .productPrice { font-size: 15.5px; }
-  .storefront .productAction { padding: 7px 10px 10px; }
-}
-.storefront .empty {
-  border: 1px solid rgb(122 140 188 / 20%);
-  border-radius: 18px;
-  background: rgb(10 14 28 / 78%);
-}
-
-@media (max-width: 420px) {
-  .storefront :global(.page) { padding-inline: 12px; }
-  .storefront .storeCard { border-radius: 18px; }
-  .storefront .storeCardBody { min-height: 216px; padding: 13px 13px 12px; gap: 7px; }
-  .storefront .storeAvatar { width: 54px; height: 54px; }
-  .storefront .storeName { font-size: 24px; }
-  .storefront .heroFacts { gap: 5px; }
-  .storefront .fact { padding-inline: 7px; font-size: 10.5px; }
-  .storefront .heroShop,
-  .storefront .moreWidget { min-height: 42px; font-size: 11.5px; }
-  .storefront .perks strong { font-size: 9.5px; }
-}
-
-@media (min-width: 760px) {
-  .storefront .storeCardBody { min-height: 246px; padding: 19px 22px 18px; gap: 10px; }
-  .storefront .storeAvatar { width: 68px; height: 68px; }
-  .storefront .storeName { font-size: 36px; }
-  .storefront .glassChip,
-  .storefront .fact { font-size: 12px; }
-  .storefront .perks strong { font-size: 12px; }
-  .storefront .perks small { display: block; margin-top: 2px; color: #9da5bb; font-size: 10px; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .storefront *,
-  .storefront *::before,
-  .storefront *::after {
-    scroll-behavior: auto !important;
-    animation-duration: .01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: .01ms !important;
-  }
-}
-
-
-/* Final app-matched refinements from responsive visual review. */
-.storefront .perks li:nth-child(4) { display: none; }
-.storefront .sectionHead h2,
-.storefront .toolbar h2 {
-  color: var(--text-high);
-  font-family: var(--font-display);
-  font-weight: 800;
-  letter-spacing: -0.02em;
-}
-
-@media (max-width: 420px) {
-  .storefront .storeCardBody {
-    min-height: 0;
-    padding: 10px 13px;
-    gap: 6px;
-  }
-  .storefront .perks li { padding-block: 7px; }
-}
-
-
-/* ── Storefront 2.0: the bottom bar and the messages page ─────────────────── */
-
-@media (max-width: 860px) {
-  /* Room under the footer's last line for the bar along the bottom of a
-     phone (StoreBottomNav), which would otherwise sit on it. */
-  .storefront .footer {
-    padding-bottom: calc(var(--bottom-nav-h) + 28px + env(safe-area-inset-bottom));
-  }
-}
-
-/* The messages page (MessagingWorkspace): on a wide screen the two panels
-   fill the window under the header; on a phone, a chat screen - edge to
-   edge, with no breadcrumb, footer or bottom bar around the conversation
-   (store-nav.module.css hides the store's header there). */
-.storefront[data-layout='chat'] :global(.page) {
-  padding-bottom: 28px;
-}
-.storefront[data-layout='chat'] .crumbs {
-  margin-bottom: 12px;
-}
-@media (max-width: 860px) {
-  .storefront[data-layout='chat'] :global(.page) {
-    padding: 0;
-  }
-  .storefront[data-layout='chat'] .crumbs,
-  .storefront[data-layout='chat'] .footer {
-    display: none;
+@keyframes stickyIn {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
   }
 }
