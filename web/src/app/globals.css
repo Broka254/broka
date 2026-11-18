@@ -33,7 +33,10 @@
   --surface-2: rgb(17 23 42 / 0.92);
   --surface-solid: #0b1020;
   --surface-input: rgb(5 7 16 / 0.72);
-  --surface-bar: rgb(5 7 16 / 0.93);
+  /* Solid: anything translucent over a scrolling page let the text under a
+     sticky bar show through it (the store header, the bar along the
+     bottom of a phone, the chat header), blurred or not. */
+  --surface-bar: #05070f;
   --radius-sm: 10px;
   --radius-md: 14px;
   --radius-lg: 18px;

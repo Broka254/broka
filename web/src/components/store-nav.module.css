@@ -10,11 +10,8 @@
   position: sticky;
   top: 0;
   z-index: 30;
-  /* Nearly opaque: the Android "Open in the app" banner is sticky at the
-     top too, and showed through a lighter header once scrolled. */
+  /* Opaque (globals.css --surface-bar): the products scroll under it. */
   background: var(--surface-bar);
-  backdrop-filter: blur(16px) saturate(140%);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
   border-bottom: 1px solid var(--border);
   box-shadow: 0 10px 30px -24px rgb(0 0 0 / 0.9);
 }
@@ -240,8 +237,6 @@
     padding: 4px 8px calc(4px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--border);
     background: var(--surface-bar);
-    backdrop-filter: blur(16px) saturate(140%);
-    -webkit-backdrop-filter: blur(16px) saturate(140%);
     box-shadow: 0 -12px 30px -18px rgb(0 0 0 / 0.85);
     transition: transform 0.2s var(--ease);
   }
@@ -343,8 +338,6 @@
   top: 0;
   z-index: 30;
   background: var(--surface-bar);
-  backdrop-filter: blur(16px) saturate(140%);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
   border-bottom: 1px solid var(--border);
 }
 

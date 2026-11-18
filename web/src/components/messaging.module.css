@@ -91,6 +91,14 @@
   list-style: none;
 }
 
+.rowsCard {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-card);
+}
+
 .row {
   display: flex;
   align-items: center;
@@ -126,9 +134,12 @@
   background: var(--surface-solid);
 }
 
+/* minmax(0, 1fr): an auto column grew to the title's full width and pushed
+   the time out of the panel ("16:5", "Yest"). */
 .rowBody {
   display: grid;
   flex: 1;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1px;
   min-width: 0;
 }
@@ -149,6 +160,8 @@
 }
 
 .rowTitle {
+  flex: 1;
+  min-width: 0;
   color: var(--text-high);
   font-size: 14.5px;
   font-weight: 700;
@@ -437,9 +450,6 @@
 }
 
 .dayLabel {
-  position: sticky;
-  top: 0;
-  z-index: 1;
   display: flex;
   justify-content: center;
   margin: 4px 0 10px;
@@ -881,8 +891,6 @@
     top: 0;
     z-index: 20;
     background: var(--surface-bar);
-    backdrop-filter: blur(16px) saturate(140%);
-    -webkit-backdrop-filter: blur(16px) saturate(140%);
   }
 
   .chatHead {
@@ -918,12 +926,6 @@
     padding: 14px 12px 10px;
   }
 
-  /* The page scrolls here, under a header of varying height: days are
-     labelled in place rather than pinned. */
-  .dayLabel {
-    position: static;
-  }
-
   .turn {
     max-width: 86%;
   }
@@ -934,8 +936,6 @@
     z-index: 20;
     padding: 8px 12px calc(10px + env(safe-area-inset-bottom));
     background: var(--surface-bar);
-    backdrop-filter: blur(16px) saturate(140%);
-    -webkit-backdrop-filter: blur(16px) saturate(140%);
   }
 
   .send {

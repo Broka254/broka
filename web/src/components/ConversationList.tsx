@@ -125,7 +125,10 @@ export function ConversationList({
           <p className={styles.listNote}>No conversations with {store?.name} yet.</p>
         )
       ) : (
-        <ul className={styles.rows} aria-label={store ? `Conversations with ${store.name}` : 'Your conversations'}>
+        <ul
+          className={`${styles.rows} ${variant === 'inbox' ? styles.rowsCard : ''}`}
+          aria-label={store ? `Conversations with ${store.name}` : 'Your conversations'}
+        >
           {rows.map((c) => {
             // Only the page's own copy of the open conversation is a draft:
             // once the inbox has it, the inbox's row (with its last line) wins.
