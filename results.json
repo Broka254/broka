@@ -1,0 +1,1798 @@
+{
+  "base": "http://127.0.0.1:3000",
+  "startedAt": "2026-11-18T20:48:08.611Z",
+  "checks": [
+    {
+      "device": "mobile-360",
+      "page": "home",
+      "overflowX": 0,
+      "wide": [
+        "a.store-landing-module__UNtStG__collection right=433",
+        "img. right=432",
+        "span.store-landing-module__UNtStG__collectionShade right=432",
+        "span.store-landing-module__UNtStG__collectionText right=380",
+        "strong. right=380"
+      ],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Home=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 342,
+      "endClearOfBottomBar": {
+        "barTop": 666,
+        "lastBottom": 636,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-360",
+      "page": "shop",
+      "overflowX": 0,
+      "wide": [
+        "a.store-module__G1yxjG__categoryTile  right=372",
+        "img.store-module__G1yxjG__categoryTileImage right=371",
+        "span.store-module__G1yxjG__categoryTileScrim right=371",
+        "a.store-module__G1yxjG__categoryTile  right=494",
+        "img.store-module__G1yxjG__categoryTileImage right=493"
+      ],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Shop=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 577,
+      "endClearOfBottomBar": {
+        "barTop": 666,
+        "lastBottom": 636,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-360",
+      "page": "product",
+      "overflowX": 0,
+      "wide": [
+        "img.store-module__G1yxjG__galleryGlow right=384",
+        "li. right=398"
+      ],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Shop=true"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 2449,
+      "endClearOfBottomBar": {
+        "barTop": 666,
+        "lastBottom": 636,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-360",
+      "page": "about",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null,
+      "endClearOfBottomBar": {
+        "barTop": 666,
+        "lastBottom": 636,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-360",
+      "page": "cart",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Cart, 3 items=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null,
+      "endClearOfBottomBar": {
+        "barTop": 666,
+        "lastBottom": 636,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-360",
+      "page": "messages",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": null,
+      "firstProductTop": null
+    },
+    {
+      "device": "mobile-360",
+      "page": "inbox",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Messages=page"
+      ],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null,
+      "endClearOfBottomBar": null
+    },
+    {
+      "device": "mobile-360",
+      "page": "orders",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Orders=page"
+      ],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null,
+      "endClearOfBottomBar": null
+    },
+    {
+      "device": "mobile-360",
+      "page": "order",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Orders=true"
+      ],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 177,
+      "endClearOfBottomBar": null
+    },
+    {
+      "device": "mobile-360",
+      "page": "home-small",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Home=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 342,
+      "endClearOfBottomBar": {
+        "barTop": 666,
+        "lastBottom": 636,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-360",
+      "page": "home-new",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Home=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null,
+      "endClearOfBottomBar": {
+        "barTop": 666,
+        "lastBottom": 636,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-360",
+      "page": "shop-filtered",
+      "overflowX": 0,
+      "wide": [
+        "a.store-module__G1yxjG__categoryTile  right=372",
+        "img.store-module__G1yxjG__categoryTileImage right=371",
+        "span.store-module__G1yxjG__categoryTileScrim right=371",
+        "a.store-module__G1yxjG__categoryTile  right=494",
+        "img.store-module__G1yxjG__categoryTileImage right=493"
+      ],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Shop=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 657,
+      "endClearOfBottomBar": {
+        "barTop": 666,
+        "lastBottom": 636,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-360",
+      "page": "product-out",
+      "overflowX": 0,
+      "wide": [
+        "img.store-module__G1yxjG__galleryGlow right=384",
+        "li. right=398"
+      ],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Shop=true"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 1530,
+      "endClearOfBottomBar": {
+        "barTop": 666,
+        "lastBottom": 636,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-390",
+      "page": "home",
+      "overflowX": 0,
+      "wide": [
+        "a.store-landing-module__UNtStG__collection right=470",
+        "img. right=469",
+        "span.store-landing-module__UNtStG__collectionShade right=469",
+        "span.store-landing-module__UNtStG__collectionText right=417",
+        "strong. right=417"
+      ],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Home=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 311,
+      "endClearOfBottomBar": {
+        "barTop": 770,
+        "lastBottom": 740,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-390",
+      "page": "shop",
+      "overflowX": 0,
+      "wide": [
+        "a.store-module__G1yxjG__categoryTile  right=494",
+        "img.store-module__G1yxjG__categoryTileImage right=493",
+        "span.store-module__G1yxjG__categoryTileScrim right=493",
+        "span.store-module__G1yxjG__categoryTileCopy right=483",
+        "strong. right=483"
+      ],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Shop=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 523,
+      "endClearOfBottomBar": {
+        "barTop": 770,
+        "lastBottom": 740,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-390",
+      "page": "product",
+      "overflowX": 0,
+      "wide": [
+        "img.store-module__G1yxjG__galleryGlow right=418",
+        "li. right=398"
+      ],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Shop=true"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 2358,
+      "endClearOfBottomBar": {
+        "barTop": 770,
+        "lastBottom": 740,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-390",
+      "page": "about",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null,
+      "endClearOfBottomBar": {
+        "barTop": 770,
+        "lastBottom": 740,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-390",
+      "page": "cart",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Cart, 3 items=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null,
+      "endClearOfBottomBar": {
+        "barTop": 770,
+        "lastBottom": 740,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-390",
+      "page": "messages",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": null,
+      "firstProductTop": null
+    },
+    {
+      "device": "mobile-390",
+      "page": "inbox",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Messages=page"
+      ],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null,
+      "endClearOfBottomBar": null
+    },
+    {
+      "device": "mobile-390",
+      "page": "orders",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Orders=page"
+      ],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null,
+      "endClearOfBottomBar": null
+    },
+    {
+      "device": "mobile-390",
+      "page": "order",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Orders=true"
+      ],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 123,
+      "endClearOfBottomBar": null
+    },
+    {
+      "device": "mobile-390",
+      "page": "home-small",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Home=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 311,
+      "endClearOfBottomBar": {
+        "barTop": 770,
+        "lastBottom": 740,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-390",
+      "page": "home-new",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Home=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null,
+      "endClearOfBottomBar": {
+        "barTop": 770,
+        "lastBottom": 740,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-390",
+      "page": "shop-filtered",
+      "overflowX": 0,
+      "wide": [
+        "a.store-module__G1yxjG__categoryTile  right=494",
+        "img.store-module__G1yxjG__categoryTileImage right=493",
+        "span.store-module__G1yxjG__categoryTileScrim right=493",
+        "span.store-module__G1yxjG__categoryTileCopy right=483",
+        "strong. right=483"
+      ],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Shop=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 563,
+      "endClearOfBottomBar": {
+        "barTop": 770,
+        "lastBottom": 740,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-390",
+      "page": "product-out",
+      "overflowX": 0,
+      "wide": [
+        "img.store-module__G1yxjG__galleryGlow right=418",
+        "li. right=398"
+      ],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Shop=true"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 1484,
+      "endClearOfBottomBar": {
+        "barTop": 770,
+        "lastBottom": 740,
+        "clear": true
+      }
+    },
+    {
+      "device": "tablet-768",
+      "page": "home",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Home=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 427,
+      "endClearOfBottomBar": {
+        "barTop": 950,
+        "lastBottom": 920,
+        "clear": true
+      }
+    },
+    {
+      "device": "tablet-768",
+      "page": "shop",
+      "overflowX": 0,
+      "wide": [
+        "a.store-module__G1yxjG__categoryTile  right=787",
+        "img.store-module__G1yxjG__categoryTileImage right=786",
+        "span.store-module__G1yxjG__categoryTileScrim right=786",
+        "span.store-module__G1yxjG__categoryTileCopy right=776",
+        "strong. right=776"
+      ],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Shop=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 550,
+      "endClearOfBottomBar": {
+        "barTop": 950,
+        "lastBottom": 920,
+        "clear": true
+      }
+    },
+    {
+      "device": "tablet-768",
+      "page": "product",
+      "overflowX": 0,
+      "wide": [
+        "img.store-module__G1yxjG__galleryGlow right=824"
+      ],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Shop=true"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 2427,
+      "endClearOfBottomBar": {
+        "barTop": 950,
+        "lastBottom": 920,
+        "clear": true
+      }
+    },
+    {
+      "device": "tablet-768",
+      "page": "about",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null,
+      "endClearOfBottomBar": {
+        "barTop": 950,
+        "lastBottom": 920,
+        "clear": true
+      }
+    },
+    {
+      "device": "tablet-768",
+      "page": "cart",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Cart, 3 items=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null,
+      "endClearOfBottomBar": {
+        "barTop": 950,
+        "lastBottom": 920,
+        "clear": true
+      }
+    },
+    {
+      "device": "tablet-768",
+      "page": "messages",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": null,
+      "firstProductTop": null
+    },
+    {
+      "device": "tablet-768",
+      "page": "inbox",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Messages=page"
+      ],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null,
+      "endClearOfBottomBar": null
+    },
+    {
+      "device": "tablet-768",
+      "page": "orders",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Orders=page"
+      ],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null,
+      "endClearOfBottomBar": null
+    },
+    {
+      "device": "tablet-768",
+      "page": "order",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Orders=true"
+      ],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 128,
+      "endClearOfBottomBar": null
+    },
+    {
+      "device": "tablet-768",
+      "page": "home-small",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Home=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 427,
+      "endClearOfBottomBar": {
+        "barTop": 950,
+        "lastBottom": 920,
+        "clear": true
+      }
+    },
+    {
+      "device": "tablet-768",
+      "page": "home-new",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Home=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null,
+      "endClearOfBottomBar": {
+        "barTop": 950,
+        "lastBottom": 920,
+        "clear": true
+      }
+    },
+    {
+      "device": "tablet-768",
+      "page": "shop-filtered",
+      "overflowX": 0,
+      "wide": [
+        "a.store-module__G1yxjG__categoryTile  right=787",
+        "img.store-module__G1yxjG__categoryTileImage right=786",
+        "span.store-module__G1yxjG__categoryTileScrim right=786",
+        "span.store-module__G1yxjG__categoryTileCopy right=776",
+        "strong. right=776"
+      ],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Shop=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 589,
+      "endClearOfBottomBar": {
+        "barTop": 950,
+        "lastBottom": 920,
+        "clear": true
+      }
+    },
+    {
+      "device": "tablet-768",
+      "page": "product-out",
+      "overflowX": 0,
+      "wide": [
+        "img.store-module__G1yxjG__galleryGlow right=824"
+      ],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Shop=true"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 1685,
+      "endClearOfBottomBar": {
+        "barTop": 950,
+        "lastBottom": 920,
+        "clear": true
+      }
+    },
+    {
+      "device": "desktop-1280",
+      "page": "home",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Home=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 621
+    },
+    {
+      "device": "desktop-1280",
+      "page": "shop",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Shop=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 581
+    },
+    {
+      "device": "desktop-1280",
+      "page": "product",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Shop=true"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 1789
+    },
+    {
+      "device": "desktop-1280",
+      "page": "about",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "About=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null
+    },
+    {
+      "device": "desktop-1280",
+      "page": "cart",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null
+    },
+    {
+      "device": "desktop-1280",
+      "page": "messages",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Messages=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": null,
+      "firstProductTop": null
+    },
+    {
+      "device": "desktop-1280",
+      "page": "inbox",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Messages=page"
+      ],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null
+    },
+    {
+      "device": "desktop-1280",
+      "page": "orders",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Orders=page"
+      ],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null
+    },
+    {
+      "device": "desktop-1280",
+      "page": "order",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Orders=true"
+      ],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 135
+    },
+    {
+      "device": "desktop-1280",
+      "page": "home-small",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Home=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 599
+    },
+    {
+      "device": "desktop-1280",
+      "page": "home-new",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Home=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null
+    },
+    {
+      "device": "desktop-1280",
+      "page": "shop-filtered",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Shop=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 617
+    },
+    {
+      "device": "desktop-1280",
+      "page": "product-out",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Shop=true"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 1061
+    },
+    {
+      "device": "desktop-1440",
+      "page": "home",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Home=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 653
+    },
+    {
+      "device": "desktop-1440",
+      "page": "shop",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Shop=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 581
+    },
+    {
+      "device": "desktop-1440",
+      "page": "product",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Shop=true"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 1731
+    },
+    {
+      "device": "desktop-1440",
+      "page": "about",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "About=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null
+    },
+    {
+      "device": "desktop-1440",
+      "page": "cart",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null
+    },
+    {
+      "device": "desktop-1440",
+      "page": "messages",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Messages=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": null,
+      "firstProductTop": null
+    },
+    {
+      "device": "desktop-1440",
+      "page": "inbox",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Messages=page"
+      ],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null
+    },
+    {
+      "device": "desktop-1440",
+      "page": "orders",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Orders=page"
+      ],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null
+    },
+    {
+      "device": "desktop-1440",
+      "page": "order",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Orders=true"
+      ],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 135
+    },
+    {
+      "device": "desktop-1440",
+      "page": "home-small",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Home=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 653
+    },
+    {
+      "device": "desktop-1440",
+      "page": "home-new",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Home=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": null
+    },
+    {
+      "device": "desktop-1440",
+      "page": "shop-filtered",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Shop=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 617
+    },
+    {
+      "device": "desktop-1440",
+      "page": "product-out",
+      "overflowX": 0,
+      "wide": [],
+      "undefinedClasses": 0,
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Shop=true"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "fontsLoaded": [
+        "brokaInter",
+        "brokaSora"
+      ],
+      "bodyFont": "brokaInter, \"brokaInter Fallback\", ui-sans-serif, system-ui, -apple-system, \"Seg",
+      "h1Font": "brokaSora, \"brokaSora Fallback\", brokaInter, \"brokaInter Fallback\", ui-sans-seri",
+      "firstProductTop": 1062
+    }
+  ],
+  "flows": [
+    {
+      "name": "drawer desktop",
+      "opened": true
+    },
+    {
+      "name": "gallery",
+      "first": "Samsung Galaxy A15 · 128 GB, photo 1 of 4",
+      "afterNext": "Samsung Galaxy A15 · 128 GB, photo 2 of 4",
+      "afterSwipeLeft": "Samsung Galaxy A15 · 128 GB, photo 3 of 4",
+      "afterPrevious": "Samsung Galaxy A15 · 128 GB, photo 2 of 4"
+    },
+    {
+      "name": "phone: buy bar",
+      "atTop": 0,
+      "pastBuyBox": 1,
+      "layout": {
+        "barBottom": 768,
+        "navTop": 770,
+        "clear": true,
+        "height": 60
+      },
+      "atFooter": 0,
+      "buyNowWentTo": "/store/clanix/cart",
+      "cartAfter": [
+        "l1:1"
+      ]
+    },
+    {
+      "name": "desktop: conversation scroll",
+      "openedAtNewest": true,
+      "heldWhileReadingBack": true,
+      "newMessagesButtonGoesToNewest": true,
+      "sendingShownAtOnce": true,
+      "sentOnce": true,
+      "followedAfterSending": true
+    },
+    {
+      "name": "phone: chat screen",
+      "onOpen": {
+        "composerInView": true,
+        "storeHeaderHidden": true,
+        "bottomBarAbsent": true,
+        "overflowX": 0
+      },
+      "failureExplained": "Not sent - you've sent several messages in a short time. Wait a few minutes, then try again.",
+      "retriedOnce": true
+    }
+  ],
+  "shots": [
+    "home-mobile-360.png",
+    "shop-mobile-360.png",
+    "product-mobile-360.png",
+    "about-mobile-360.png",
+    "cart-mobile-360.png",
+    "messages-mobile-360.png",
+    "inbox-mobile-360.png",
+    "orders-mobile-360.png",
+    "order-mobile-360.png",
+    "home-small-mobile-360.png",
+    "home-new-mobile-360.png",
+    "shop-filtered-mobile-360.png",
+    "product-out-mobile-360.png",
+    "home-mobile-390.png",
+    "shop-mobile-390.png",
+    "product-mobile-390.png",
+    "about-mobile-390.png",
+    "cart-mobile-390.png",
+    "messages-mobile-390.png",
+    "inbox-mobile-390.png",
+    "orders-mobile-390.png",
+    "order-mobile-390.png",
+    "home-small-mobile-390.png",
+    "home-new-mobile-390.png",
+    "shop-filtered-mobile-390.png",
+    "product-out-mobile-390.png",
+    "home-mobile-390-full.jpg",
+    "shop-mobile-390-full.jpg",
+    "product-mobile-390-full.jpg",
+    "about-mobile-390-full.jpg",
+    "cart-mobile-390-full.jpg",
+    "home-small-mobile-390-full.jpg",
+    "home-new-mobile-390-full.jpg",
+    "order-mobile-390-full.jpg",
+    "home-tablet-768.png",
+    "shop-tablet-768.png",
+    "product-tablet-768.png",
+    "about-tablet-768.png",
+    "cart-tablet-768.png",
+    "messages-tablet-768.png",
+    "inbox-tablet-768.png",
+    "orders-tablet-768.png",
+    "order-tablet-768.png",
+    "home-small-tablet-768.png",
+    "home-new-tablet-768.png",
+    "shop-filtered-tablet-768.png",
+    "product-out-tablet-768.png",
+    "home-tablet-768-full.jpg",
+    "shop-tablet-768-full.jpg",
+    "product-tablet-768-full.jpg",
+    "about-tablet-768-full.jpg",
+    "cart-tablet-768-full.jpg",
+    "home-small-tablet-768-full.jpg",
+    "home-new-tablet-768-full.jpg",
+    "order-tablet-768-full.jpg",
+    "home-desktop-1280.png",
+    "shop-desktop-1280.png",
+    "product-desktop-1280.png",
+    "about-desktop-1280.png",
+    "cart-desktop-1280.png",
+    "messages-desktop-1280.png",
+    "inbox-desktop-1280.png",
+    "orders-desktop-1280.png",
+    "order-desktop-1280.png",
+    "home-small-desktop-1280.png",
+    "home-new-desktop-1280.png",
+    "shop-filtered-desktop-1280.png",
+    "product-out-desktop-1280.png",
+    "home-desktop-1280-full.jpg",
+    "shop-desktop-1280-full.jpg",
+    "product-desktop-1280-full.jpg",
+    "about-desktop-1280-full.jpg",
+    "cart-desktop-1280-full.jpg",
+    "home-small-desktop-1280-full.jpg",
+    "home-new-desktop-1280-full.jpg",
+    "order-desktop-1280-full.jpg",
+    "home-desktop-1440.png",
+    "shop-desktop-1440.png",
+    "product-desktop-1440.png",
+    "about-desktop-1440.png",
+    "cart-desktop-1440.png",
+    "messages-desktop-1440.png",
+    "inbox-desktop-1440.png",
+    "orders-desktop-1440.png",
+    "order-desktop-1440.png",
+    "home-small-desktop-1440.png",
+    "home-new-desktop-1440.png",
+    "shop-filtered-desktop-1440.png",
+    "product-out-desktop-1440.png",
+    "drawer-desktop-1280.png",
+    "drawer-mobile-390.png",
+    "filters-desktop-1280.png",
+    "card-hover-desktop-1280.png",
+    "home-desktop-1440-motion.png",
+    "home-desktop-1440-motion-scrolled.png",
+    "home-mobile-390-motion.png",
+    "home-mobile-390-motion-scrolled.png",
+    "gallery-desktop-1280.png",
+    "product-mobile-390-buybar.png",
+    "messages-desktop-1280-after-send.png",
+    "messages-mobile-390-failed.png",
+    "home-mobile-360-android.png",
+    "cart-mobile-390-signed-out-full.jpg"
+  ],
+  "errors": [],
+  "console": [],
+  "summary": {
+    "pagesChecked": 65,
+    "horizontalOverflow": [],
+    "smallTapTargets": [],
+    "footerUnderBottomBar": [],
+    "undefinedClasses": [],
+    "fonts": [
+      "brokaInter",
+      "brokaSora"
+    ],
+    "consoleProblems": 0,
+    "errors": 0
+  },
+  "finishedAt": "2026-11-18T20:51:00.203Z"
+}

@@ -1,0 +1,6 @@
+sha=8ac3b31f7119951e5b8c0f0dbe33793c7d2358aa
+typecheck=success
+lint=success
+test=success
+build=success
+screenshots=success
