@@ -387,92 +387,110 @@ async def _periodic_sweep_loop(interval_seconds: int = 300) -> None:
         # was silently finding nothing on every pass for weeks. DEBUG so it
         # costs nothing at the default level, but it is there when needed.
         logger.debug("[sweep] pass starting")
-        async with scheduler_lease("broka:scheduler:periodic") as acquired:
-            if acquired:
-                try:
-                    await task_check_deal_timers({})
-                except Exception as exc:
-                    logger.error("[sweep] deal timer check failed: %s", exc)
-                try:
-                    await task_reconcile_econfirm_escrows({})
-                except Exception as exc:
-                    logger.error("[sweep] E-Confirm reconciliation failed: %s", exc)
-                try:
-                    await task_reconcile_zetupay_payments({})
-                except Exception as exc:
-                    logger.error("[sweep] ZetuPay reconciliation failed: %s", exc)
-                try:
-                    # This task existed but was registered only with ARQ and never
-                    # called by the in-app sweep, so in-process deployments never
-                    # reconciled a lost STK callback or an ambiguous push.
-                    from api.database import DATABASE_URL
-                    await task_reconcile_mpesa({}, DATABASE_URL)
-                except Exception as exc:
-                    logger.error("[sweep] M-Pesa reconciliation failed: %s", exc)
-                try:
-                    await task_check_dispute_timers()
-                except Exception as exc:
-                    logger.error("[sweep] dispute timer check failed: %s", exc)
-                try:
-                    await task_refresh_dispute_summary_cache()
-                except Exception as exc:
-                    logger.error("[sweep] dispute summary cache refresh failed: %s", exc)
-                try:
-                    await task_recompute_dcr_and_leaks()
-                except Exception as exc:
-                    logger.error("[sweep] DCR/leak recompute failed: %s", exc)
-                try:
-                    await task_refresh_store_ratings()
-                except Exception as exc:
-                    logger.error("[sweep] store rating refresh failed: %s", exc)
-                try:
-                    await task_retrain_ml_models()
-                except Exception as exc:
-                    logger.error("[sweep] ML retrain failed: %s", exc)
-                try:
-                    await task_check_call_expiry()
-                except Exception as exc:
-                    logger.error("[sweep] call expiry check failed: %s", exc)
-                try:
-                    await task_backfill_media()
-                except Exception as exc:
-                    logger.error("[sweep] media backfill failed: %s", exc)
-                try:
-                    await task_collect_abandoned_media()
-                except Exception as exc:
-                    logger.error("[sweep] media clean-up failed: %s", exc)
-                try:
-                    await task_expire_buy_agent_watches()
-                except Exception as exc:
-                    logger.error("[sweep] buy-agent watch expiry failed: %s", exc)
-                try:
-                    await task_sync_listing_stock()
-                except Exception as exc:
-                    logger.error("[sweep] listing stock sync failed: %s", exc)
-                try:
-                    await task_store_order_sweep()
-                except Exception as exc:
-                    logger.error("[sweep] store order sweep failed: %s", exc)
-                try:
-                    await task_notify_expiry_alerts({})
-                except Exception as exc:
-                    logger.error("[sweep] expiry SMS sweep failed: %s", exc)
-                try:
-                    # Flush buffered usage writes, roll old events into daily
-                    # totals, and sample provider-exposed infrastructure
-                    # metrics. Best-effort: accounting never stops the sweep.
-                    from api.domains.service_costs.service import run_cost_maintenance
-                    await run_cost_maintenance()
-                except Exception as exc:
-                    logger.error("[sweep] service-cost maintenance failed: %s", exc)
-                try:
-                    # Founder briefs for the day, week and month that just
-                    # closed, written once per period (api/core/admin_reports.py).
-                    from api.core.admin_reports import generate_due_reports
-                    await generate_due_reports()
-                except Exception as exc:
-                    logger.error("[sweep] founder report generation failed: %s", exc)
+        try:
+            async with scheduler_lease("broka:scheduler:periodic") as acquired:
+                if acquired:
+                    await _periodic_sweep_pass()
+        except Exception as exc:
+            # A pass that could not take or give back its lease - the
+            # database unreachable for the advisory lock, the pool timed
+            # out - used to end this loop for good: the error left the
+            # while, nothing restarts a finished task, and every deadline
+            # the sweep enforces waited for the next deploy - deal timers,
+            # disputes, and store orders past their deadline still holding
+            # the units they reserved (STORE_ORDERS.md). The pass is
+            # skipped instead, and the next one tries again. CancelledError
+            # is not an Exception: stop_periodic_sweep still ends the loop.
+            logger.error("[sweep] pass skipped - %s: %s", type(exc).__name__, exc)
         await asyncio.sleep(interval_seconds)
+
+
+async def _periodic_sweep_pass() -> None:
+    """One pass of the sweep, run under its lease. Each task on its own:
+    one that fails is logged and the next still runs."""
+    try:
+        await task_check_deal_timers({})
+    except Exception as exc:
+        logger.error("[sweep] deal timer check failed: %s", exc)
+    try:
+        await task_reconcile_econfirm_escrows({})
+    except Exception as exc:
+        logger.error("[sweep] E-Confirm reconciliation failed: %s", exc)
+    try:
+        await task_reconcile_zetupay_payments({})
+    except Exception as exc:
+        logger.error("[sweep] ZetuPay reconciliation failed: %s", exc)
+    try:
+        # This task existed but was registered only with ARQ and never
+        # called by the in-app sweep, so in-process deployments never
+        # reconciled a lost STK callback or an ambiguous push.
+        from api.database import DATABASE_URL
+        await task_reconcile_mpesa({}, DATABASE_URL)
+    except Exception as exc:
+        logger.error("[sweep] M-Pesa reconciliation failed: %s", exc)
+    try:
+        await task_check_dispute_timers()
+    except Exception as exc:
+        logger.error("[sweep] dispute timer check failed: %s", exc)
+    try:
+        await task_refresh_dispute_summary_cache()
+    except Exception as exc:
+        logger.error("[sweep] dispute summary cache refresh failed: %s", exc)
+    try:
+        await task_recompute_dcr_and_leaks()
+    except Exception as exc:
+        logger.error("[sweep] DCR/leak recompute failed: %s", exc)
+    try:
+        await task_refresh_store_ratings()
+    except Exception as exc:
+        logger.error("[sweep] store rating refresh failed: %s", exc)
+    try:
+        await task_retrain_ml_models()
+    except Exception as exc:
+        logger.error("[sweep] ML retrain failed: %s", exc)
+    try:
+        await task_check_call_expiry()
+    except Exception as exc:
+        logger.error("[sweep] call expiry check failed: %s", exc)
+    try:
+        await task_backfill_media()
+    except Exception as exc:
+        logger.error("[sweep] media backfill failed: %s", exc)
+    try:
+        await task_collect_abandoned_media()
+    except Exception as exc:
+        logger.error("[sweep] media clean-up failed: %s", exc)
+    try:
+        await task_expire_buy_agent_watches()
+    except Exception as exc:
+        logger.error("[sweep] buy-agent watch expiry failed: %s", exc)
+    try:
+        await task_sync_listing_stock()
+    except Exception as exc:
+        logger.error("[sweep] listing stock sync failed: %s", exc)
+    try:
+        await task_store_order_sweep()
+    except Exception as exc:
+        logger.error("[sweep] store order sweep failed: %s", exc)
+    try:
+        await task_notify_expiry_alerts({})
+    except Exception as exc:
+        logger.error("[sweep] expiry SMS sweep failed: %s", exc)
+    try:
+        # Flush buffered usage writes, roll old events into daily
+        # totals, and sample provider-exposed infrastructure
+        # metrics. Best-effort: accounting never stops the sweep.
+        from api.domains.service_costs.service import run_cost_maintenance
+        await run_cost_maintenance()
+    except Exception as exc:
+        logger.error("[sweep] service-cost maintenance failed: %s", exc)
+    try:
+        # Founder briefs for the day, week and month that just
+        # closed, written once per period (api/core/admin_reports.py).
+        from api.core.admin_reports import generate_due_reports
+        await generate_due_reports()
+    except Exception as exc:
+        logger.error("[sweep] founder report generation failed: %s", exc)
 
 
 async def task_notify_expiry_alerts(ctx: dict | None = None) -> None:

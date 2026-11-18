@@ -710,6 +710,132 @@ class TestStock:
 
 # ── The store's own switches ────────────────────────────────────────────────
 
+async def _set_expiry(order_id: str, from_now: timedelta) -> None:
+    async with db_module.AsyncSessionLocal() as db:
+        await db.execute(update(StoreOrder).where(StoreOrder.id == order_id)
+                         .values(expires_at=datetime.utcnow() + from_now))
+        await db.commit()
+
+
+async def _order_status(order_id: str) -> str:
+    async with db_module.AsyncSessionLocal() as db:
+        return (await db.execute(select(StoreOrder.status).where(StoreOrder.id == order_id))).scalar_one()
+
+
+async def _expiries(order_id: str) -> int:
+    async with db_module.AsyncSessionLocal() as db:
+        return len((await db.execute(select(StoreOrderEvent.id).where(
+            StoreOrderEvent.order_id == order_id, StoreOrderEvent.to_status == "expired",
+        ))).all())
+
+
+class TestExpirySweep:
+    """The five-minute sweep (core/workers.task_store_order_sweep): it
+    expires what is due, nothing before its deadline, each order once, and
+    comes back on the next pass for an order a failure left - so a
+    reservation is never held for good."""
+
+    @staticmethod
+    async def _accepted(client, orders: int):
+        _, seller_token, store_id = await _seller(client)
+        lid = await _listing(client, seller_token, store_id, quantity=2)
+        await _track(client, seller_token, store_id, lid, 2)
+        _, buyer_token = await _buyer(client)
+        oids = []
+        for _ in range(orders):
+            oid = (await _order(client, buyer_token, store_id, lid, quantity=1))["id"]
+            assert (await _post(client, seller_token, f"/orders/{oid}/accept")).status_code == 200
+            oids.append(oid)
+        return lid, oids
+
+    @pytest.mark.asyncio
+    async def test_an_offer_is_not_expired_before_its_deadline(self, client):
+        from api.domains.store_orders import service
+        lid, (oid,) = await self._accepted(client, 1)
+        await _set_expiry(oid, timedelta(minutes=2))
+        async with db_module.AsyncSessionLocal() as db:
+            await service.expire_due(db)
+        assert await _order_status(oid) == "awaiting_buyer_confirmation"
+        assert tuple(await _listing_row(lid)) == (2, 1)
+
+        await _set_expiry(oid, timedelta(seconds=-1))
+        async with db_module.AsyncSessionLocal() as db:
+            assert await service.expire_due(db)
+        assert await _order_status(oid) == "expired"
+        assert tuple(await _listing_row(lid)) == (2, 0)
+
+    @pytest.mark.asyncio
+    async def test_an_expiry_that_fails_is_retried_and_gives_its_units_back_once(self, client, monkeypatch):
+        # The connection drops after the release was written but before the
+        # commit: that order's whole expiry rolls back - still open, still
+        # holding its unit - the next order still expires, and the next
+        # pass expires the first, releasing its unit exactly once.
+        from api.domains.store_orders import service
+        lid, (first, second) = await self._accepted(client, 2)
+        assert tuple(await _listing_row(lid)) == (2, 2)
+        await _set_expiry(first, timedelta(minutes=-2))
+        await _set_expiry(second, timedelta(minutes=-1))
+        real = service._release_all
+        failures = {"left": 1}
+
+        async def drops_once(db, items):
+            await real(db, items)
+            if failures["left"] and any(i.order_id == first for i in items):
+                failures["left"] -= 1
+                raise ConnectionResetError("connection lost mid-expiry")
+
+        monkeypatch.setattr(service, "_release_all", drops_once)
+        async with db_module.AsyncSessionLocal() as db:
+            await service.expire_due(db)
+        assert (await _order_status(first), await _order_status(second)) == (
+            "awaiting_buyer_confirmation", "expired")
+        assert tuple(await _listing_row(lid)) == (2, 1)
+
+        async with db_module.AsyncSessionLocal() as db:
+            await service.expire_due(db)
+        assert await _order_status(first) == "expired"
+        assert tuple(await _listing_row(lid)) == (2, 0)
+        assert (await _expiries(first), await _expiries(second)) == (1, 1)
+
+    @pytest.mark.asyncio
+    async def test_two_sweeps_at_once_expire_an_order_once(self, client, monkeypatch):
+        # Two replicas' sweeps find the same overdue order. The second waits
+        # on its row lock, then finds it expired: one expiry, one release.
+        if db_module.engine.dialect.name != "postgresql":
+            pytest.skip("needs PostgreSQL's concurrent writers; SQLite serialises them outright")
+        from api.domains.store_orders import service
+        lid, (oid,) = await self._accepted(client, 1)
+        await _set_expiry(oid, timedelta(minutes=-1))
+        real = service._release_all
+        inside = asyncio.Event()
+        go_on = asyncio.Event()
+
+        async def held(db, items):
+            await real(db, items)
+            if any(i.order_id == oid for i in items) and not inside.is_set():
+                inside.set()
+                await asyncio.wait_for(go_on.wait(), 30)
+
+        monkeypatch.setattr(service, "_release_all", held)
+
+        async def sweep():
+            async with db_module.AsyncSessionLocal() as db:
+                return await service.expire_due(db)
+
+        a = asyncio.create_task(sweep())
+        await asyncio.wait_for(inside.wait(), 30)
+        b = asyncio.create_task(sweep())
+        await asyncio.sleep(0.5)
+        assert not b.done()
+        go_on.set()
+        pushed_a, pushed_b = await asyncio.wait_for(asyncio.gather(a, b), 30)
+
+        assert pushed_a and pushed_b == []
+        assert await _order_status(oid) == "expired"
+        assert await _expiries(oid) == 1
+        assert tuple(await _listing_row(lid)) == (2, 0)
+
+
 class TestStoreSettings:
     @pytest.mark.asyncio
     async def test_pausing_new_orders_keeps_the_store_open(self, client):

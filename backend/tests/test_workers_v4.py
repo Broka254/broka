@@ -57,3 +57,59 @@ class TestSchedulerLease:
         # database closing a crashed process's connection).
         async with scheduler_lease(name) as after_release:
             assert after_release is True
+
+
+class TestTheSweepOutlivesAFailedPass:
+    @pytest.mark.asyncio
+    async def test_a_pass_that_cannot_take_its_lease_does_not_end_the_sweep(self, monkeypatch):
+        """The lease's database connection failing (the advisory lock, a
+        pool timeout) used to raise out of the loop: the sweep task ended
+        for good, and orders past their deadline held their units until
+        the next deploy. Now that pass is skipped and the next one runs."""
+        from contextlib import asynccontextmanager
+        from api.core import workers
+
+        leases = []
+
+        @asynccontextmanager
+        async def flaky_lease(name):
+            leases.append(name)
+            if len(leases) == 1:
+                raise ConnectionRefusedError("database unreachable")
+            yield True
+
+        async def noop(*args, **kwargs):
+            return None
+
+        ran = []
+
+        async def store_order_sweep(*args, **kwargs):
+            ran.append("store_orders")
+
+        for name in (
+            "task_check_deal_timers", "task_reconcile_econfirm_escrows",
+            "task_reconcile_zetupay_payments", "task_reconcile_mpesa", "task_check_dispute_timers",
+            "task_refresh_dispute_summary_cache", "task_recompute_dcr_and_leaks",
+            "task_refresh_store_ratings", "task_retrain_ml_models", "task_check_call_expiry",
+            "task_backfill_media", "task_collect_abandoned_media", "task_expire_buy_agent_watches",
+            "task_sync_listing_stock", "task_notify_expiry_alerts",
+        ):
+            monkeypatch.setattr(workers, name, noop)
+        monkeypatch.setattr("api.domains.service_costs.service.run_cost_maintenance", noop)
+        monkeypatch.setattr("api.core.admin_reports.generate_due_reports", noop)
+        monkeypatch.setattr(workers, "task_store_order_sweep", store_order_sweep)
+        monkeypatch.setattr(workers, "scheduler_lease", flaky_lease)
+
+        sleeps = []
+
+        async def two_passes(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) == 2:
+                workers._sweep_running = False
+
+        monkeypatch.setattr(workers.asyncio, "sleep", two_passes)
+        await workers._periodic_sweep_loop(300)
+
+        assert leases == ["broka:scheduler:periodic"] * 2
+        assert sleeps == [300, 300]
+        assert ran == ["store_orders"]
