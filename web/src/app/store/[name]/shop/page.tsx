@@ -12,6 +12,7 @@ import { notFound, permanentRedirect } from 'next/navigation'
 
 import { CartDrawer } from '@/components/CartDrawer'
 import { CategoryPills, hasStoreCategoryTiles } from '@/components/CategoryPills'
+import { EmptyState } from '@/components/EmptyState'
 import { Icon } from '@/components/Icon'
 import { ProductGrid } from '@/components/ProductGrid'
 import { StoreFooter } from '@/components/StoreFooter'
@@ -25,6 +26,7 @@ import { CONDITIONS, PRICE_BANDS, SORTS, filtersQuery, panelActive, readFilters,
 import { PAGE_SIZE } from '@/lib/config'
 import { absoluteUrl, campaignToken, storeCartPath, storeShopPath, viaTag } from '@/lib/links'
 import { API_URL } from '@/lib/server-config'
+import { storePaths } from '@/lib/store-nav'
 import { storeDescription, storePreviewImage, storeView } from '@/lib/storefront'
 
 type Props = {
@@ -72,6 +74,7 @@ export default async function StoreShopPage({ params, searchParams }: Props) {
   }
 
   const view = storeView(store)
+  const paths = storePaths(store)
   const [categories, listings] = store.is_active
     ? await Promise.all([
         getStoreCategories(store.id),
@@ -105,8 +108,8 @@ export default async function StoreShopPage({ params, searchParams }: Props) {
 
   return (
     <StorefrontShell>
-      <StoreHeader view={view} active="shop" filters={filters} searchBase={path} showSectionNav={false} />
-      <main className={`page ${shop.storePage}`}>
+      <StoreHeader view={view} active="shop" filters={filters} searchBase={path} />
+      <main id="main-content" className={`page ${shop.storePage}`}>
         <nav aria-label="Breadcrumb" className={shop.crumbs}>
           <Link href={view.path}>{store.name}</Link>
           <Icon name="chevron" size={14} />
@@ -158,12 +161,29 @@ export default async function StoreShopPage({ params, searchParams }: Props) {
                 pageSize={PAGE_SIZE}
               />
             ) : (
-              <div className={`card ${styles.empty}`}>
-                <span className={shop.emptyCartIcon}>
-                  <Icon name={filtered ? 'search' : 'bag'} size={34} />
-                </span>
-                <h2>{filtered ? 'No products match' : 'Nothing listed yet'}</h2>
-                <p>{filtered ? 'Try another search or filter.' : 'Check back soon: this store is just getting started.'}</p>
+              <div className={shop.catalogueEmpty}>
+                <EmptyState
+                  icon={filtered ? 'search' : 'bag'}
+                  title={filtered ? 'No products match' : 'Nothing listed yet'}
+                  testId="catalogue-empty"
+                  actions={
+                    filtered ? (
+                      <a href={path} className="button button--ghost">
+                        Show every product
+                      </a>
+                    ) : paths.messages ? (
+                      <Link href={paths.messages} className="button button--ghost">
+                        <Icon name="chat" size={18} /> Ask {store.name} what&apos;s coming
+                      </Link>
+                    ) : (
+                      <Link href={view.path} className="button button--ghost">
+                        Back to {store.name}
+                      </Link>
+                    )
+                  }
+                >
+                  <p>{filtered ? 'Try another search or filter.' : 'Check back soon: this store is just getting started.'}</p>
+                </EmptyState>
               </div>
             )}
           </section>

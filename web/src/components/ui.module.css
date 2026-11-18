@@ -1,0 +1,125 @@
+/* Small pieces every storefront page shares: a store's avatar, the empty
+   state, and an order's status badge - drawn once, so a store looks the
+   same in a conversation, an order and a product's seller card. */
+
+/* ── Store avatar ───────────────────────────────────────────────────────── */
+
+.avatar {
+  position: relative;
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 30%;
+  background: linear-gradient(140deg, rgb(139 117 255 / 0.85), rgb(84 215 233 / 0.55));
+  color: #fff;
+  font-family: var(--font-display);
+  font-weight: 800;
+  line-height: 1;
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: var(--surface-solid);
+}
+
+/* ── Empty state ────────────────────────────────────────────────────────── */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: clamp(28px, 6vw, 48px) 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+  text-align: center;
+}
+
+.emptyIcon {
+  display: grid;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 4px;
+  place-items: center;
+  border: 1px solid var(--border-accent);
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgb(139 117 255 / 0.22), rgb(96 140 255 / 0.12));
+  color: var(--violet-text);
+}
+
+.emptyTitle {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+.emptyText {
+  max-width: 46ch;
+  color: var(--text-mid);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.emptyText p {
+  margin: 0;
+}
+
+.emptyActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+/* ── Order status ───────────────────────────────────────────────────────── */
+
+.status {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px;
+  border: 1px solid rgb(139 117 255 / 0.42);
+  border-radius: var(--radius-pill);
+  background: rgb(139 117 255 / 0.14);
+  color: #e3dcff;
+  font-size: 12.5px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.status::before {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+  content: '';
+}
+
+.status[data-tone='action'] {
+  border-color: rgb(245 158 11 / 0.55);
+  background: rgb(245 158 11 / 0.14);
+  color: #fcd38a;
+}
+
+.status[data-tone='done'] {
+  border-color: rgb(16 185 129 / 0.5);
+  background: rgb(16 185 129 / 0.13);
+  color: #86efc5;
+}
+
+.status[data-tone='ended'] {
+  border-color: var(--border-strong);
+  background: rgb(155 164 188 / 0.1);
+  color: var(--text-mid);
+}

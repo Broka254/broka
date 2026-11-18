@@ -114,27 +114,20 @@ const shop = (over: Partial<Store> = {}): Store => ({
 })
 
 describe('StoreLanding', () => {
-  it('can omit the secondary section row while keeping marketplace search and actions', () => {
-    render(<StoreHeader view={storeView(shop())} active="shop" showSectionNav={false} />)
-    expect(screen.getByRole('search')).toBeTruthy()
-    expect(screen.getByRole('navigation', { name: 'Store' })).toBeTruthy()
-    expect(screen.queryByRole('navigation', { name: 'Store sections' })).toBeNull()
-    expect(screen.queryByText('Electronics')).toBeNull()
-    expect(screen.queryByText('About')).toBeNull()
-  })
-
-  it('uses the store logo or BROKA default and omits inert search, action icons and shop tabs on the homepage', () => {
+  it("wears the store's own sign, a search of its catalogue and its sections - with Home marked - on its homepage", () => {
     render(<StoreHeader view={storeView(shop())} active="home" />)
     const brand = screen.getByRole('link', { name: 'Clanix home' })
     expect(brand.textContent).toContain('Clanix')
     expect(brand.textContent).toContain('Store on BROKA')
+    // No logo uploaded: BROKA's stands in for it.
     expect(brand.querySelector('img')?.getAttribute('src')).toBe('/store-assets/logo.png')
-    expect(screen.queryByRole('search')).toBeNull()
-    expect(screen.queryByRole('navigation', { name: 'Store' })).toBeNull()
-    expect(screen.queryByRole('navigation', { name: 'Store sections' })).toBeNull()
-    expect(screen.getByRole('link', { name: 'About' }).getAttribute('href')).toBe('/store/clanix/about')
-    expect(screen.queryByText('See it, then pay the store')).toBeNull()
+    expect(screen.getByRole('search').getAttribute('action')).toBe('/store/clanix/shop')
+    const sections = screen.getByRole('navigation', { name: 'Store sections' })
+    expect(within(sections).getByRole('link', { name: 'Home' }).getAttribute('aria-current')).toBe('page')
+    expect(within(sections).getByRole('link', { name: 'About' }).getAttribute('href')).toBe('/store/clanix/about')
+    // The departments are the shop's own rail, not the header's.
     expect(screen.queryByRole('link', { name: 'Electronics' })).toBeNull()
+    expect(screen.queryByText('See it, then pay the store')).toBeNull()
     expect(screen.queryByText('Get the app')).toBeNull()
   })
 
@@ -531,8 +524,9 @@ describe('Cart drawer', () => {
         <CartDrawer storeId="s1" storeName="Clanix" cartPath="/store/clanix/cart" />
       </>,
     )
-    // The bar along the bottom, before the drawer opens.
-    expect(screen.getByText('2 items in your cart')).toBeTruthy()
+    // No bar of its own along the bottom: on a phone the cart is a tab of
+    // the store's bottom bar (StoreBottomNav), which a second bar would cover.
+    expect(screen.queryByText('2 items in your cart')).toBeNull()
     fireEvent.click(screen.getByLabelText('Cart, 2 items'))
     const drawer = screen.getByRole('dialog', { name: 'Your cart (2)' })
     expect(within(drawer).getByText('Samsung A15')).toBeTruthy()
