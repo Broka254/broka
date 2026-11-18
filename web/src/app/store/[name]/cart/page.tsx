@@ -33,7 +33,7 @@ export default async function CartPage({ params }: Props) {
   return (
     <StorefrontShell>
       <StoreHeader view={view} active="cart" />
-      <main className={`page ${shop.storePage}`}>
+      <main id="main-content" className={`page ${shop.storePage}`}>
         <CheckoutView
           storeId={store.id}
           storeName={store.name}

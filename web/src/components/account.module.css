@@ -1,0 +1,42 @@
+/* The buyer's BROKA account pages - orders and messages from every store:
+   one readable column, the same width for both, so moving between the two
+   tabs does not move the page. */
+
+/* With .page (globals.css) in the selector: both are single classes, and
+   which of two equal rules wins would otherwise depend on the order the
+   build happens to put the stylesheets in. */
+:global(.page).accountPage {
+  max-width: 880px;
+  padding-top: clamp(18px, 3vw, 30px);
+}
+
+.pageHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin: 0 0 16px;
+}
+
+.pageHead h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(24px, 4vw, 30px);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+.pageHead p {
+  margin: 4px 0 0;
+  color: var(--text-mid);
+  font-size: 14px;
+}
+
+.appNote {
+  margin: 18px 0 0;
+  color: var(--text-low);
+  font-size: 13px;
+  text-align: center;
+}

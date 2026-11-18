@@ -1,7 +1,11 @@
+/* At the top of the page, and scrolling away with it. It was sticky at the
+   top, like the store's header and a conversation's - and over them, as the
+   store's pages are a stacking context of their own (shop.module.css
+   .storefront) - so once scrolled it covered the store's name and, in a
+   conversation, the way back. */
 .banner {
-  position: sticky;
-  top: 0;
-  z-index: 10;
+  position: relative;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 10px;

@@ -3,12 +3,14 @@
 // so nothing about it is rendered or cached on the server, and a link to it
 // shows nothing to anyone but the buyer (the API answers 404 otherwise).
 // The escrow directory is fetched here, as on the cart page, for choosing
-// how to pay.
+// how to pay. The order's own store - its page, its messages - is linked
+// from the order (OrderView.tsx); the header is the buyer's account.
 import type { Metadata } from 'next'
 
+import { AccountHeader } from '@/components/AccountHeader'
 import { OrderView } from '@/components/OrderView'
 import { SiteFooter } from '@/components/SiteFooter'
-import { SiteHeader } from '@/components/SiteHeader'
+import account from '@/components/account.module.css'
 import { getEscrowDirectory } from '@/lib/api'
 
 export const metadata: Metadata = {
@@ -25,8 +27,8 @@ export default async function OrderPage({ params }: Props) {
   const escrow = await getEscrowDirectory()
   return (
     <>
-      <SiteHeader />
-      <main className="page">
+      <AccountHeader active="order" />
+      <main id="main-content" className={`page ${account.accountPage}`}>
         <OrderView orderId={orderId} escrow={escrow} />
       </main>
       <SiteFooter />

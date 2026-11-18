@@ -1,12 +1,26 @@
 'use client'
 
+import { usePathname } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
 
 import { asset } from '@/lib/links'
 
+/**
+ * Pages where the buyer reads and types - a conversation, the cart's
+ * checkout, their orders - keep the background still: the drifting
+ * particles redraw every frame behind the text, and on a phone that costs
+ * the battery and smoothness the typing needs.
+ */
+export function calmBackground(pathname: string | null): boolean {
+  return /^\/store\/(?:[^/]+\/(?:messages|cart)|orders|account)(?:\/|$)/.test(pathname ?? '')
+}
+
 export function BrandBackground() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const videoRef = useRef<HTMLVideoElement>(null)
   const [reducedMotion, setReducedMotion] = useState(false)
+  const calm = calmBackground(usePathname())
+  const still = reducedMotion || calm
 
   useEffect(() => {
     const query = window.matchMedia('(prefers-reduced-motion: reduce)')
@@ -16,8 +30,17 @@ export function BrandBackground() {
     return () => query.removeEventListener('change', update)
   }, [])
 
+  // Arriving on a calm page from a store page, the loop is already playing:
+  // stop it there, and start it again on the way back.
   useEffect(() => {
-    if (reducedMotion) return
+    const video = videoRef.current
+    if (!video) return
+    if (still) video.pause()
+    else void video.play().catch(() => {})
+  }, [still])
+
+  useEffect(() => {
+    if (still) return
     const canvas = canvasRef.current
     const context = canvas?.getContext('2d')
     if (!canvas || !context) return
@@ -91,13 +114,14 @@ export function BrandBackground() {
       cancelAnimationFrame(frame)
       window.removeEventListener('resize', resize)
     }
-  }, [reducedMotion])
+  }, [still])
 
   return (
-    <div className="brand-background" aria-hidden="true">
+    <div className="brand-background" aria-hidden="true" data-calm={calm || undefined}>
       <video
+        ref={videoRef}
         className="brand-background-video"
-        autoPlay={!reducedMotion}
+        autoPlay={!still}
         loop
         muted
         playsInline
@@ -107,7 +131,7 @@ export function BrandBackground() {
         <source media="(min-width: 760px)" src={asset('/broka-bg-desktop.mp4')} type="video/mp4" />
         <source src={asset('/broka-bg-mobile.mp4')} type="video/mp4" />
       </video>
-      {!reducedMotion && <canvas ref={canvasRef} className="brand-background-particles" />}
+      {!still && <canvas ref={canvasRef} className="brand-background-particles" />}
       {reducedMotion && (
         <picture className="brand-background-poster">
           <source media="(min-width: 760px)" srcSet={asset('/broka-bg-desktop-poster.webp')} />

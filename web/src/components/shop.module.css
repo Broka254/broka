@@ -3,137 +3,8 @@
    text is #b69cff, which reads at 7:1 on the dark background where
    --violet doesn't. */
 
-/* ── Top bar and header ─────────────────────────────────────────────────── */
-
-.topbar {
-  position: relative;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 7px 16px;
-  background: linear-gradient(90deg, rgb(139 92 246 / 0.28), rgb(59 130 246 / 0.22));
-  border-bottom: 1px solid rgb(139 92 246 / 0.25);
-  font-size: 12.5px;
-  color: var(--text-high);
-}
-
-.topbar p {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0 auto 0 max(0px, calc((100vw - var(--page-width)) / 2));
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.topbar svg {
-  flex: none;
-  color: var(--green);
-}
-
-/* On the narrowest phones the rule ends in an ellipsis beside "Get the
-   app", rather than being cut off mid-letter. */
-.topbar strong {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.topbarApp {
-  flex: none;
-  margin-right: max(0px, calc((100vw - var(--page-width)) / 2));
-  font-weight: 700;
-  color: #b69cff;
-}
-
-@media (max-width: 700px) {
-  .topbarMore {
-    display: none;
-  }
-}
-
-.header {
-  position: sticky;
-  top: 0;
-  z-index: 30;
-  /* Nearly opaque: the Android "Open in the app" banner is sticky at the
-     top too, and showed through a lighter header once scrolled. */
-  background: rgb(3 4 10 / 0.97);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border-bottom: 0;
-  box-shadow: none;
-}
-
-.headerInner {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-areas: 'brand search actions';
-  align-items: center;
-  gap: 18px;
-  max-width: var(--page-width);
-  margin: 0 auto;
-  padding: 10px 16px;
-}
-
-@media (max-width: 860px) {
-  .headerInner {
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas:
-      'brand actions'
-      'search search';
-    gap: 8px 12px;
-    padding: 8px 16px 10px;
-  }
-}
-
-.brand {
-  grid-area: brand;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  max-width: 280px;
-}
-
-.brandName {
-  font-size: 22px;
-  font-weight: 900;
-  line-height: 1.1;
-  letter-spacing: -0.4px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  background: linear-gradient(100deg, #fff 0%, #d8c7ff 35%, #7db3ff 65%, #fff 100%);
-  background-size: 220% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: shimmer 9s linear infinite;
-}
-
-.brandTag {
-  font-size: 11px;
-  color: var(--text-mid);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.headerSearch {
-  grid-area: search;
-  min-width: 0;
-}
-
-.headerActions {
-  grid-area: actions;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
+/* ── Header controls: icon buttons and the cart (StoreHeader.tsx; the header
+   itself is in store-nav.module.css) ───────────────────────────────────── */
 
 .iconButton {
   position: relative;
@@ -443,13 +314,6 @@
 
 .storePage {
   padding-top: 18px;
-}
-
-@media (max-width: 860px) {
-  /* Room for the cart bar along the bottom. */
-  .storePage {
-    padding-bottom: 96px;
-  }
 }
 
 .crumbs {
@@ -1217,6 +1081,10 @@
   font-weight: 800;
 }
 
+.catalogueEmpty {
+  margin-top: 20px;
+}
+
 .emptyCartIcon {
   display: inline-grid;
   place-items: center;
@@ -1229,59 +1097,6 @@
 }
 
 /* ── Cart bar, "Added" note and drawer ──────────────────────────────────── */
-
-.cartBar {
-  position: fixed;
-  left: 12px;
-  right: 12px;
-  bottom: calc(12px + env(safe-area-inset-bottom));
-  z-index: 40;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 10px 10px 10px 16px;
-  border-radius: 18px;
-  border: 1px solid rgb(139 92 246 / 0.6);
-  background: linear-gradient(90deg, #2a1a5e, #0e1b3d);
-  box-shadow: 0 12px 40px rgb(0 0 0 / 0.5), 0 0 24px rgb(139 92 246 / 0.3);
-  color: #fff;
-  text-align: left;
-  cursor: pointer;
-  animation: slideUp 0.25s ease;
-}
-
-@media (min-width: 861px) {
-  .cartBar {
-    display: none;
-  }
-}
-
-.cartBarText {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.cartBarText span {
-  color: var(--text-mid);
-  font-size: 12px;
-}
-
-.cartBarText strong {
-  font-size: 17px;
-}
-
-.cartBarGo {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 10px 14px;
-  border-radius: 12px;
-  background: var(--cta);
-  font-size: 14px;
-  font-weight: 800;
-}
 
 .addedNote {
   position: fixed;
@@ -1774,6 +1589,54 @@
   font-size: 14px;
 }
 
+/* "Ask the store about this product": the conversation is the next step
+   for a buyer with a question, so it is a button, not a line of text. */
+.askButton {
+  width: 100%;
+  min-height: 48px;
+}
+
+/* "Sold by": the store's sign and name, and the way into its shop. */
+.sellerHead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sellerHead h2 {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  line-height: 1.25;
+}
+
+.sellerHead h2 small {
+  color: var(--text-low);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sellerHead h2 a {
+  overflow: hidden;
+  color: var(--text-high);
+  font-size: 16px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Two classes: store.module.css's ".sellerCard a" would win over one. */
+.sellerHead .sellerShop {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  color: var(--violet-text);
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
 .moreFrom {
   margin-top: 44px;
 }
@@ -2029,47 +1892,6 @@
    Preserve route, query, cart, and API contracts; tune only the visual layer.
    ======================================================================== */
 
-.topbar {
-  padding: 8px clamp(16px, 4vw, 52px);
-  background: linear-gradient(90deg, rgb(139 117 255 / 0.16), rgb(84 215 233 / 0.08));
-  border-bottom-color: rgb(195 202 226 / 0.13);
-  color: var(--text-mid);
-  font-size: 12px;
-}
-
-.topbar strong { color: var(--text-high); }
-.topbar svg { color: var(--cyan); }
-.topbarApp { color: #b3a7ff; }
-
-.header {
-  background: rgb(5 6 13 / 0.88);
-  border-bottom-color: rgb(195 202 226 / 0.13);
-  box-shadow: 0 8px 28px rgb(0 0 0 / 0.28);
-}
-
-.headerInner {
-  max-width: 1280px;
-  padding: 10px clamp(16px, 4vw, 52px);
-  gap: 16px;
-}
-
-.brandName {
-  font-family: Montserrat, ui-sans-serif, system-ui, sans-serif;
-  font-size: 21px;
-  letter-spacing: 0.04em;
-  background: linear-gradient(95deg, #ded8ff, #a895ff 45%, #7aa2ff);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.brandTag {
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  color: var(--text-low);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .iconButton,
 .filterButton,
 .searchPill {
@@ -2090,7 +1912,7 @@
   box-shadow: 0 0 0 3px rgb(139 117 255 / 0.18);
 }
 
-.searchLabel input { font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+.searchLabel input { font-family: var(--font-sans); }
 .searchGo { background: var(--cta); }
 
 .filterPanel {
@@ -2135,12 +1957,12 @@
   border-color: rgb(195 202 226 / 0.18);
   background: rgb(8 10 20 / 0.54);
   color: var(--text-high);
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-sans);
   font-size: 12px;
 }
 
 .heroName {
-  font-family: Montserrat, ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: clamp(42px, 7vw, 76px);
   letter-spacing: -0.045em;
   background: linear-gradient(100deg, #f7f7fc 0%, #ded8ff 50%, #b3a7ff 100%);
@@ -2177,7 +1999,7 @@
 .catalogue { margin-top: 28px; }
 .toolbar { margin: 0 0 6px; }
 .toolbar h2,
-.empty h2 { font-family: Montserrat, ui-sans-serif, system-ui, sans-serif; }
+.empty h2 { font-family: var(--font-display); }
 .countTag { background: rgb(139 117 255 / 0.16); color: #ded8ff; }
 
 .grid { gap: 14px; margin-top: 16px; }
@@ -2206,11 +2028,11 @@
 
 .productBody { padding: 12px 13px 4px; }
 .productName {
-  font-family: Montserrat, ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 14px;
   font-weight: 700;
 }
-.productPrice { color: #b3a7ff; font-family: Montserrat, ui-sans-serif, system-ui, sans-serif; }
+.productPrice { color: #b3a7ff; font-family: var(--font-display); }
 .productAction { padding: 8px 13px 13px; }
 .addToCart { box-shadow: 0 8px 22px -12px rgb(139 117 255 / 0.88); }
 .viewButton { border-color: var(--border-strong); }
@@ -2233,7 +2055,7 @@
 }
 
 .footerBrand {
-  font-family: Montserrat, ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   letter-spacing: -0.02em;
 }
 .footerTitle { color: var(--text-low); }
@@ -2258,7 +2080,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .brandName, .heroName { animation: none; }
+  .heroName { animation: none; }
 }
 
 /* ── Pay with escrow (EscrowBox.tsx) ─────────────────────────────────────
@@ -2366,40 +2188,6 @@
   color: #fcd34d;
 }
 
-/* ── Store sections nav (Home / Shop / About) ───────────────────────────── */
-
-.storeNav {
-  border-top: 0;
-}
-
-.storeNavInner {
-  display: flex;
-  gap: 4px;
-  max-width: var(--page-width);
-  margin: 0 auto;
-  padding: 0 16px;
-  overflow-x: auto;
-}
-
-.storeNavInner a {
-  flex: none;
-  padding: 10px 14px;
-  color: var(--text-mid);
-  font-size: 14.5px;
-  font-weight: 700;
-  text-decoration: none;
-  border-bottom: 2px solid transparent;
-}
-
-.storeNavInner a:hover {
-  color: var(--text-high);
-}
-
-.storeNavActive {
-  color: var(--text-high) !important;
-  border-bottom-color: var(--violet) !important;
-}
-
 /* ── Clean shop hero: the store's own cover photo, flat chips, solid name.
    Overrides the aurora treatment above: a shop reads as a shop, and
    nothing animates. Later rules win at equal specificity. ─────────────── */
@@ -2454,17 +2242,7 @@
   animation: none;
 }
 
-.brandName {
-  background: none;
-  -webkit-background-clip: border-box;
-  background-clip: border-box;
-  color: #fff;
-  animation: none;
-}
 
-.topbar {
-  background: #0d1526;
-}
 
 .showcase img {
   animation: none;
@@ -2534,28 +2312,6 @@
 
 
 /* ── Store banner card (as the app opens a store) + department bar ─────── */
-
-.brand {
-  flex-direction: row;
-  align-items: center;
-  gap: 10px;
-}
-
-.brandLogo {
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
-  object-fit: cover;
-  border: 1px solid var(--border);
-  background: #fff;
-  flex: none;
-}
-
-.brandText {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
 
 .storeCard {
   border: 1px solid var(--border);
@@ -2707,7 +2463,7 @@
   color: #f4f3ff;
   color-scheme: dark;
   background: transparent;
-  font-family: Inter, Montserrat, ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-sans);
 }
 .storefront :global(.page) {
   width: min(100%, 1280px);
@@ -2717,17 +2473,6 @@
 .storefront :global(.button) {
   border-radius: 13px;
   font-weight: 800;
-}
-.storefront .header {
-  border-bottom: 0;
-  background: rgb(5 7 16 / 90%);
-  box-shadow: none;
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-}
-.storefront .brandLogo {
-  border-color: rgb(190 195 223 / 20%);
-  background: #0c1020;
 }
 .storefront .searchPill {
   min-height: 46px;
@@ -2739,13 +2484,6 @@
 .storefront .searchPill:focus-within {
   border-color: #8d80ff;
   box-shadow: 0 0 0 3px rgb(141 128 255 / 20%);
-}
-.storefront .storeNav {
-  border-bottom-color: rgb(139 156 205 / 14%);
-  background: rgb(7 9 20 / 88%);
-}
-.storefront .storeNavInner a {
-  min-height: 42px;
 }
 .storefront .crumbs { margin-bottom: 2px; }
 .storefront .catalogue { margin-top: 14px; }
@@ -2827,7 +2565,7 @@
 .storefront .storeName {
   margin: 0;
   color: #fff;
-  font-family: Georgia, 'Times New Roman', serif;
+  font-family: var(--font-display);
   font-size: clamp(25px, 5vw, 34px);
   font-weight: 800;
   line-height: 1.04;
@@ -2947,7 +2685,7 @@
   padding: 0 10px;
   border: 1px solid rgb(151 130 255 / 50%);
   border-radius: 12px;
-  background: linear-gradient(120deg, #7955ea, #4b77ed);
+  background: var(--cta);
   color: #fff;
   font-size: 12.5px;
   font-weight: 800;
@@ -3033,70 +2771,90 @@
 .storefront .perks li:nth-child(3) .perkIcon { color: #4cb9ff; }
 .storefront .perks li:nth-child(4) .perkIcon { color: #f6bd37; }
 
-/* Real inventory photography sits above restrained, legible product details. */
+/* Product cards: the photo first and square, the name in at most two lines
+   (every card's text block is the same height, so prices and buttons line
+   up along a row), the price in the readable violet, then the one action.
+   One look on the store's home, the catalogue and "More from" alike. */
 .storefront .product {
-  border: 1px solid rgb(112 131 178 / 24%);
-  border-radius: 17px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   background: linear-gradient(165deg, #11182b, #090d19 78%);
-  box-shadow: 0 8px 23px rgb(0 0 0 / 17%);
+  box-shadow: var(--shadow-card);
+}
+.storefront .product:hover,
+.storefront .product:focus-within {
+  border-color: var(--border-accent);
 }
 .storefront .product:hover {
   transform: translateY(-2px);
-  border-color: rgb(135 117 255 / 56%);
   box-shadow: 0 16px 32px -22px rgb(125 102 255 / 66%);
 }
 .storefront .productImage {
   aspect-ratio: 1 / 1;
   background: #0d1424;
 }
-.storefront .productCompact .productImage {
-  aspect-ratio: auto;
-  height: clamp(184px, 52vw, 230px);
-}
 .storefront .productBody {
-  padding: 9px 11px 3px;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  padding: 11px 12px 4px;
 }
 .storefront .productName {
-  min-height: 1.35em;
-  color: #f4f2ff;
-  font-family: Georgia, 'Times New Roman', serif;
+  min-height: 2.5em;
+  color: var(--text-high);
+  font-family: var(--font-sans);
   font-size: 14px;
-  font-weight: 700;
+  font-weight: 650;
   line-height: 1.25;
 }
 .storefront .productPrice {
-  margin-top: 5px;
-  color: #b7a3ff;
-  font-family: Georgia, 'Times New Roman', serif;
-  font-size: 17px;
+  margin: 0;
+  color: var(--violet-text);
+  font-family: var(--font-display);
+  font-size: 16.5px;
   font-weight: 800;
-  line-height: 1.15;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
 }
 .storefront .stockLine {
-  margin: 5px 0 0;
+  margin: 0;
   color: #f3b344;
-  font-size: 11px;
-  font-weight: 750;
+  font-size: 11.5px;
+  font-weight: 700;
 }
 .storefront .stockLineIn { color: #52d6a3; }
 .storefront .stockLineOut { color: #9da5bb; }
-.storefront .productAction { padding: 7px 10px 10px; }
+.storefront .productAction { padding: 8px 12px 12px; }
 .storefront .addToCart,
 .storefront .viewButton {
-  min-height: 37px;
+  min-height: 40px;
   border: 1px solid rgb(161 141 255 / 42%);
-  border-radius: 10px;
-  background: linear-gradient(120deg, #7656e8, #4b75e8);
+  border-radius: var(--radius-sm);
+  background: var(--cta);
   color: #fff;
-  font-size: 12px;
-  font-weight: 800;
+  font-size: 13px;
+  font-weight: 750;
   text-decoration: none;
-  box-shadow: 0 5px 14px rgb(60 54 153 / 21%);
+  box-shadow: var(--glow-accent);
+}
+/* A product that can't go in the cart here (an auction, out of stock,
+   paused): its button reads as the way to the product, not as a purchase. */
+.storefront .viewButton {
+  border-color: var(--border-strong);
+  background: rgb(255 255 255 / 0.04);
+  box-shadow: none;
+  color: var(--text-high);
 }
 .storefront .addToCart:hover,
 .storefront .viewButton:hover { filter: brightness(1.12); }
 .storefront .addToCart:focus-visible,
 .storefront .viewButton:focus-visible { outline: 3px solid #b8adff; outline-offset: 2px; }
+@media (max-width: 600px) {
+  .storefront .productBody { padding: 9px 10px 3px; }
+  .storefront .productName { font-size: 13.5px; }
+  .storefront .productPrice { font-size: 15.5px; }
+  .storefront .productAction { padding: 7px 10px 10px; }
+}
 .storefront .empty {
   border: 1px solid rgb(122 140 188 / 20%);
   border-radius: 18px;
@@ -3142,10 +2900,10 @@
 .storefront .perks li:nth-child(4) { display: none; }
 .storefront .sectionHead h2,
 .storefront .toolbar h2 {
-  color: #f4f2ff;
-  font-family: Georgia, 'Times New Roman', serif;
+  color: var(--text-high);
+  font-family: var(--font-display);
   font-weight: 800;
-  letter-spacing: -.2px;
+  letter-spacing: -0.02em;
 }
 
 @media (max-width: 420px) {
@@ -3158,69 +2916,32 @@
 }
 
 
-/* Landing-page header: keep the merchant's actual name legible and use a neutral monogram when they have no logo. */
-.homeBrandName {
-  background: none;
-  color: #f7f7fc;
-  -webkit-background-clip: border-box;
-  background-clip: border-box;
-  -webkit-text-fill-color: currentColor;
-}
-.homeBrandMark {
-  display: grid;
-  flex: none;
-  width: 38px;
-  height: 38px;
-  place-items: center;
-  border: 1px solid rgb(139 117 255 / 52%);
-  border-radius: 11px;
-  background: linear-gradient(145deg, rgb(139 117 255 / 24%), rgb(84 215 233 / 10%));
-  color: #ded8ff;
-  font-family: Montserrat, ui-sans-serif, system-ui, sans-serif;
-  font-size: 17px;
-  font-weight: 800;
+/* ── Storefront 2.0: the bottom bar and the messages page ─────────────────── */
+
+@media (max-width: 860px) {
+  /* Room under the footer's last line for the bar along the bottom of a
+     phone (StoreBottomNav), which would otherwise sit on it. */
+  .storefront .footer {
+    padding-bottom: calc(var(--bottom-nav-h) + 28px + env(safe-area-inset-bottom));
+  }
 }
 
-.homeHeaderInner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding-block: 11px;
+/* The messages page (MessagingWorkspace): on a wide screen the two panels
+   fill the window under the header; on a phone, a chat screen - edge to
+   edge, with no breadcrumb, footer or bottom bar around the conversation
+   (store-nav.module.css hides the store's header there). */
+.storefront[data-layout='chat'] :global(.page) {
+  padding-bottom: 28px;
 }
-.homeHeaderInner .brand {
-  flex-direction: row;
-  align-items: center;
-  gap: 11px;
-  max-width: min(100%, 420px);
+.storefront[data-layout='chat'] .crumbs {
+  margin-bottom: 12px;
 }
-.homeHeaderInner .brandLogo {
-  flex: none;
-  width: 40px;
-  height: 40px;
-  border-radius: 11px;
-}
-.homeHeaderInner .brandText { min-width: 0; }
-.homeHeaderInner .brandName { font-size: 18px; }
-.homeHeaderInner .brandTag { font-size: 9px; }
-
-.homeAboutButton {
-  display: inline-flex;
-  min-height: 42px;
-  align-items: center;
-  justify-content: center;
-  padding: 0 18px;
-  border: 1px solid rgb(168 149 255 / 55%);
-  border-radius: 12px;
-  background: linear-gradient(115deg, rgb(139 117 255 / 20%), rgb(96 140 255 / 12%));
-  color: #eee9ff;
-  font-size: 13px;
-  font-weight: 750;
-  letter-spacing: .01em;
-  transition: border-color .15s ease, background .15s ease, transform .15s ease;
-}
-
-.homeAboutButton:hover {
-  transform: translateY(-1px);
-  border-color: #b6a7ff;
-  background: linear-gradient(115deg, rgb(139 117 255 / 32%), rgb(96 140 255 / 20%));
+@media (max-width: 860px) {
+  .storefront[data-layout='chat'] :global(.page) {
+    padding: 0;
+  }
+  .storefront[data-layout='chat'] .crumbs,
+  .storefront[data-layout='chat'] .footer {
+    display: none;
+  }
 }

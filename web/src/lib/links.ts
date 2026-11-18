@@ -36,6 +36,12 @@ export const productPath = (slug: string, listingId: string) =>
 export const storeMessagesPath = (slug: string, listingId?: string) =>
   `${storePath(slug)}/messages${listingId ? `?product=${encodeURIComponent(listingId)}` : ''}`
 
+/** The buyer's conversations with every store: their BROKA account, not
+ *  one store's page. "account" is a reserved store link name (backend
+ *  stores/naming.py), so no store can own this address - "messages" is not,
+ *  and /store/messages could already be someone's shop. */
+export const accountMessagesPath = '/store/account/messages'
+
 export const absoluteUrl = (path: string) => `${SITE_URL}${path}`
 
 /** The 1200x630 JPEG link preview of an image (see app/og/[file]/route.ts). */

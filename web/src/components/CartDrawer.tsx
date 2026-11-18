@@ -1,8 +1,10 @@
 'use client'
 
 // The cart, sliding in from the side: what's in it, how many, the total, and
-// the way to checkout. Also, on a phone, the bar along the bottom once the
-// cart has something in it, and the short "Added to cart" note.
+// the way to checkout. Also the short "Added to cart" note. On a phone the
+// cart is the bottom bar's Cart tab, with its count (StoreBottomNav.tsx) -
+// the bar that used to appear along the bottom once the cart had something
+// in it would now sit on top of that one.
 import Link from 'next/link'
 import { useEffect, useRef } from 'react'
 
@@ -48,24 +50,6 @@ export function CartDrawer({ storeId, storeName, cartPath }: { storeId: string; 
             View cart
           </button>
         </div>
-      )}
-
-      {n > 0 && !open && (
-        <button type="button" className={styles.cartBar} onClick={openCartDrawer}>
-          <span className={styles.cartIcon}>
-            <Icon name="cart" size={22} />
-            <span className={styles.cartBadge}>{n}</span>
-          </span>
-          <span className={styles.cartBarText}>
-            <span>
-              {n} item{n === 1 ? '' : 's'} in your cart
-            </span>
-            <strong>{formatPrice(cartTotal(lines))}</strong>
-          </span>
-          <span className={styles.cartBarGo}>
-            View cart <Icon name="chevron" size={16} />
-          </span>
-        </button>
       )}
 
       {open && (

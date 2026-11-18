@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Store } from '@/lib/types'
@@ -74,10 +74,32 @@ describe('store shop page', () => {
     expect(api.getStoreListings).toHaveBeenCalledWith('s1', expect.objectContaining({ q: '', category: undefined }))
   })
 
-  it('omits the secondary store-section navigation row', async () => {
+  it('marks Shop as the section in view, in the header and in the bar along the bottom of a phone', async () => {
     render(await StoreShopPage(props()))
-    expect(screen.queryByRole('navigation', { name: 'Store sections' })).toBeNull()
+    const sections = screen.getByRole('navigation', { name: 'Store sections' })
+    expect(within(sections).getByRole('link', { name: 'Shop' }).getAttribute('aria-current')).toBe('page')
+    expect(within(sections).getByRole('link', { name: 'Home' }).hasAttribute('aria-current')).toBe(false)
+    const bar = screen.getByRole('navigation', { name: 'Store menu' })
+    expect(within(bar).getByRole('link', { name: 'Shop' }).getAttribute('aria-current')).toBe('page')
     expect(screen.getByRole('navigation', { name: 'Breadcrumb' }).textContent).toContain('Shop')
+  })
+
+  it('an empty catalogue says so and offers a next step, never invented products', async () => {
+    render(await StoreShopPage(props()))
+    const empty = screen.getByTestId('catalogue-empty')
+    expect(within(empty).getByRole('heading', { name: 'Nothing listed yet' })).toBeTruthy()
+    // Store orders are off for this store: no link into messages that are off.
+    expect(within(empty).getByRole('link', { name: 'Back to Java' }).getAttribute('href')).toBe('/store/java')
+    api.getStore.mockResolvedValue(store({ orders_enabled: true }))
+    render(await StoreShopPage(props()))
+    expect(screen.getByRole('link', { name: /Ask Java what/ }).getAttribute('href')).toBe('/store/java/messages')
+  })
+
+  it('a search that matches nothing says so, and leads back to every product', async () => {
+    render(await StoreShopPage(props('java', { q: 'drone' })))
+    const empty = screen.getByTestId('catalogue-empty')
+    expect(within(empty).getByRole('heading', { name: 'No products match' })).toBeTruthy()
+    expect(within(empty).getByRole('link', { name: 'Show every product' }).getAttribute('href')).toBe('/store/java/shop')
   })
 
   it('carries its own canonical, not the homepage one', async () => {

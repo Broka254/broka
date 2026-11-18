@@ -16,6 +16,7 @@ import { Icon } from '@/components/Icon'
 import { ProductBuyBox } from '@/components/ProductBuyBox'
 import { ProductCard } from '@/components/ProductCard'
 import { ShareButtons } from '@/components/ShareButtons'
+import { StoreAvatar } from '@/components/StoreAvatar'
 import { StoreFooter } from '@/components/StoreFooter'
 import { StoreHeader } from '@/components/StoreHeader'
 import { StorefrontShell } from '@/components/StorefrontShell'
@@ -136,7 +137,7 @@ export default async function ProductPage({ params, searchParams }: Props) {
   return (
     <StorefrontShell>
       <StoreHeader view={shop} active="product" searchBase={storeShopPath(store.slug)} />
-      <main className={`page ${shopStyles.storePage}`}>
+      <main id="main-content" className={`page ${shopStyles.storePage}`}>
         <nav aria-label="Breadcrumb" className={shopStyles.crumbs}>
           <Link href={shop.path}>{store.name}</Link>
           <Icon name="chevron" size={14} />
@@ -212,9 +213,9 @@ export default async function ProductPage({ params, searchParams }: Props) {
             <div className={styles.cta}>
               {webCommerce ? (
                 // A question needs no app: the conversation is on the website
-                // (and in the app, for the store).
-                <Link href={askPath} className={shopStyles.offerLink} data-testid="ask-store">
-                  Ask {store.name} about this product
+                // (and in the app, for the store), and opens with this product.
+                <Link href={askPath} className={`button button--ghost ${shopStyles.askButton}`} data-testid="ask-store">
+                  <Icon name="chat" size={18} /> Ask {store.name} about this product
                 </Link>
               ) : (
                 view.available && (
@@ -224,10 +225,17 @@ export default async function ProductPage({ params, searchParams }: Props) {
               <ShareButtons storeId={store.id} url={view.url} title={listing.name} />
             </div>
 
-            <div className={`card ${styles.sellerCard}`}>
-              <h2>
-                Sold by <Link href={shop.path}>{store.name}</Link>
-              </h2>
+            <div className={`card ${styles.sellerCard}`} data-testid="seller-card">
+              <div className={shopStyles.sellerHead}>
+                <StoreAvatar name={store.name} logo={shop.logo && !shop.logo.startsWith('data:') ? shop.logo : null} size={44} />
+                <h2>
+                  <small>Sold by</small>
+                  <Link href={shop.path}>{store.name}</Link>
+                </h2>
+                <Link href={storeShopPath(store.slug)} className={shopStyles.sellerShop}>
+                  Visit store <Icon name="chevron" size={14} />
+                </Link>
+              </div>
               <TrustChips
                 verified={listing.seller_verified}
                 completedDeals={listing.seller_completed_deals}

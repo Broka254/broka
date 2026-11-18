@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import type { OrderSummary } from '@/lib/orders'
@@ -88,6 +88,45 @@ describe('OrdersList', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
+  it("names each order's store and badges its status, so a list from several stores reads as none of theirs", async () => {
+    stubFetch({
+      '/api/stores/session': json(SIGNED_IN),
+      '/api/stores/orders?scope=open': json({
+        items: [
+          summary(),
+          summary({
+            id: 'o2',
+            reference: 'BK-2002',
+            status: 'preparing',
+            status_label: 'Being prepared',
+            needs_action: false,
+            store: { id: 's2', name: 'Java', slug: 'java' },
+          }),
+        ],
+        total: 2,
+      }),
+    })
+    render(<OrdersList />)
+    const java = (await screen.findByText('Java')).closest('a')!
+    expect(java.getAttribute('href')).toBe('/store/orders/o2')
+    expect(java.textContent).toContain('Being prepared')
+    expect(java.textContent).not.toContain('Waiting for you')
+    const clanix = screen.getByText('Clanix').closest('a')!
+    // The badge's colour follows what the status means for the buyer; the words are the API's.
+    expect(within(clanix).getByText('Waiting for your confirmation').getAttribute('data-tone')).toBe('action')
+    expect(within(java).getByText('Being prepared').getAttribute('data-tone')).toBe('progress')
+  })
+
+  it('an empty list leads back to shopping', async () => {
+    stubFetch({
+      '/api/stores/session': json(SIGNED_IN),
+      '/api/stores/orders?scope=open': json({ items: [], total: 0 }),
+    })
+    render(<OrdersList />)
+    expect(await screen.findByRole('heading', { name: 'Nothing in progress.' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Get the app' })).toBeTruthy()
+  })
+
   it('asks a signed-out visitor to sign in, and reads no orders', async () => {
     const stub = stubFetch({ '/api/stores/session': json({ signed_in: false }) })
     render(<OrdersList />)
@@ -143,7 +182,7 @@ describe('EnquiryThread', () => {
     expect(stub.to('/api/stores/s1/enquiries', 'POST')[0]!.body).toMatchObject({ content: 'Do you have it in blue?', listing_id: 'l1' })
   })
 
-  it('a message that failed to send keeps its text and its id, so the retry is the same message', async () => {
+  it('a message that failed to send stays where it was, says why, and Retry sends it again as the same message', async () => {
     let posts = 0
     const stub = stubFetch({
       '/api/stores/session': json(SIGNED_IN),
@@ -158,15 +197,20 @@ describe('EnquiryThread', () => {
     const box = (await screen.findByLabelText('Your message')) as HTMLTextAreaElement
     fireEvent.change(box, { target: { value: 'Do you deliver to Westlands?' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-    expect((await screen.findByRole('alert')).textContent).toBe('Too many tries. Wait a minute and try again.')
-    expect(box.value).toBe('Do you deliver to Westlands?')
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      "Not sent - you've sent several messages in a short time. Wait a few minutes, then try again.",
+    )
+    // Still on screen as it was sent; the box is free for the next one.
+    expect(screen.getByText('Do you deliver to Westlands?')).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-    await waitFor(() => expect(box.value).toBe(''))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(stub.to('/api/stores/s1/enquiries', 'POST')).toHaveLength(2))
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
     const ids = stub.to('/api/stores/s1/enquiries', 'POST').map((c) => (c.body as { client_msg_id?: string }).client_msg_id)
-    expect(ids).toHaveLength(2)
     expect(ids[0]).toMatch(/^[A-Za-z0-9_-]{8,64}$/)
+    // The same id: the chat engine answers a repeat with the message it stored, never a second one.
     expect(ids[1]).toBe(ids[0])
+    expect(screen.getAllByText('Do you deliver to Westlands?')).toHaveLength(1)
     // Sent: the thread is read again for the store's reply.
     await waitFor(() => expect(stub.to('/api/stores/s1/enquiries', 'GET').length).toBeGreaterThanOrEqual(2))
   })

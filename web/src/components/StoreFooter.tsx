@@ -5,8 +5,9 @@ import Link from 'next/link'
 
 import { filtersQuery } from '@/lib/catalogue'
 import { placeLine } from '@/lib/format'
-import { storeCartPath, storeDetailsPath, storeShopPath } from '@/lib/links'
+import { storeDetailsPath, storeShopPath } from '@/lib/links'
 import { NO_DEPOSIT, PAY_LINE, PERK_SEE_FIRST } from '@/lib/safety'
+import { storePaths } from '@/lib/store-nav'
 import type { StoreView } from '@/lib/storefront'
 import type { StoreCategory } from '@/lib/types'
 
@@ -17,6 +18,7 @@ import styles from './shop.module.css'
 export function StoreFooter({ view, categories = [] }: { view: StoreView; categories?: StoreCategory[] }) {
   const { store } = view
   const shopPath = storeShopPath(store.slug)
+  const paths = storePaths(store)
   const where = placeLine(store.subcounty, store.county)
   return (
     <footer className={styles.footer}>
@@ -49,9 +51,21 @@ export function StoreFooter({ view, categories = [] }: { view: StoreView; catego
             <li>
               <Link href={storeDetailsPath(store.slug)}>Store details</Link>
             </li>
-            <li>
-              <Link href={storeCartPath(store.slug)}>Your cart</Link>
-            </li>
+            {paths.messages && (
+              <li>
+                <Link href={paths.messages}>Message the store</Link>
+              </li>
+            )}
+            {paths.cart && (
+              <li>
+                <Link href={paths.cart}>Your cart</Link>
+              </li>
+            )}
+            {paths.orders && (
+              <li>
+                <Link href={paths.orders}>Your orders</Link>
+              </li>
+            )}
             <li>
               <HomeLink>About BROKA</HomeLink>
             </li>

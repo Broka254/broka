@@ -838,7 +838,7 @@
   display: -webkit-box;
   overflow: hidden;
   color: #f8f7ff;
-  font-family: Georgia, 'Times New Roman', serif;
+  font-family: var(--font-display);
   font-size: 12px;
   font-weight: 800;
   line-height: 1.12;
@@ -859,7 +859,7 @@
   background: radial-gradient(circle at 25% 20%, rgb(41 193 224 / 28%), transparent 55%),
     linear-gradient(145deg, #182344, #080d1b);
   color: #a9a4ff;
-  font-family: Georgia, 'Times New Roman', serif;
+  font-family: var(--font-display);
   font-size: 46px;
   font-weight: 800;
 }
