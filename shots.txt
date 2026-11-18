@@ -1,0 +1,59 @@
+FAILED buy bar phone: locator.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for getByTestId('sticky-buy').getByRole('button', { name: 'Buy now' })
+
+    at /home/runner/work/broka/broka/scratch/storefront-qa/shoot.mjs:326:54
+    at async step (/home/runner/work/broka/broka/scratch/storefront-qa/shoot.mjs:168:5)
+    at async file:///home/runner/work/broka/broka/scratch/storefront-qa/shoot.mjs:301:1 {
+  log: [
+    "  - waiting for getByTestId('sticky-buy').getByRole('button', { name: 'Buy now' })"
+  ],
+  name: 'TimeoutError'
+}
+{
+  "pagesChecked": 65,
+  "horizontalOverflow": [],
+  "smallTapTargets": [],
+  "footerUnderBottomBar": [],
+  "undefinedClasses": [],
+  "fonts": [
+    "sans",
+    "display"
+  ],
+  "consoleProblems": 1,
+  "errors": 1
+}
+[
+  {
+    "name": "drawer desktop",
+    "opened": true
+  },
+  {
+    "name": "gallery",
+    "first": "Samsung Galaxy A15 · 128 GB, photo 1 of 4",
+    "afterNext": "Samsung Galaxy A15 · 128 GB, photo 2 of 4",
+    "afterSwipeLeft": "Samsung Galaxy A15 · 128 GB, photo 3 of 4",
+    "afterPrevious": "Samsung Galaxy A15 · 128 GB, photo 2 of 4"
+  },
+  {
+    "name": "desktop: conversation scroll",
+    "openedAtNewest": true,
+    "heldWhileReadingBack": true,
+    "newMessagesButtonGoesToNewest": true,
+    "sendingShownAtOnce": true,
+    "sentOnce": true,
+    "followedAfterSending": true
+  },
+  {
+    "name": "phone: chat screen",
+    "onOpen": {
+      "composerInView": true,
+      "storeHeaderHidden": true,
+      "bottomBarAbsent": true,
+      "overflowX": 0
+    },
+    "failureExplained": "Not sent - you've sent several messages in a short time. Wait a few minutes, then try again.",
+    "retriedOnce": true
+  }
+]
+buy bar [warning] The resource http://127.0.0.1:3000/store-assets/_next/static/chunks/2f122-f6yge_g.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally.
