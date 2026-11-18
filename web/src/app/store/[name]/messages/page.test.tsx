@@ -122,6 +122,13 @@ describe('messaging a store on its website', () => {
   })
 
   it("lists the buyer's conversations with this store beside the open one, and the way to all of them", async () => {
+    // A wide screen: on a phone the list is not there to read (MessagingWorkspace).
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query.includes('min-width: 861px'),
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }))
     api.getStore.mockResolvedValue(store())
     const conversation = (key: string, over: Record<string, unknown> = {}) => ({
       key,
@@ -167,6 +174,20 @@ describe('messaging a store on its website', () => {
     render(await MessagesPage(props('clanix', { product: 'l1' })))
     expect(await screen.findByRole('heading', { name: 'Ask Clanix about Samsung A15' })).toBeTruthy()
     expect(stub.to('/api/stores/s1/enquiries')[0]!.url).toBe('/api/stores/s1/enquiries?listing=l1')
+  })
+
+  it('on a phone the page is the conversation alone: no list of conversations is read for it', async () => {
+    api.getStore.mockResolvedValue(store())
+    const stub = stubFetch({
+      '/api/stores/session': json(SIGNED_IN),
+      '/api/stores/s1/enquiries': json({ messages: [] }),
+      '/api/stores/conversations': json({ conversations: [], partial: false }),
+    })
+    render(await MessagesPage(props()))
+    await screen.findByText(/No messages yet/)
+    expect(screen.queryByRole('list', { name: 'Conversations with Clanix' })).toBeNull()
+    expect(stub.to('/api/stores/conversations')).toHaveLength(0)
+    expect(screen.getByRole('link', { name: 'All conversations' }).getAttribute('href')).toBe('/store/account/messages')
   })
 
   it("a product from another store is not this store's to answer: the store's own thread opens", async () => {

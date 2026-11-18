@@ -6,7 +6,7 @@
 // messages and the box to write in. On a phone, a chat screen: the open
 // conversation alone, with the way back to the product or the store, and
 // every conversation one tap away on the account's Messages page.
-import { useState } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 
 import { type Conversation, conversationKey } from '@/lib/conversations'
 import { storeMessagesPath } from '@/lib/links'
@@ -16,6 +16,25 @@ import { type ChatProduct, type ChatStore, ConversationHeader } from './Conversa
 import { ConversationList } from './ConversationList'
 import { EnquiryThread } from './EnquiryThread'
 import styles from './messaging.module.css'
+
+// Wide enough for the conversations beside the open one (messaging.module.css).
+const WIDE = '(min-width: 861px)'
+
+function subscribeWide(onChange: () => void) {
+  if (typeof window.matchMedia !== 'function') return () => {}
+  const query = window.matchMedia(WIDE)
+  query.addEventListener('change', onChange)
+  return () => query.removeEventListener('change', onChange)
+}
+
+const isWide = () => typeof window.matchMedia === 'function' && window.matchMedia(WIDE).matches
+
+/** Whether the list of conversations has room beside the open one. On a
+ *  phone it is not mounted at all, rather than hidden - a hidden list would
+ *  still read the inbox on every visit, for nothing anyone sees. */
+function useWide(): boolean {
+  return useSyncExternalStore(subscribeWide, isWide, () => false)
+}
 
 export function MessagingWorkspace({
   store,
@@ -28,6 +47,7 @@ export function MessagingWorkspace({
   back: { href: string; label: string }
 }) {
   const session = useSession()
+  const wide = useWide()
   // Bumped when the conversation moves, so the list's last lines catch up
   // without a list read every few seconds of its own.
   const [version, setVersion] = useState(0)
@@ -39,11 +59,11 @@ export function MessagingWorkspace({
     last: { text: null, from: null, at: null },
     href: storeMessagesPath(store.slug, product?.id),
   }
-  const signedIn = session.status === 'signed_in'
+  const showList = session.status === 'signed_in' && wide
 
   return (
-    <div className={`${styles.workspace} ${signedIn ? '' : styles.workspaceSolo}`}>
-      {signedIn && (
+    <div className={`${styles.workspace} ${showList ? '' : styles.workspaceSolo}`}>
+      {showList && (
         <aside className={styles.listPanel} aria-labelledby="conversations-title">
           <div className={styles.listHead}>
             <h2 id="conversations-title">Your conversations</h2>
