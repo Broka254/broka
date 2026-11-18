@@ -199,6 +199,17 @@ export const BUYER_REPORT_BUTTONS: Record<string, string> = {
 /** The statuses an order ends in without a sale. */
 export const UNSUCCESSFUL: readonly OrderStatus[] = ['declined', 'cancelled', 'expired']
 
+/** What a status means for the buyer, for its badge's colour: their move,
+ *  under way, done, or ended without a sale. Only how it is drawn - the
+ *  status, its words and what can be done next are the API's. */
+export type OrderTone = 'action' | 'progress' | 'done' | 'ended'
+
+export function orderTone(status: OrderStatus, waitingOnBuyer: boolean): OrderTone {
+  if (status === 'completed') return 'done'
+  if (UNSUCCESSFUL.includes(status)) return 'ended'
+  return waitingOnBuyer ? 'action' : 'progress'
+}
+
 /** Short paths in the storefront for order pages (all under /store/, the
  *  only paths broka.co.ke passes to this site - lib/links.ts). */
 export const ordersPath = '/store/orders'

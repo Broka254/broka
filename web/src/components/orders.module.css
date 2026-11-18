@@ -223,6 +223,74 @@
 
 /* An order's page */
 
+.backLink {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-mid);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.backLink:hover {
+  color: var(--text-high);
+}
+
+/* The store the order is with: who, and the way to its shop and messages. */
+.storeCard {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgb(12 16 32 / 0.72);
+}
+
+.storeCardText {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.storeCardName {
+  margin: 0;
+  overflow: hidden;
+  font-size: 1.05rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storeCardActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* A link drawn as the secondary button: an <a> is inline, so the button's
+   height and padding need it laid out as a box. */
+.actionLink {
+  composes: secondary;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.actionLink:hover {
+  border-color: var(--border-accent);
+}
+
+.itemLink:hover {
+  color: var(--violet-text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+
 .orderPage {
   display: grid;
   gap: 16px;
@@ -238,34 +306,6 @@
 .orderHead h1 {
   margin: 0;
   font-size: clamp(1.3rem, 4vw, 1.8rem);
-}
-
-.status {
-  display: inline-flex;
-  width: fit-content;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  border-radius: 999px;
-  font-weight: 750;
-  font-size: 0.86rem;
-  background: rgb(139 117 255 / 0.16);
-  border: 1px solid rgb(139 117 255 / 0.4);
-}
-
-.statusDone {
-  background: rgb(16 185 129 / 0.14);
-  border-color: rgb(16 185 129 / 0.45);
-}
-
-.statusEnded {
-  background: rgb(155 164 188 / 0.12);
-  border-color: var(--border-strong);
-}
-
-.statusYourTurn {
-  background: rgb(245 158 11 / 0.15);
-  border-color: rgb(245 158 11 / 0.5);
 }
 
 .items {
@@ -365,6 +405,44 @@
 
 /* Lists */
 
+.ordersPage {
+  display: grid;
+  gap: 16px;
+}
+
+/* In progress / Finished / All: one segmented control. */
+.tabs {
+  display: flex;
+  gap: 4px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: rgb(12 16 32 / 0.72);
+}
+
+.tab {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--text-mid);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--text-high);
+}
+
+.tab[aria-selected='true'] {
+  background: var(--cta);
+  color: #fff;
+}
+
 .orderList {
   list-style: none;
   margin: 0;
@@ -374,58 +452,68 @@
 }
 
 .orderCard {
-  display: grid;
-  gap: 4px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
   padding: 14px 16px;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
-  background: rgb(12 16 32 / 0.72);
+  background: rgb(12 16 32 / 0.76);
+  box-shadow: var(--shadow-card);
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.orderCard:hover {
+  border-color: var(--border-accent);
+  transform: translateY(-1px);
+}
+
+.orderCardBody {
+  display: grid;
+  flex: 1;
+  gap: 6px;
+  min-width: 0;
 }
 
 .orderCardTop {
   display: flex;
   justify-content: space-between;
   gap: 10px;
+  min-width: 0;
+}
+
+.orderCardTop strong {
+  overflow: hidden;
+  font-size: 15.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.orderCardTotal {
+  flex: none;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.orderCardStatus {
+  display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.orderCardGo {
+  flex: none;
+  color: var(--text-low);
 }
 
 .needsAction {
   border-color: rgb(245 158 11 / 0.6);
 }
 
-/* Messages */
-
-.thread {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 8px;
-  max-height: 60vh;
-  overflow-y: auto;
-}
-
-.bubble {
-  max-width: 82%;
-  padding: 10px 12px;
-  border-radius: 16px;
-  background: var(--bg-mid);
-  border: 1px solid var(--border);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.mine {
-  margin-left: auto;
-  background: rgb(139 117 255 / 0.18);
-  border-color: rgb(139 117 255 / 0.4);
-}
-
-.composer {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 8px;
-  align-items: end;
+.orderPlaceholder {
+  height: 88px;
+  border-radius: var(--radius-lg);
 }
 
 /* Legal pages */

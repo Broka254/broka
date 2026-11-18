@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import { type EscrowDirectory, REQUIRED_NOTICE } from '@/lib/escrow-providers'
-import type { Order } from '@/lib/orders'
+import { type Order, orderTone } from '@/lib/orders'
 import { resetSession } from '@/lib/session-client'
 import { json, order, SIGNED_IN, stubFetch } from '@/test/fixtures'
 
@@ -205,6 +205,28 @@ describe('OrderView', () => {
     expect(screen.getByRole('link', { name: 'See your orders' }).getAttribute('href')).toBe('/store/orders')
   })
 
+  it("keeps the store in reach: its page, a message about the order, and each product's own page", async () => {
+    openOrder(order())
+    const store = await screen.findByTestId('order-store')
+    expect(store.textContent).toContain('Clanix')
+    expect(within(store).getByRole('link', { name: /Visit the store/ }).getAttribute('href')).toBe('/store/clanix')
+    expect(within(store).getByRole('link', { name: 'Message Clanix about this order' }).getAttribute('href')).toBe(
+      '/store/clanix/messages',
+    )
+    expect(screen.getByRole('link', { name: 'Samsung A15' }).getAttribute('href')).toBe('/store/clanix/p/l1')
+    expect(screen.getByRole('link', { name: /All orders/ }).getAttribute('href')).toBe('/store/orders')
+  })
+
+  it('an order whose store has no link any more names it, and links nowhere', async () => {
+    const base = order()
+    openOrder(order({ store: { ...base.store, slug: null, url: null } }))
+    const store = await screen.findByTestId('order-store')
+    expect(store.textContent).toContain('Clanix')
+    expect(within(store).queryAllByRole('link')).toHaveLength(0)
+    expect(screen.queryByRole('link', { name: 'Samsung A15' })).toBeNull()
+    expect(screen.getByText('Samsung A15')).toBeTruthy()
+  })
+
   it('goes back to signing in when the session ends while the page is open', async () => {
     let sessions = 0
     const stub = stubFetch({
@@ -214,6 +236,26 @@ describe('OrderView', () => {
     render(<OrderView orderId="o1" escrow={escrow} />)
     expect(await screen.findByTestId('sign-in')).toBeTruthy()
     expect(stub.to('/api/stores/orders/o1', 'GET')).toHaveLength(1)
+  })
+})
+
+describe("an order's status badge", () => {
+  it('is coloured by what the status means for the buyer - and changes nothing about the status itself', () => {
+    expect(orderTone('awaiting_buyer_confirmation', true)).toBe('action')
+    expect(orderTone('delivered', true)).toBe('action')
+    expect(orderTone('submitted', false)).toBe('progress')
+    expect(orderTone('preparing', false)).toBe('progress')
+    expect(orderTone('completed', false)).toBe('done')
+    for (const ended of ['declined', 'cancelled', 'expired'] as const) expect(orderTone(ended, false)).toBe('ended')
+    // An ended order is ended, whatever is said to be waiting.
+    expect(orderTone('expired', true)).toBe('ended')
+  })
+
+  it('on the order, the words are still the status as the API names it', async () => {
+    openOrder(order({ status: 'completed', status_label: 'Completed', open: false, allowed_actions: [] }))
+    const badge = await screen.findByTestId('order-status')
+    expect(badge.textContent).toBe('completed')
+    expect(badge.getAttribute('data-tone')).toBe('done')
   })
 })
 

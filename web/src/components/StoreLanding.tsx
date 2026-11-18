@@ -46,7 +46,7 @@ export function StoreLanding({
 
   return (
     <div className={styles.landing}>
-      <main className={styles.main}>
+      <main id="main-content" className={styles.main}>
         <section className={styles.hero} aria-labelledby="landing-title">
           <div className={styles.heroCopy}>
             <p className={styles.eyebrow}>{store.category || 'INDEPENDENT STORE'} <span>·</span> ON BROKA</p>
@@ -129,7 +129,7 @@ export function StoreLanding({
             </div>
               <div className={styles.products} data-count={Math.min(moreProducts.length, 6)}>
                 {moreProducts.slice(0, 6).map((product) => (
-                <ProductCard key={product.id} product={product} storeId={storeId} compact />
+                <ProductCard key={product.id} product={product} storeId={storeId} />
               ))}
             </div>
           </section>

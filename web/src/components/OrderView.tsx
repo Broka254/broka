@@ -9,6 +9,10 @@
 // an independent escrow provider the buyer opens on its own website. BROKA
 // records what the buyer and the store report and labels it that way; it
 // never receives, holds or checks the money, and this page never says it did.
+//
+// The store the order is with is a card at the top - its page and its
+// messages one tap away - and each product links back to its page in that
+// store: an order is where buying from a store continues, not a dead end.
 import Link from 'next/link'
 import { useEffect, useRef, useState } from 'react'
 
@@ -20,15 +24,19 @@ import {
   formatWhen,
   type Order,
   type OrderItem,
+  orderTone,
   ordersPath,
   UNSUCCESSFUL,
 } from '@/lib/orders'
-import { storeMessagesPath, storePath } from '@/lib/links'
+import { productPath, storeMessagesPath, storePath } from '@/lib/links'
 import { refreshSession, useSession } from '@/lib/session-client'
 import { webFetch } from '@/lib/web-api'
 
+import { Icon } from './Icon'
+import { OrderStatusBadge } from './OrderStatusBadge'
 import styles from './orders.module.css'
 import { SignInPanel } from './SignInPanel'
+import { StoreAvatar } from './StoreAvatar'
 
 const POLL_MS = 30_000
 
@@ -41,16 +49,10 @@ const YES = {
 
 type Confirming = 'confirm' | 'reject_proposal' | 'cancel' | 'confirm_received' | null
 
-function statusClass(order: Order): string {
-  if (order.status === 'completed') return `${styles.status} ${styles.statusDone}`
-  if (UNSUCCESSFUL.includes(order.status)) return `${styles.status} ${styles.statusEnded}`
-  if (order.allowed_actions.some((a) => a === 'confirm' || a === 'confirm_received')) {
-    return `${styles.status} ${styles.statusYourTurn}`
-  }
-  return styles.status ?? ''
-}
+/** Whether the order is waiting on the buyer: their confirmation, or their word that it arrived. */
+const waitingOnBuyer = (order: Order) => order.allowed_actions.some((a) => a === 'confirm' || a === 'confirm_received')
 
-function ItemRow({ item, currency }: { item: OrderItem; currency: string }) {
+function ItemRow({ item, currency, storeSlug }: { item: OrderItem; currency: string; storeSlug: string | null }) {
   const priceChanged = item.proposed_unit_price_minor != null && item.proposed_unit_price_minor !== item.requested_unit_price_minor
   const qtyChanged = item.proposed_quantity != null && item.proposed_quantity !== item.requested_quantity
   return (
@@ -62,7 +64,15 @@ function ItemRow({ item, currency }: { item: OrderItem; currency: string }) {
         <span className={styles.thumb} aria-hidden="true" />
       )}
       <div>
-        <p className={styles.itemName}>{item.name}</p>
+        <p className={styles.itemName}>
+          {storeSlug && item.listing_id ? (
+            <Link href={productPath(storeSlug, item.listing_id)} className={styles.itemLink}>
+              {item.name}
+            </Link>
+          ) : (
+            item.name
+          )}
+        </p>
         {item.removed ? (
           <p className={`${styles.itemMeta} ${styles.changed}`}>The store can&apos;t supply this one.</p>
         ) : (
@@ -252,19 +262,43 @@ export function OrderView({ orderId, escrow = UNAVAILABLE }: { orderId: string; 
       'Confirm only once you have everything and it is as agreed. This completes the order and tells the store it is done.',
   }
 
+  const storeName = order.store.name ?? 'The store'
+  const storeSlug = order.store.slug
+
   return (
     <article className={styles.orderPage} data-testid="order-view">
+      <Link href={ordersPath} className={styles.backLink}>
+        <Icon name="back" size={16} /> All orders
+      </Link>
       <header className={styles.orderHead}>
         <p className={styles.muted}>
           Order {order.reference} ·{' '}
-          {order.store.slug ? <Link href={storePath(order.store.slug)}>{order.store.name}</Link> : order.store.name}
+          {storeSlug ? <Link href={storePath(storeSlug)}>{order.store.name}</Link> : order.store.name}
         </p>
         <h1>{order.status_label}</h1>
-        <span className={statusClass(order)} data-testid="order-status">
+        <OrderStatusBadge tone={orderTone(order.status, waitingOnBuyer(order))} testId="order-status">
           {order.status.replace(/_/g, ' ')}
-        </span>
+        </OrderStatusBadge>
         {deadline(order) && <p className={styles.notice}>{deadline(order)}</p>}
       </header>
+
+      <section className={styles.storeCard} aria-label={`Ordered from ${storeName}`} data-testid="order-store">
+        <StoreAvatar name={storeName} logo={null} size={44} />
+        <div className={styles.storeCardText}>
+          <p className={styles.hint}>Ordered from</p>
+          <p className={styles.storeCardName}>{storeName}</p>
+        </div>
+        {storeSlug && (
+          <div className={styles.storeCardActions}>
+            <Link href={storePath(storeSlug)} className={styles.actionLink}>
+              <Icon name="store" size={17} /> Visit the store
+            </Link>
+            <Link href={storeMessagesPath(storeSlug)} className={styles.actionLink}>
+              <Icon name="chat" size={17} /> Message {storeName} about this order
+            </Link>
+          </div>
+        )}
+      </section>
 
       {order.status === 'seller_proposed_changes' && (
         <p className={styles.warning} role="status">
@@ -289,7 +323,7 @@ export function OrderView({ orderId, escrow = UNAVAILABLE }: { orderId: string; 
         </h2>
         <ul className={styles.items}>
           {order.items.map((i) => (
-            <ItemRow key={i.id} item={i} currency={order.currency} />
+            <ItemRow key={i.id} item={i} currency={order.currency} storeSlug={storeSlug} />
           ))}
         </ul>
         <dl className={styles.summaryRows}>
@@ -585,14 +619,6 @@ export function OrderView({ orderId, escrow = UNAVAILABLE }: { orderId: string; 
             </div>
           )}
         </section>
-      )}
-
-      {order.store.slug && (
-        <p>
-          <Link href={storeMessagesPath(order.store.slug)} className={styles.linkish}>
-            Message {order.store.name} about this order
-          </Link>
-        </p>
       )}
 
       <section className={styles.panel} aria-labelledby="history-title">
