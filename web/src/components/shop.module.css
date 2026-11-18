@@ -673,6 +673,13 @@
   border-radius: 22px 22px 0 0;
 }
 
+/* The keyboard's ring follows the card's corners (the global ring's 6px
+   would square them off). */
+.productLink:focus-visible {
+  border-radius: 22px 22px 0 0;
+  outline-offset: -2px;
+}
+
 .productImage {
   position: relative;
   display: grid;
@@ -1197,8 +1204,11 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* How many and the line's total. On a narrow phone the total moves under
+   the stepper, at the right, rather than breaking "KES" from its amount. */
 .lineFoot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -1207,6 +1217,8 @@
 }
 
 .lineFoot strong {
+  margin-left: auto;
+  white-space: nowrap;
   color: #fff;
   font-family: var(--font-display);
   font-size: 16px;
@@ -1373,6 +1385,13 @@
   width: 104px;
   height: 104px;
   border-radius: 15px;
+}
+
+@media (max-width: 600px) {
+  .checkoutLine .lineThumb {
+    width: 84px;
+    height: 84px;
+  }
 }
 
 .keepShopping {
