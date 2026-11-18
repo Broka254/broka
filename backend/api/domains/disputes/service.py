@@ -1020,6 +1020,10 @@ class DisputeEngineService:
         b2c_result = {"success": False, "detail": "not_applicable"}
 
         commission = round(deal.agreed_price * COMMISSION_RATE, 2)
+        # A release's stock move (listings/inventory.py, DEAL MOVES); a
+        # refund only gives units back and takes no listing lock - its B2C
+        # call below runs inside this transaction.
+        move = None
 
         if action == "refund":
             if buyer.phone:
@@ -1041,6 +1045,12 @@ class DisputeEngineService:
                 payload={"amount": net_amount, "phone": buyer.phone or "", "b2c": b2c_result},
             )
         else:
+            # Paid out, the deal's units are sold - with payments off, the
+            # first moment they count at all: the listing is locked after
+            # the deal (held above) and counted, like every payout. No call
+            # leaves BROKA on this branch.
+            from api.domains.listings import inventory
+            move = await inventory.lock_for_deal_move(self.db, deal, DealStatus.released)
             deal.status    = DealStatus.released
             deal.released_at = datetime.utcnow()
             if seller:
@@ -1082,6 +1092,9 @@ class DisputeEngineService:
             self.db, actor_id, f"dispute_fund_{action}", "dispute_case", case.id,
             detail=f"KES {net_amount:.0f} deal_id={case.deal_id}",
         )
+        if move is not None:
+            from api.domains.listings import inventory
+            await inventory.settle_deal_move(self.db, move)
         await self.db.commit()
 
         return {

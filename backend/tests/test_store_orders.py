@@ -1199,6 +1199,39 @@ async def _owner_product(client, token: str, store_id: str, listing_id: str) -> 
     return next(p for p in page["items"] if p["id"] == listing_id)
 
 
+async def _paid_chat_deal(client, listing_id: str, quantity: int = 1) -> tuple[str, str]:
+    """(deal_id, buyer token): a chat deal for `quantity` units, paid the
+    legacy way (no E-Confirm escrow), its buyer about to confirm delivery."""
+    chat_id, chat_token = await _buyer(client, name="Paying Chat Buyer")
+    deal = await _finalize(client, chat_token, chat_id, listing_id, quantity=quantity)
+    assert deal.status_code == 201, deal.text
+    await _set_deal(deal.json()["deal_id"], DealStatus.paid)
+    return deal.json()["deal_id"], chat_token
+
+
+async def _pay_out(client, token: str, deal_id: str):
+    """The buyer confirms delivery: the legacy payout
+    (EscrowService._confirm_delivery_legacy)."""
+    return await client.post(f"/deal/{deal_id}/confirm-delivery", json={}, headers=_auth(token))
+
+
+async def _shelf(listing_id: str):
+    """The listing's units by the shared count (listings/inventory.py) -
+    the figures every decision on either channel is taken by."""
+    from api.domains.listings import inventory
+    async with db_module.AsyncSessionLocal() as db:
+        return await inventory.count(db, await db.get(Listing, listing_id))
+
+
+async def _stock_conflicts(listing_id: str) -> int:
+    """Audit rows of payouts that found their units already promised."""
+    from api.database import AuditLog
+    async with db_module.AsyncSessionLocal() as db:
+        return len((await db.execute(select(AuditLog.id).where(
+            AuditLog.action == "deal_stock_over_allocated", AuditLog.resource_id == listing_id,
+        ))).all())
+
+
 async def _sweep() -> None:
     from api.core.workers import task_sync_listing_stock
     await task_sync_listing_stock()
@@ -1322,6 +1355,144 @@ class TestCrossChannelStock:
         assert rb.status_code == 409, rb.text
         quantity, reserved = await _listing_row(lid)
         assert (quantity, reserved + await _deal_units(lid)) == (1, 1)
+
+    # A chat deal's payout against a store order's acceptance. The payout is
+    # the moment a deal's units count as sold - and with payments off the
+    # first moment they count at all (stock.deals_hold_stock) - and it used
+    # to commit without the listing's lock, so an acceptance at the same
+    # moment counted a unit the payout was taking. One unit is left for an
+    # order in each: with payments on, the paid deal already holds one of
+    # two; with payments off it holds nothing until it is paid out, so the
+    # free unit is the one the deal is for.
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("counted", [True, False], ids=["counted", "not_counted"])
+    @pytest.mark.parametrize("payments", ["on", "off"])
+    async def test_a_payout_holding_the_listing_makes_an_acceptance_wait_and_count_it(
+            self, client, monkeypatch, request, payments, counted):
+        """Phase 2, test A: the payout is held at its last write before
+        committing - by then it holds the deal's lock and the listing's -
+        and the store accepts an order for the last unit. The acceptance
+        waits, then counts the paid-out deal. It used to sail through and
+        reserve the unit the payout was taking."""
+        if db_module.engine.dialect.name != "postgresql":
+            pytest.skip("needs PostgreSQL's concurrent writers; SQLite serialises them outright")
+        if payments == "off":
+            request.getfixturevalue("payments_off")
+        from api.core.ledger import ledger
+
+        total = 2 if payments == "on" else 1
+        _, seller_token, store_id = await _seller(client)
+        lid = await _listing(client, seller_token, store_id, quantity=total)
+        if counted:
+            await _track(client, seller_token, store_id, lid, total)
+        deal_id, deal_token = await _paid_chat_deal(client, lid)
+        assert (await _shelf(lid)).available == 1
+        _, buyer_token = await _buyer(client)
+        oid = (await _order(client, buyer_token, store_id, lid, quantity=1))["id"]
+
+        in_payout = asyncio.Event()
+        go_on = asyncio.Event()
+        real = ledger.record_escrow_released
+
+        async def held_in_payout(db, released_deal_id, *args, **kwargs):
+            if released_deal_id == deal_id and not in_payout.is_set():
+                in_payout.set()
+                await asyncio.wait_for(go_on.wait(), 30)
+            return await real(db, released_deal_id, *args, **kwargs)
+
+        monkeypatch.setattr(ledger, "record_escrow_released", held_in_payout)
+        payout = asyncio.create_task(_pay_out(client, deal_token, deal_id))
+        await asyncio.wait_for(in_payout.wait(), 30)
+        accept = asyncio.create_task(_post(client, seller_token, f"/orders/{oid}/accept"))
+        await asyncio.sleep(0.5)
+        # Waiting on the listing's lock, not counting.
+        assert not accept.done(), (await accept).text
+        go_on.set()
+        paid_out, accepted = await asyncio.wait_for(asyncio.gather(payout, accept), 30)
+
+        assert paid_out.status_code == 200 and paid_out.json()["status"] == "released", paid_out.text
+        if payments == "on":
+            # The paid deal held its unit from agreement: the order takes the other.
+            assert accepted.status_code == 200, accepted.text
+        else:
+            # Paid out, the deal's unit is gone, and the order counted it.
+            assert accepted.status_code == 409, accepted.text
+            assert accepted.json()["detail"]["code"] == "ORDER_STOCK_SHORT"
+        shelf = await _shelf(lid)
+        assert (shelf.total, shelf.taken, shelf.available) == (total, total, 0)
+        assert (shelf.sold_in_deals, shelf.reserved) == (1, total - 1)
+        assert await _stock_conflicts(lid) == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("counted", [True, False], ids=["counted", "not_counted"])
+    @pytest.mark.parametrize("payments", ["on", "off"])
+    async def test_an_acceptance_holding_the_listing_makes_a_payout_wait_and_count_it(
+            self, client, monkeypatch, request, payments, counted):
+        """Phase 2, test B: the acceptance is held mid-count, under the
+        listing's lock, and the buyer of the paid deal confirms delivery.
+        The payout waits, then counts the reservation. It used to commit
+        under the acceptance's count. Neither is refused for it: an
+        accepted order keeps its units, and a payout is never held back for
+        stock - the buyer has paid and has the goods."""
+        if db_module.engine.dialect.name != "postgresql":
+            pytest.skip("needs PostgreSQL's concurrent writers; SQLite serialises them outright")
+        if payments == "off":
+            request.getfixturevalue("payments_off")
+        from api.domains.listings import stock as listing_stock
+
+        total = 2 if payments == "on" else 1
+        _, seller_token, store_id = await _seller(client)
+        lid = await _listing(client, seller_token, store_id, quantity=total)
+        if counted:
+            await _track(client, seller_token, store_id, lid, total)
+        deal_id, deal_token = await _paid_chat_deal(client, lid)
+        _, buyer_token = await _buyer(client)
+        oid = (await _order(client, buyer_token, store_id, lid, quantity=1))["id"]
+
+        counting = asyncio.Event()
+        go_on = asyncio.Event()
+        held = {"once": False}
+        real = listing_stock.units_taken
+
+        async def held_mid_count(db, listing_id):
+            result = await real(db, listing_id)
+            if listing_id == lid and not held["once"]:
+                held["once"] = True
+                counting.set()
+                await asyncio.wait_for(go_on.wait(), 30)
+            return result
+
+        monkeypatch.setattr(listing_stock, "units_taken", held_mid_count)
+        accept = asyncio.create_task(_post(client, seller_token, f"/orders/{oid}/accept"))
+        await asyncio.wait_for(counting.wait(), 30)
+        payout = asyncio.create_task(_pay_out(client, deal_token, deal_id))
+        await asyncio.sleep(0.5)
+        # Waiting on the listing's lock, not committing.
+        assert not payout.done(), (await payout).text
+        go_on.set()
+        accepted, paid_out = await asyncio.wait_for(asyncio.gather(accept, payout), 30)
+
+        assert accepted.status_code == 200, accepted.text
+        assert paid_out.status_code == 200 and paid_out.json()["status"] == "released", paid_out.text
+        shelf = await _shelf(lid)
+        assert (shelf.reserved, shelf.sold_in_deals, shelf.available) == (1, 1, 0)
+        if payments == "on":
+            # Each kept a unit of its own: nothing is promised twice.
+            assert (shelf.total, shelf.taken) == (2, 2)
+            assert await _stock_conflicts(lid) == 0
+        else:
+            # With payments off the paid deal held nothing until it was paid
+            # out (the chat rule, stock.deals_hold_stock), so the order was
+            # given the unit the payout then took. The payout counted it
+            # under the lock, went ahead, and wrote the conflict down for a
+            # person to settle with the store - and nobody else can be sold it.
+            assert (shelf.total, shelf.taken) == (1, 2)
+            assert await _stock_conflicts(lid) == 1
+            late_id, late_token = await _buyer(client, name="Late Chat Buyer")
+            assert (await _finalize(client, late_token, late_id, lid)).status_code == 409
+            late = await _submit(client, late_token, store_id, [{"listing_id": lid, "quantity": 1}])
+            assert late.status_code == 409, late.text
 
     @pytest.mark.asyncio
     async def test_an_uncounted_product_is_held_for_an_order_against_chat_deals(self, client):

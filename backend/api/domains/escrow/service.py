@@ -1282,6 +1282,11 @@ class EscrowService:
         locked = await lock_deal_if_status(self.db, deal_id, (DealStatus.paid,))
         if locked is None:
             return False
+        # Paid out: its units are sold, and with payments off they count
+        # from now - under the listing's lock, after the deal's
+        # (listings/inventory.py, DEAL MOVES). E-Confirm was asked before
+        # this transaction began; nothing below leaves BROKA.
+        move = await inventory.lock_for_deal_move(self.db, locked, DealStatus.released)
         now = datetime.utcnow()
         locked.status = DealStatus.released
         locked.released_at = now
@@ -1308,6 +1313,7 @@ class EscrowService:
         await ledger.record_escrow_released(
             self.db, deal_id, total, commission, last.provider_transaction_id,
         )
+        await inventory.settle_deal_move(self.db, move)
         await self.db.commit()
         await publish(EConfirmPayoutCompleted(
             deal_id=deal_id, provider_transaction_id=last.provider_transaction_id,
@@ -1441,10 +1447,30 @@ class EscrowService:
     async def _confirm_delivery_legacy(
         self, deal: Deal, buyer_id: str, request_ip: Optional[str], checklist: str = "",
     ) -> dict:
-        """Original, unchanged behavior for deals with no E-Confirm
-        escrow — see module docstring."""
+        """Original behavior for deals with no E-Confirm escrow (see module
+        docstring), moved under the deal's row lock and then its listing's.
+
+        The status used to be checked on a plain read and written straight
+        after: two taps, or this and the timer sweep's release at the same
+        moment, both saw `paid` and both released - two completed deals for
+        the seller, two audit rows. And the move to released - the moment a
+        deal's units count as sold, and with payments off the first moment
+        they count at all - committed without the listing's lock, so a
+        store order accepted at the same moment counted the unit as free
+        (listings/inventory.py, DEAL MOVES). No call leaves BROKA in this
+        transaction: the event is published after the commit."""
         if deal.status != DealStatus.paid:
             raise HTTPException(status_code=400, detail=f"Cannot release — deal status is '{deal.status.value}'")
+        locked = await lock_deal_if_status(self.db, deal.id, (DealStatus.paid,))
+        if locked is None:
+            # Released (or moved on) by another request since the read
+            # above: the answer a second tap has always had.
+            current = await self.db.scalar(select(Deal.status).where(Deal.id == deal.id))
+            await self.db.commit()
+            shown = getattr(current, "value", current) or "missing"
+            raise HTTPException(status_code=400, detail=f"Cannot release — deal status is '{shown}'")
+        deal = locked
+        move = await inventory.lock_for_deal_move(self.db, deal, DealStatus.released)
 
         now = datetime.utcnow()
         deal.status = DealStatus.released
@@ -1467,6 +1493,7 @@ class EscrowService:
         await ledger.record_escrow_released(
             self.db, deal.id, deal.agreed_price, deal.commission,
         )
+        await inventory.settle_deal_move(self.db, move)
         await self.db.commit()
 
         await publish(EscrowReleased(

@@ -68,40 +68,76 @@ in one transaction:
   store order accept /   a reservation (store_orders/service._offer)
   propose
   the stock controls     on hand, counting on or off (store_orders/service.set_stock)
+  a chat deal's payout   a deal moving to released (DEAL MOVES, below)
 
-A Deal is only ever created inside finalize_deal, under this lock, and while
-buyers pay through BROKA every status from agreement to payout holds its
-units, so a deal's later moves never add to the count. A reservation is only
-ever made in _offer, under this lock, and a handover moves its units from
-reserved to sold, never adding to what is gone. Nothing can add units
-between counting and writing: two buyers on two channels cannot both be
-given the last unit. On PostgreSQL the second waits for the first to commit,
-then counts again; SQLite serialises writers. Giving units back (an order
-released, a deal refunded or cancelled) only ever makes more available, and
-needs no lock beyond the row's own.
+A Deal is only ever created inside finalize_deal, under this lock. A
+reservation is only ever made in _offer, under this lock, and a handover
+moves its units from reserved to sold, never adding to what is gone.
+Nothing can add units between counting and writing: two buyers on two
+channels cannot both be given the last unit. On PostgreSQL the second waits
+for the first to commit, then counts again; SQLite serialises writers.
+Giving units back (an order released, a deal refunded or cancelled) only
+ever makes more available, and needs no lock beyond the row's own.
 
-(With payments off only paid-out deals hold units - stock.deals_hold_stock.
-New deals can't be paid then, but one paid before payments were switched
-off starts counting when it is paid out, outside this lock. That is the
-established rule for chat deals, unchanged here.)
+DEAL MOVES
+==========
+A deal's later moves change the count two ways: its units go on or off sale
+(stock.holds_units), and paid out they become sold. While buyers pay
+through BROKA every status from agreement to payout holds its units, so a
+payout only moves them from "in deals" to sold. With payments off only
+paid-out deals hold units (stock.deals_hold_stock): a deal paid before
+payments were switched off takes its units when it is paid out. That move
+used to commit outside this lock, so a store order accepted at the same
+moment counted the unit as free, and the order and the deal both kept it.
 
-Lock order: an order action locks its order row, then its listings; the
-stock controls and finalize_deal lock only the listing. Nothing that holds a
-listing lock waits for an order lock, so the paths cannot deadlock each
-other.
+Every path that pays a deal out now locks the deal (lock_deal_if_status),
+then its listing, counts, moves the deal and settles the listing's status,
+in one transaction (lock_for_deal_move, then settle_deal_move):
+
+  EscrowService._confirm_delivery_legacy     the buyer's release, no E-Confirm
+  EscrowService._finish_release_if_complete  E-Confirm paid every payment out
+  routers/escrow.confirm_delivery            the legacy /escrow route
+  core/workers._fire_auto_release            the timer sweep's release
+  DisputeEngineService.execute_fund_action   a dispute decided for the seller
+  routers/negotiate, buyer_confirms_goods_ok the chat's release
+
+An order acceptance waiting on the lock then counts the paid-out deal; a
+payout waiting on an order's lock counts its reservation. A payout is never
+refused for stock: the buyer has paid and has the goods. So when, with
+payments off, its units were promised to an order while the paid deal held
+none, the payout still goes ahead and the conflict is written down - an
+audit row (deal_stock_over_allocated) and a reconciliation alert - for a
+person to settle with the store. No payout is added, repeated, delayed or
+skipped here, and no provider, SMS or push call is made under these locks:
+E-Confirm is asked before (release_econfirm_deal), events go after commit.
+
+A deal is for one listing (Deal.listing_id); lock() takes them in id order
+should that ever change. Refunds take no listing lock: they only give units
+back, the stock sweep settles the listing as it always has, and two of them
+(the timer sweep's, a dispute's) make the legacy M-Pesa refund call inside
+their transaction - a listing lock held across it would hold the shelf for
+as long as the call takes.
+
+Lock order: a deal move locks the deal, then its listing; an order action
+locks its order row, then its listings; the stock controls and
+finalize_deal lock only the listing. Nothing that holds a listing lock
+waits for a deal or an order lock, so the paths cannot deadlock each other.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.database import Deal, DealStatus, Listing
+from api.database import Deal, DealStatus, Listing, ListingType
 from api.models.store_order import StoreOrderItem
 
 from . import stock
+
+logger = logging.getLogger(__name__)
 
 
 def is_tracked(listing) -> bool:
@@ -310,12 +346,13 @@ async def lock(db: AsyncSession, listing_ids: Iterable[str]) -> dict[str, Listin
 
 
 async def settle_status(db: AsyncSession, listing_ids: Iterable[str]) -> None:
-    """After a store order took units or gave them back in this
-    transaction: each listing's status as its count says (stock.status_for)
-    - a stated quantity with every unit promised goes pending, completed
-    once all are sold, and back on sale when units return; counted stock
-    stays listed. The listings are locked (an order action already holds
-    them: its order's lock, then its listings')."""
+    """After a store order or a deal's move took units or gave them back in
+    this transaction: each listing's status as its count says
+    (stock.status_for) - a stated quantity with every unit promised goes
+    pending, completed once all are sold, and back on sale when units
+    return; counted stock stays listed. The listings are locked (an order
+    action already holds them: its order's lock, then its listings'; a deal
+    move: its deal's, then its listing's)."""
     rows = await lock(db, listing_ids)
     for listing in rows.values():
         counted = await count(db, listing)
@@ -323,6 +360,110 @@ async def settle_status(db: AsyncSession, listing_ids: Iterable[str]) -> None:
         current = getattr(listing.status, "value", listing.status)
         if target is not None and target.value != current:
             listing.status = target
+
+
+# ── A deal's move (DEAL MOVES above) ─────────────────────────────────────────
+
+def _status_value(status) -> Optional[str]:
+    return getattr(status, "value", status)
+
+
+def moves_count(from_status, to_status) -> bool:
+    """Whether a deal moving between these statuses changes the count: its
+    units go on or off sale (stock.holds_units), or into or out of sold."""
+    a, b = _status_value(from_status), _status_value(to_status)
+    released = DealStatus.released.value
+    return stock.holds_units(a) != stock.holds_units(b) or (a == released) != (b == released)
+
+
+@dataclass(frozen=True)
+class DealMove:
+    """A chat deal about to change status in a way the count reads, and its
+    listing's units counted under the listing's lock just before."""
+    deal_id: str
+    listing_id: str
+    units: int
+    from_status: str
+    to_status: str
+    before: Inventory
+
+    @property
+    def takes(self) -> bool:
+        """The move puts units off sale that the count had left free."""
+        return stock.holds_units(self.to_status) and not stock.holds_units(self.from_status)
+
+    @property
+    def shortfall(self) -> int:
+        """Units the move takes beyond what was left - units an accepted
+        order, another deal or a handover already had."""
+        return max(self.units - self.before.available, 0) if self.takes else 0
+
+
+async def lock_for_deal_move(db: AsyncSession, deal: Deal, to_status) -> Optional[DealMove]:
+    """Before `deal` moves to `to_status`: when the move changes the count,
+    lock the deal's listing and count it. Call it once the deal's own row
+    lock is held (lock_deal_if_status, re-checked) and before the new
+    status is written: the deal first, then the listing, on every path, so
+    no two of them wait for each other in reverse. None when the count
+    can't change - a move within the statuses that hold units, a listing
+    that is gone, or an auction (one item, sold through its own lifecycle,
+    never counted) - and then nothing is locked."""
+    if not getattr(deal, "listing_id", None) or not moves_count(deal.status, to_status):
+        return None
+    # A plain read first: an auction's row isn't locked for nothing.
+    row = (await db.execute(
+        select(Listing.listing_type).where(Listing.id == deal.listing_id)
+    )).first()
+    if row is None or _status_value(row[0]) == ListingType.auction.value:
+        return None
+    listing = (await lock(db, [deal.listing_id])).get(deal.listing_id)
+    if listing is None or not stock.is_stocked(listing):
+        return None
+    return DealMove(
+        deal_id=deal.id,
+        listing_id=listing.id,
+        # COALESCE(quantity, 1), as the count reads it (_units).
+        units=int(deal.quantity) if getattr(deal, "quantity", None) is not None else 1,
+        from_status=_status_value(deal.status),
+        to_status=_status_value(to_status),
+        before=await count(db, listing),
+    )
+
+
+async def settle_deal_move(db: AsyncSession, move: Optional[DealMove]) -> None:
+    """After the deal's new status is written, in the same transaction
+    (still under both locks): the listing's status as the count now says,
+    and - when the move took units the count had already given to an order
+    or another deal - an audit row and a reconciliation alert. Never a
+    refusal: by now the buyer has paid and has the goods, and stock is no
+    reason to hold their money back. The caller commits."""
+    if move is None:
+        return
+    # The count below reads the deal's new status.
+    await db.flush()
+    await settle_status(db, [move.listing_id])
+    if not move.shortfall:
+        return
+    from api.core.audit import record_audit
+    from api.core.reconciliation import report_reconciliation
+
+    before = move.before
+    detail = (
+        f"deal={move.deal_id} {move.from_status}->{move.to_status} took {move.units} unit(s) "
+        f"with {before.available} left (total={before.total} reserved={before.reserved} "
+        f"in_deals={before.in_deals} sold_through_orders={before.gone_through_orders})"
+    )
+    await record_audit(db, "system", "deal_stock_over_allocated", "listing", move.listing_id, detail)
+    logger.warning("[inventory] listing %s over-allocated by %d: %s",
+                   move.listing_id, move.shortfall, detail)
+    report_reconciliation(
+        "deal_stock_over_allocated", deal_id=move.deal_id,
+        reason=(f"a chat deal was paid out for {move.units} unit(s) of listing {move.listing_id} "
+                f"with only {before.available} left: {move.shortfall} are also promised to an "
+                f"accepted store order or another deal - settle with the store which one is "
+                f"cancelled"),
+        listing_id=move.listing_id, shortfall=move.shortfall,
+    )
 
 
 def card_available(listing: Listing, inv: Optional[Inventory]) -> Optional[int]:

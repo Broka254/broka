@@ -490,9 +490,12 @@ async def task_sync_listing_stock() -> int:
     """Show again a listing whose deals were refunded or cancelled, and
     mark one sold once every unit has been paid out (listings/stock.py).
 
-    A sweep rather than a hook in each place a deal ends: those are the
-    payout, refund and dispute paths, and a listing's visibility is not
-    worth touching money code for. Five minutes late is fine for it."""
+    A payout settles its listing itself, under the listing's lock, since it
+    has to count there anyway (listings/inventory.py, DEAL MOVES). Refunds
+    and cancellations are left to this sweep: they only give units back, a
+    listing's visibility is not worth a lock in a refund's transaction (two
+    of them make the M-Pesa refund call inside it), and five minutes late is
+    fine for it. It also brings back anything a crash left unsettled."""
     from api.database import AsyncSessionLocal
     from api.domains.listings.stock import sync_listing_stock
     async with AsyncSessionLocal() as db:
@@ -2402,6 +2405,13 @@ async def _fire_auto_release(session, deal) -> None:
     from api.database import User, DealStatus
     if await _econfirm_deal_fails_closed(session, deal, "release"):
         return
+    # The caller holds the deal's row lock. Paid out, its units are sold -
+    # with payments off, the first moment they count at all - so the
+    # listing is locked after it and counted, like every payout
+    # (domains/listings/inventory.py, DEAL MOVES). This release makes no
+    # call out: the event goes after the sweep's commit.
+    from api.domains.listings import inventory
+    move = await inventory.lock_for_deal_move(session, deal, DealStatus.released)
     now = datetime.utcnow()
     deal.status = DealStatus.released
     deal.delivery_confirmed_at = now
@@ -2415,6 +2425,7 @@ async def _fire_auto_release(session, deal) -> None:
         # every automatic release - a review nobody wrote, awarded for a
         # buyer's SILENCE. The same bump was already removed from the M-Pesa
         # callback for that reason; a rating must mean a buyer rated them.
+    await inventory.settle_deal_move(session, move)
     _queue_after_commit(session, EscrowReleased(
         deal_id=deal.id, seller_id=deal.seller_id, buyer_id=deal.buyer_id,
         amount=deal.agreed_price,
