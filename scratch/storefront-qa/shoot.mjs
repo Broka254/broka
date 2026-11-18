@@ -199,7 +199,8 @@ await step('messaging desktop flows', async () => {
   })
   await page.waitForTimeout(5_600)
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
-  await page.getByText('We also have the light blue one in stock').waitFor({ timeout: 10_000 })
+  const thread = page.getByTestId('enquiry-thread')
+  await thread.getByText('We also have the light blue one in stock').waitFor({ timeout: 10_000 })
   await page.getByRole('button', { name: 'New messages' }).waitFor({ timeout: 5_000 })
   flow.heldWhileReadingBack = await log.evaluate((el) => el.scrollTop < 40)
   await shot(page, 'messages-desktop-1280-new-messages.png')
@@ -216,7 +217,13 @@ await step('messaging desktop flows', async () => {
   await shot(page, 'messages-desktop-1280-sending.png')
   await page.getByText('Sending…').waitFor({ state: 'detached', timeout: 10_000 })
   await page.waitForTimeout(1_500)
-  flow.sentOnce = (await page.getByText('Is it the same price for the light blue one?').count()) === 1
+  flow.sentOnce = (await thread.getByText('Is it the same price for the light blue one?').count()) === 1
+  // The list's times stay inside their rows, however long the title.
+  flow.listTimesInsideRows = await page.evaluate(() =>
+    [...document.querySelectorAll('[data-testid="conversation"] time')].every(
+      (t) => t.getBoundingClientRect().right <= t.closest('a').getBoundingClientRect().right + 0.5,
+    ),
+  )
   flow.followedAfterSending = await atBottom()
   await shot(page, 'messages-desktop-1280.png')
   results.flows.push(flow)
@@ -264,12 +271,12 @@ await step('messaging phone flows', async () => {
   await box.fill('Can you deliver it this evening?')
   await page.getByRole('button', { name: 'Send' }).click()
   await page.getByRole('button', { name: 'Retry' }).waitFor({ timeout: 5_000 })
-  flow.failureExplained = (await page.getByRole('alert').textContent())?.trim()
+  flow.failureExplained = (await page.getByRole('alert').filter({ hasText: 'Not sent' }).textContent())?.trim()
   await shot(page, 'messages-mobile-390-failed.png')
   await page.getByRole('button', { name: 'Retry' }).click()
   await page.getByRole('button', { name: 'Retry' }).waitFor({ state: 'detached', timeout: 10_000 })
   await page.waitForTimeout(1_800)
-  flow.retriedOnce = (await page.getByText('Can you deliver it this evening?').count()) === 1
+  flow.retriedOnce = (await page.getByTestId('enquiry-thread').getByText('Can you deliver it this evening?').count()) === 1
   await shot(page, 'messages-mobile-390.png')
   results.flows.push(flow)
   await ctx.close()
