@@ -1,0 +1,842 @@
+{
+  "base": "http://127.0.0.1:3000",
+  "startedAt": "2026-11-18T15:08:30.677Z",
+  "checks": [
+    {
+      "device": "mobile-360",
+      "page": "home",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Home=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": {
+        "barTop": 677,
+        "lastBottom": 648,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-360",
+      "page": "shop",
+      "overflowX": 0,
+      "wide": [
+        "a.store-module__G1yxjG__categoryTile  right=447",
+        "img.store-module__G1yxjG__categoryTileImage right=446",
+        "span.store-module__G1yxjG__categoryTileScrim right=446",
+        "span.store-module__G1yxjG__categoryTileCopy right=438",
+        "strong. right=438"
+      ],
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Shop=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": {
+        "barTop": 680,
+        "lastBottom": 651,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-360",
+      "page": "product",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Shop=true"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": {
+        "barTop": 677,
+        "lastBottom": 648,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-360",
+      "page": "about",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": {
+        "barTop": 677,
+        "lastBottom": 648,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-360",
+      "page": "cart",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Cart, 3 items=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": {
+        "barTop": 677,
+        "lastBottom": 648,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-360",
+      "page": "messages",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": []
+    },
+    {
+      "device": "mobile-360",
+      "page": "inbox",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Messages=page"
+      ],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": null
+    },
+    {
+      "device": "mobile-360",
+      "page": "orders",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Orders=page"
+      ],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": null
+    },
+    {
+      "device": "mobile-360",
+      "page": "order",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Orders=true"
+      ],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": null
+    },
+    {
+      "device": "mobile-390",
+      "page": "home",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Home=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": {
+        "barTop": 781,
+        "lastBottom": 752,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-390",
+      "page": "shop",
+      "overflowX": 0,
+      "wide": [
+        "a.store-module__G1yxjG__categoryTile  right=447",
+        "img.store-module__G1yxjG__categoryTileImage right=446",
+        "span.store-module__G1yxjG__categoryTileScrim right=446",
+        "span.store-module__G1yxjG__categoryTileCopy right=438",
+        "strong. right=438"
+      ],
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Shop=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": {
+        "barTop": 784,
+        "lastBottom": 755,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-390",
+      "page": "product",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Shop=true"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": {
+        "barTop": 781,
+        "lastBottom": 752,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-390",
+      "page": "about",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": {
+        "barTop": 781,
+        "lastBottom": 752,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-390",
+      "page": "cart",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Cart, 3 items=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": {
+        "barTop": 781,
+        "lastBottom": 752,
+        "clear": true
+      }
+    },
+    {
+      "device": "mobile-390",
+      "page": "messages",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": []
+    },
+    {
+      "device": "mobile-390",
+      "page": "inbox",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Messages=page"
+      ],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": null
+    },
+    {
+      "device": "mobile-390",
+      "page": "orders",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Orders=page"
+      ],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": null
+    },
+    {
+      "device": "mobile-390",
+      "page": "order",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Orders=true"
+      ],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": null
+    },
+    {
+      "device": "tablet-768",
+      "page": "home",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Home=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": {
+        "barTop": 961,
+        "lastBottom": 932,
+        "clear": true
+      }
+    },
+    {
+      "device": "tablet-768",
+      "page": "shop",
+      "overflowX": 0,
+      "wide": [
+        "a.store-module__G1yxjG__categoryTile  right=872",
+        "img.store-module__G1yxjG__categoryTileImage right=871",
+        "span.store-module__G1yxjG__categoryTileScrim right=871",
+        "span.store-module__G1yxjG__categoryTileCopy right=863",
+        "strong. right=863"
+      ],
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Shop=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": {
+        "barTop": 961,
+        "lastBottom": 932,
+        "clear": true
+      }
+    },
+    {
+      "device": "tablet-768",
+      "page": "product",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Shop=true"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": {
+        "barTop": 961,
+        "lastBottom": 932,
+        "clear": true
+      }
+    },
+    {
+      "device": "tablet-768",
+      "page": "about",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": {
+        "barTop": 961,
+        "lastBottom": 932,
+        "clear": true
+      }
+    },
+    {
+      "device": "tablet-768",
+      "page": "cart",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": true,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [
+        "Cart, 3 items=page"
+      ],
+      "accountCurrent": [],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": {
+        "barTop": 961,
+        "lastBottom": 932,
+        "clear": true
+      }
+    },
+    {
+      "device": "tablet-768",
+      "page": "messages",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": []
+    },
+    {
+      "device": "tablet-768",
+      "page": "inbox",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Messages=page"
+      ],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": null
+    },
+    {
+      "device": "tablet-768",
+      "page": "orders",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Orders=page"
+      ],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": null
+    },
+    {
+      "device": "tablet-768",
+      "page": "order",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Orders=true"
+      ],
+      "smallTapTargets": [],
+      "endClearOfBottomBar": null
+    },
+    {
+      "device": "desktop-1280",
+      "page": "home",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Home=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": []
+    },
+    {
+      "device": "desktop-1280",
+      "page": "shop",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Shop=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": []
+    },
+    {
+      "device": "desktop-1280",
+      "page": "product",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Shop=true"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": []
+    },
+    {
+      "device": "desktop-1280",
+      "page": "about",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "About=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": []
+    },
+    {
+      "device": "desktop-1280",
+      "page": "cart",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": []
+    },
+    {
+      "device": "desktop-1280",
+      "page": "messages",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Messages=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": []
+    },
+    {
+      "device": "desktop-1280",
+      "page": "inbox",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Messages=page"
+      ],
+      "smallTapTargets": []
+    },
+    {
+      "device": "desktop-1280",
+      "page": "orders",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Orders=page"
+      ],
+      "smallTapTargets": []
+    },
+    {
+      "device": "desktop-1280",
+      "page": "order",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Orders=true"
+      ],
+      "smallTapTargets": []
+    },
+    {
+      "device": "desktop-1440",
+      "page": "home",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Home=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": []
+    },
+    {
+      "device": "desktop-1440",
+      "page": "shop",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Shop=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": []
+    },
+    {
+      "device": "desktop-1440",
+      "page": "product",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Shop=true"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": []
+    },
+    {
+      "device": "desktop-1440",
+      "page": "about",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "About=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": []
+    },
+    {
+      "device": "desktop-1440",
+      "page": "cart",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": []
+    },
+    {
+      "device": "desktop-1440",
+      "page": "messages",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Messages=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": []
+    },
+    {
+      "device": "desktop-1440",
+      "page": "inbox",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Messages=page"
+      ],
+      "smallTapTargets": []
+    },
+    {
+      "device": "desktop-1440",
+      "page": "orders",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Orders=page"
+      ],
+      "smallTapTargets": []
+    },
+    {
+      "device": "desktop-1440",
+      "page": "order",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": false,
+      "bottomBarShown": false,
+      "sectionsCurrent": [],
+      "bottomBarCurrent": [],
+      "accountCurrent": [
+        "Orders=true"
+      ],
+      "smallTapTargets": []
+    },
+    {
+      "device": "tablet-1024-landscape",
+      "page": "messages",
+      "overflowX": 0,
+      "wide": [],
+      "sectionsShown": true,
+      "bottomBarShown": false,
+      "sectionsCurrent": [
+        "Messages=page"
+      ],
+      "bottomBarCurrent": [],
+      "accountCurrent": [],
+      "smallTapTargets": []
+    }
+  ],
+  "flows": [
+    {
+      "name": "desktop: conversation scroll",
+      "openedAtNewest": true,
+      "heldWhileReadingBack": true,
+      "newMessagesButtonGoesToNewest": true,
+      "sendingShownAtOnce": true,
+      "sentOnce": true,
+      "listTimesInsideRows": true,
+      "followedAfterSending": true
+    },
+    {
+      "name": "phone: chat screen",
+      "onOpen": {
+        "composerInView": true,
+        "composerBottom": 844,
+        "viewportHeight": 844,
+        "newestAboveComposer": true,
+        "storeHeaderHidden": true,
+        "bottomBarAbsent": true,
+        "overflowX": 0
+      },
+      "withKeyboard": {
+        "composerInView": true,
+        "composerBottom": 508,
+        "viewportHeight": 508,
+        "newestAboveComposer": true,
+        "storeHeaderHidden": true,
+        "bottomBarAbsent": true,
+        "overflowX": 0
+      },
+      "failureExplained": "Not sent - you've sent several messages in a short time. Wait a few minutes, then try again.",
+      "retriedOnce": true
+    }
+  ],
+  "shots": [
+    "home-mobile-360.png",
+    "shop-mobile-360.png",
+    "product-mobile-360.png",
+    "about-mobile-360.png",
+    "cart-mobile-360.png",
+    "messages-mobile-360.png",
+    "inbox-mobile-360.png",
+    "orders-mobile-360.png",
+    "order-mobile-360.png",
+    "home-mobile-390.png",
+    "shop-mobile-390.png",
+    "product-mobile-390.png",
+    "about-mobile-390.png",
+    "cart-mobile-390.png",
+    "messages-mobile-390.png",
+    "inbox-mobile-390.png",
+    "orders-mobile-390.png",
+    "order-mobile-390.png",
+    "home-mobile-390-full.jpg",
+    "product-mobile-390-full.jpg",
+    "order-mobile-390-full.jpg",
+    "home-tablet-768.png",
+    "shop-tablet-768.png",
+    "product-tablet-768.png",
+    "about-tablet-768.png",
+    "cart-tablet-768.png",
+    "messages-tablet-768.png",
+    "inbox-tablet-768.png",
+    "orders-tablet-768.png",
+    "order-tablet-768.png",
+    "home-desktop-1280.png",
+    "shop-desktop-1280.png",
+    "product-desktop-1280.png",
+    "about-desktop-1280.png",
+    "cart-desktop-1280.png",
+    "messages-desktop-1280.png",
+    "inbox-desktop-1280.png",
+    "orders-desktop-1280.png",
+    "order-desktop-1280.png",
+    "home-desktop-1280-full.jpg",
+    "product-desktop-1280-full.jpg",
+    "order-desktop-1280-full.jpg",
+    "home-desktop-1440.png",
+    "shop-desktop-1440.png",
+    "product-desktop-1440.png",
+    "about-desktop-1440.png",
+    "cart-desktop-1440.png",
+    "messages-desktop-1440.png",
+    "inbox-desktop-1440.png",
+    "orders-desktop-1440.png",
+    "order-desktop-1440.png",
+    "messages-desktop-1280-new-messages.png",
+    "messages-desktop-1280-sending.png",
+    "messages-desktop-1280.png",
+    "messages-mobile-390-keyboard.png",
+    "messages-mobile-390-failed.png",
+    "messages-mobile-390.png",
+    "messages-mobile-360-android.png",
+    "messages-mobile-390-signed-out.png",
+    "messages-tablet-1024.png"
+  ],
+  "errors": [],
+  "summary": {
+    "pagesChecked": 46,
+    "horizontalOverflow": [],
+    "smallTapTargets": [],
+    "footerUnderBottomBar": [],
+    "errors": 0
+  },
+  "finishedAt": "2026-11-18T15:09:55.655Z"
+}
