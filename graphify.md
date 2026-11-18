@@ -1754,6 +1754,7 @@ Routes under `web/src/app/` (`:name` is a dynamic segment):
 | `/api/stores/:id/orders` | route | Send this store an order request (POST), as the signed-in buyer. |
 | `/api/stores/:id/share` | route | A share-button tap on the web storefront, counted for the store owner. |
 | `/api/stores/:id/visit` | route | A store visit from the web storefront, passed on to the API with the visitor's own user agent (the API skips crawlers). |
+| `/api/stores/conversations` | route | The signed-in buyer's conversations with stores, newest first (GET ?user=<their id>, the id /api/stores/session gave the page): the website… |
 | `/api/stores/orders/:orderId/:action` | route | A buyer's action on their order (POST). |
 | `/api/stores/orders/:orderId` | route | One of the signed-in buyer's orders (GET). |
 | `/api/stores/orders` | route | The signed-in buyer's orders (GET ?scope=open\|closed\|all&offset=). |
@@ -1770,6 +1771,7 @@ Routes under `web/src/app/` (`:name` is a dynamic segment):
 | `/store/:name/p/:listingId` | page | One product in a store: https://broka.co.ke/store/<name>/p/<id> - a shop's product page: the path back through the store, the gallery, the… |
 | `/store/:name` | page | A store's home on the web: https://broka.co.ke/store/<name> - the shop's front window. |
 | `/store/:name/shop` | page | A store's full catalogue: https://broka.co.ke/store/<name>/shop - every product with search, departments, sorting, condition and price filt… |
+| `/store/account/messages` | page | A buyer's conversations with every store, on the web: https://broka.co.ke/store/account/messages - their BROKA account, beside their orders… |
 | `/store/legal/:doc` | page | The documents a new account accepts when it signs up on the website: https://broka.co.ke/store/legal/terms and /privacy. |
 | `/store/orders/:orderId` | page | One order: https://broka.co.ke/store/orders/<id>. |
 | `/store/orders` | page | A buyer's orders on the web: https://broka.co.ke/store/orders. |
@@ -1784,39 +1786,53 @@ Modules:
 - `web/src/lib/category-art.ts` — The web storefront reuses the very same category art shipped in the Flutter app.
 - `web/src/lib/config.ts` — Public deployment settings, read from the environment (see .env.example).
 - `web/src/lib/constellation.ts` — The layout of the connected-dots background: the same sky the app draws behind its home and sign-up screens (flutter_app/lib/widgets conste…
+- `web/src/lib/conversations.ts` — The buyer's conversations with stores, as the website lists them: one per conversation a store page can open - a store's own thread, or the…
 - `web/src/lib/escrow-providers.ts` — The escrow providers BROKA lists, as the API serves them (GET /escrow-providers, backend/api/domains/escrow_directory).
 - `web/src/lib/format.ts` — Display formatting shared by the storefront's pages and components.
 - `web/src/lib/forward.ts` — Passing the storefront's visit and share counts on to the API.
 - `web/src/lib/images.ts` — Turning the API's image fields into something an <img> can load.
+- `web/src/lib/last-store.ts` — The store this browser was last in, so the buyer's BROKA account pages their orders and messages, from every store - can offer the way back…
 - `web/src/lib/legal-text.ts` — The app's copies of BROKA's legal documents (flutter_app/assets/legal/), for the web storefront's sign-up.
 - `web/src/lib/legal.ts` — The documents a new BROKA account accepts, as the web storefront shows them, and the revisions it sends with the acceptance.
 - `web/src/lib/links.ts` — URLs the storefront builds: its own pages, links into the app, and link preview images.
+- `web/src/lib/messages.ts` — A conversation with a store as the website draws it: the messages in days, consecutive ones from the same side within a few minutes drawn a…
 - `web/src/lib/orders.ts` — Store orders as the API returns them (backend api/domains/store_orders/), and the words the storefront puts beside them.
 - `web/src/lib/ratings.ts` — The storefront's rating scales, in one place.
 - `web/src/lib/safety.ts` — What the storefront tells a buyer about paying - all of it, here, so it is one file to change when payments come back.
 - `web/src/lib/server-config.ts` — Settings only the server may read.
 - `web/src/lib/session-client.ts` — Whether this browser is signed in to BROKA, for the pages that need it (checkout, orders, messages).
 - `web/src/lib/session.ts` — A buyer's BROKA session on the web storefront, kept by this site's server.
+- `web/src/lib/store-nav.ts` — The sections of a store's website and where each one is, as its navigation shows them: the row under the header on a wide screen (StoreHead…
 - `web/src/lib/storefront.ts` — Server-side view data for the store and product pages: images resolved against the API, link previews, and structured data for search engin…
 - `web/src/lib/types.ts` — The shapes the BROKA API returns, as far as the storefront reads them.
 - `web/src/lib/visitor.ts` — This browser's anonymous visitor id, and the campaign link that brought it to a store - for the owner's counts (visits, cart additions) and…
 - `web/src/lib/web-api.ts` — The browser's calls to this site's own /api/stores routes - the only API the pages talk to.
+- `web/src/components/AccountHeader.tsx` — The top of the buyer's own BROKA pages - their orders and their messages, from every store.
 - `web/src/components/AddToCart.tsx` — Add to cart on a product card, and the − n + stepper it becomes once the product is in the cart - the way shops show it.
 - `web/src/components/AppButton.tsx` — A button into the BROKA app for this page: on Android it opens the app (or the APK download when the app isn't installed); elsewhere it's t…
-- `web/src/components/BrandBackground.tsx`
+- `web/src/components/BrandBackground.tsx` — Pages where the buyer reads and types - a conversation, the cart's checkout, their orders - keep the background still: the drifting particl…
 - `web/src/components/CartButton.tsx` — The cart in the store's header: how many items, and on a wide screen the total - one tap opens the cart drawer.
 - `web/src/components/CartDrawer.tsx` — The cart, sliding in from the side: what's in it, how many, the total, and the way to checkout.
 - `web/src/components/CatalogueControls.tsx` — Search and filters for a store's catalogue, drawn like the app's Home: a pill search field and, beside it, the filter button (with a dot wh…
 - `web/src/components/CategoryPills.tsx`
 - `web/src/components/CheckoutView.tsx` — The cart page: every product, how many, the total - and how to buy them.
 - `web/src/components/Constellation.tsx` — The glowing connected dots behind every page, as in the app.
+- `web/src/components/ConversationHeader.tsx` — The top of a conversation with a store: who it is with - the store's sign and name, a link to its shop - and, for a question about one prod…
+- `web/src/components/ConversationList.tsx` — The buyer's conversations with stores, as rows: with whom, about what, the newest line and when (lib/conversations.ts).
+- `web/src/components/EmptyState.tsx` — What a page shows when there is nothing to list - no products match, no orders yet, no conversations: what is missing, why it may be, and t…
 - `web/src/components/EnquiryThread.tsx` — Asking a store a question from its website - about the shop, or about one product - and reading its replies, with no app.
 - `web/src/components/EscrowBox.tsx` — "Pay with escrow" - the independent escrow services BROKA lists, where a buyer decides how to pay: the cart, the product page and the store…
 - `web/src/components/Gallery.tsx` — A product's photos: one large image and a strip of thumbnails.
 - `web/src/components/HomeLink.tsx` — A link to BROKA's home page.
 - `web/src/components/Icon.tsx` — The storefront's icons, as inline SVG: emoji and text glyphs (⌕, ✉, ⓘ) render differently on every phone and looked unfinished next to the…
+- `web/src/components/InboxView.tsx` — The buyer's conversations with every store on BROKA: their account's Messages page.
+- `web/src/components/LastStore.tsx` — Remembering the store a buyer is in (every store page renders RememberStore), and offering the way back to it from their BROKA account page…
 - `web/src/components/LegalText.tsx` — A legal document, from the Markdown the app ships (lib/legal-text.ts): the little of it these documents use - headings, paragraphs, "- " li…
+- `web/src/components/MessageComposer.tsx` — Writing to a store: a box that grows with the message (up to a few lines, then scrolls), and Send.
+- `web/src/components/MessageHistory.tsx` — A conversation with a store as bubbles: the buyer's on the right in BROKA's violet, the store's on the left beside its sign, in days, with…
+- `web/src/components/MessagingWorkspace.tsx` — The messages page of a store's website.
 - `web/src/components/OpenInApp.tsx` — "Open in the BROKA app" for Android visitors.
+- `web/src/components/OrderStatusBadge.tsx` — An order's status as a badge, in the colour of what it means for the buyer (lib/orders.ts orderTone) - the same badge in the list of orders…
 - `web/src/components/OrderView.tsx` — One order, as its buyer follows it on the web: where it is, what the store answered, what to do next, how the buyer is paying, and everythi…
 - `web/src/components/OrdersList.tsx` — The signed-in buyer's orders from every store, newest change first, with the ones waiting on them marked.
 - `web/src/components/Perks.tsx` — What buying from a store on BROKA means, in the strip shops put under their banner.
@@ -1828,12 +1844,14 @@ Modules:
 - `web/src/components/SiteFooter.tsx`
 - `web/src/components/SiteHeader.tsx` — The logo is unoptimized because /_next/image on broka.co.ke is the BROKA website's image service, which doesn't have the storefront's files.
 - `web/src/components/Stars.tsx` — The storefront's one star row: five outline stars with a fractional fill.
+- `web/src/components/StoreAvatar.tsx` — A store's sign wherever the store appears beside something else - a conversation, an order, a product's seller: its logo, or its initial on…
+- `web/src/components/StoreBottomNav.tsx` — The store's sections along the bottom of a phone, within thumb reach: Home, Shop, Messages, the cart and the buyer's orders - the places th…
 - `web/src/components/StoreDetails.tsx` — "Store details": everything a visitor arriving from a shared link needs to know about a store before buying from it - which store it is, wh…
 - `web/src/components/StoreFooter.tsx` — The foot of a store's pages, as a shop's website ends: the store, its departments, help with buying, and how paying works (the store direct…
-- `web/src/components/StoreHeader.tsx` — The top of every store page, the way a shop's website starts: a thin bar with what buying means, then the store's own header - its name as…
+- `web/src/components/StoreHeader.tsx` — The top of every store page, the way a shop's website starts: the store's own name as the brand ("Store on BROKA" under it - a seller shari…
 - `web/src/components/StoreHero.tsx` — The store's cover-led opening card: its own sign and name, what and where it sells, a compact trust row, then the two useful next actions.
 - `web/src/components/StoreLanding.tsx`
-- `web/src/components/StorefrontShell.tsx` — Shared, store-agnostic canvas over BROKA's connected constellation background.
+- `web/src/components/StorefrontShell.tsx` — Shared, store-agnostic canvas over BROKA's connected constellation background: every store page and the buyer's account pages.
 - `web/src/components/TrustChips.tsx` — The seller's real record: verified, completed deals, rating, deal time, since.
 - `web/src/components/VisitBeacon.tsx` — Counts this page view as a store visit, for the owner's stats, from the visitor's own browser (so crawlers that don't run scripts aren't co…
 - `web/src/components/WebCheckout.tsx` — Sending a store an order request from the website - on any phone, tablet or computer, with no app.
