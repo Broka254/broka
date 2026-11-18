@@ -1,0 +1,76 @@
+{
+  "pagesChecked": 80,
+  "horizontalOverflow": [],
+  "smallTapTargets": [],
+  "footerUnderBottomBar": [],
+  "undefinedClasses": [],
+  "fonts": [
+    "brokaInter",
+    "brokaSora"
+  ],
+  "consoleProblems": 5,
+  "errors": 0
+}
+[
+  {
+    "name": "drawer desktop",
+    "opened": true
+  },
+  {
+    "name": "filters phone",
+    "panelInside": {
+      "left": 16,
+      "right": 374,
+      "width": 390,
+      "inside": true
+    }
+  },
+  {
+    "name": "gallery",
+    "first": "Samsung Galaxy A15 · 128 GB, photo 1 of 4",
+    "afterNext": "Samsung Galaxy A15 · 128 GB, photo 2 of 4",
+    "afterSwipeLeft": "Samsung Galaxy A15 · 128 GB, photo 3 of 4",
+    "afterPrevious": "Samsung Galaxy A15 · 128 GB, photo 2 of 4"
+  },
+  {
+    "name": "phone: buy bar",
+    "atTop": 0,
+    "pastBuyBox": 1,
+    "layout": {
+      "barBottom": 768,
+      "navTop": 770,
+      "clear": true,
+      "height": 60
+    },
+    "atFooter": 0,
+    "buyNowWentTo": "/store/clanix/cart",
+    "cartAfter": [
+      "l1:1"
+    ]
+  },
+  {
+    "name": "desktop: conversation scroll",
+    "openedAtNewest": true,
+    "heldWhileReadingBack": true,
+    "newMessagesButtonGoesToNewest": true,
+    "sendingShownAtOnce": true,
+    "sentOnce": true,
+    "followedAfterSending": true
+  },
+  {
+    "name": "phone: chat screen",
+    "onOpen": {
+      "composerInView": true,
+      "storeHeaderHidden": true,
+      "bottomBarAbsent": true,
+      "overflowX": 0
+    },
+    "failureExplained": "Not sent - you've sent several messages in a short time. Wait a few minutes, then try again.",
+    "retriedOnce": true
+  }
+]
+mobile-360 [error] Failed to load resource: the server responded with a status of 404 (Not Found)
+mobile-390 [error] Failed to load resource: the server responded with a status of 404 (Not Found)
+tablet-768 [error] Failed to load resource: the server responded with a status of 404 (Not Found)
+desktop-1280 [error] Failed to load resource: the server responded with a status of 404 (Not Found)
+desktop-1440 [error] Failed to load resource: the server responded with a status of 404 (Not Found)

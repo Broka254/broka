@@ -1,0 +1,43 @@
+
+> broka-web@0.1.0 test
+> vitest run
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv5.0.1 [39m[90m/home/runner/work/broka/broka/web[39m
+
+ [32m✓[39m src/app/api/stores/stores-api.test.ts [2m([22m[2m65 tests[22m[2m)[22m[32m 104[2mms[22m[39m
+ [32m✓[39m src/components/order-view.test.tsx [2m([22m[2m24 tests[22m[2m)[22m[33m 1204[2mms[22m[39m
+ [32m✓[39m src/components/web-checkout.test.tsx [2m([22m[2m25 tests[22m[2m)[22m[33m 1126[2mms[22m[39m
+ [32m✓[39m src/components/components.test.tsx [2m([22m[2m51 tests[22m[2m)[22m[33m 1379[2mms[22m[39m
+ [32m✓[39m src/lib/lib.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m src/components/messaging.test.tsx [2m([22m[2m14 tests[22m[2m)[22m[33m 770[2mms[22m[39m
+ [32m✓[39m src/components/order-lists.test.tsx [2m([22m[2m11 tests[22m[2m)[22m[33m 568[2mms[22m[39m
+ [32m✓[39m src/lib/storefront.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/app/routes.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/app/store/[name]/messages/page.test.tsx [2m([22m[2m9 tests[22m[2m)[22m[33m 821[2mms[22m[39m
+ [32m✓[39m src/components/navigation.test.tsx [2m([22m[2m17 tests[22m[2m)[22m[33m 825[2mms[22m[39m
+ [32m✓[39m src/lib/conversations.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/lib/escrow-providers.test.ts [2m([22m[2m33 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/app/store/[name]/p/[listingId]/availability.test.tsx [2m([22m[2m7 tests[22m[2m)[22m[33m 769[2mms[22m[39m
+ [32m✓[39m src/lib/messages.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/app/store/[name]/shop/page.test.tsx [2m([22m[2m7 tests[22m[2m)[22m[33m 582[2mms[22m[39m
+ [32m✓[39m src/app/store/[name]/p/[listingId]/page.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/app/store/[name]/about/page.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[33m 414[2mms[22m[39m
+ [32m✓[39m src/lib/cart.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/lib/ratings.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/app/store/[name]/cart/page.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/app/store/orders/page.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 434[2mms[22m[39m
+ [32m✓[39m src/lib/store-nav.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/lib/legal.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/lib/category-art.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/lib/server-config.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m26 passed[39m[22m[90m (26)[39m
+[2m      Tests [22m [1m[32m364 passed[39m[22m[90m (364)[39m
+[2m   Start at [22m 20:58:05
+[2m   Duration [22m 13.35s[2m (environment 55%, tests 26%, setup 11%, transform 5%, import 4%)[22m
+
+[2mEnvironment [22m [33mjsdom was created 26 times[39m[2m · 19.46s total, 55% of tracked time[22m
+[2m            [22m [2mcreate it once per worker with [22m[33mpool: 'vmThreads'[39m[2m (keeps per-file isolation) or [22m[33misolate: false[39m[2m (shares it across files)[22m
+[2m            [22m [2mlearn more: https://vitest.dev/guide/improving-performance#test-environments[22m
+
