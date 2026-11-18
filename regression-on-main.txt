@@ -1,0 +1,103 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv5.0.1 [39m[90m/home/runner/work/broka/broka/web[39m
+
+ [31m❯[39m src/app/store/[name]/messages/page.test.tsx [2m([22m[2m9 tests[22m[2m | [22m[31m1 failed[39m[2m | [22m[33m8 skipped[39m[2m)[22m[32m 155[2mms[22m[39m
+   [31m❯[39m messaging a store on its website [2m(9)[22m
+     [2m[90m↓[39m[22m exists only with store orders on: otherwise the store page offers the app, as before
+     [2m[90m↓[39m[22m a paused store sends visitors to its page, and an unknown one is not found
+     [2m[90m↓[39m[22m tidies the address to the store's own link, keeping the product
+[31m     [31m×[31m marks Messages as the section the buyer is in - not About, which the page used to mark[39m[32m 154[2mms[22m[39m
+     [2m[90m↓[39m[22m keeps the product in view while asking about it, with the way back to it and on to the shop
+     [2m[90m↓[39m[22m lists the buyer's conversations with this store beside the open one, and the way to all of them
+     [2m[90m↓[39m[22m asks about the store's own product in that product's thread
+     [2m[90m↓[39m[22m on a phone the page is the conversation alone: no list of conversations is read for it
+     [2m[90m↓[39m[22m a product from another store is not this store's to answer: the store's own thread opens
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/app/store/[name]/messages/page.test.tsx[2m > [22mmessaging a store on its website[2m > [22mmarks Messages as the section the buyer is in - not About, which the page used to mark
+[31m[1mTestingLibraryElementError[22m: Unable to find an accessible element with the role "link" and name "Messages"
+
+Here are the accessible roles:
+
+  link:
+
+  Name "Home":
+  [36m<a[31m
+    [33mhref[31m=[32m"/store/clanix"[31m
+  [36m/>[31m
+
+  Name "Shop":
+  [36m<a[31m
+    [33mhref[31m=[32m"/store/clanix/shop"[31m
+  [36m/>[31m
+
+  Name "Electronics":
+  [36m<a[31m
+    [33mhref[31m=[32m"/store/clanix/shop?category=Electronics"[31m
+  [36m/>[31m
+
+  Name "About":
+  [36m<a[31m
+    [33maria-current[31m=[32m"page"[31m
+    [33mclass[31m=[32m"_storeNavActive_680caa"[31m
+    [33mhref[31m=[32m"/store/clanix/about"[31m
+  [36m/>[31m
+
+  --------------------------------------------------
+
+Ignored nodes: comments, script, style
+[36m<nav[31m
+  [33maria-label[31m=[32m"Store sections"[31m
+  [33mclass[31m=[32m"_storeNav_680caa"[31m
+[36m>[31m
+  [36m<div[31m
+    [33mclass[31m=[32m"_storeNavInner_680caa"[31m
+  [36m>[31m
+    [36m<a[31m
+      [33mhref[31m=[32m"/store/clanix"[31m
+    [36m>[31m
+      [0mHome[0m
+    [36m</a>[31m
+    [36m<a[31m
+      [33mhref[31m=[32m"/store/clanix/shop"[31m
+    [36m>[31m
+      [0mShop[0m
+    [36m</a>[31m
+    [36m<a[31m
+      [33mhref[31m=[32m"/store/clanix/shop?category=Electronics"[31m
+    [36m>[31m
+      [0mElectronics[0m
+    [36m</a>[31m
+    [36m<a[31m
+      [33maria-current[31m=[32m"page"[31m
+      [33mclass[31m=[32m"_storeNavActive_680caa"[31m
+      [33mhref[31m=[32m"/store/clanix/about"[31m
+    [36m>[31m
+      [0mAbout[0m
+    [36m</a>[31m
+  [36m</div>[31m
+[36m</nav>[31m[39m
+[90m [2m❯[22m Object.getElementError node_modules/@testing-library/dom/dist/config.js:[2m37:19[22m[39m
+[90m [2m❯[22m node_modules/@testing-library/dom/dist/query-helpers.js:[2m76:38[22m[39m
+[90m [2m❯[22m node_modules/@testing-library/dom/dist/query-helpers.js:[2m52:17[22m[39m
+[90m [2m❯[22m node_modules/@testing-library/dom/dist/query-helpers.js:[2m95:19[22m[39m
+[36m [2m❯[22m src/app/store/[name]/messages/page.test.tsx:[2m91:29[22m[39m
+    [90m 89|[39m     render(await MessagesPage(props()))
+    [90m 90|[39m     const sections = screen.getByRole('navigation', { name: 'Store sec…
+    [90m 91|[39m     expect(within(sections).getByRole('link', { name: 'Messages' }).ge…
+    [90m   |[39m                             [31m^[39m
+    [90m 92|[39m     expect(within(sections).getByRole('link', { name: 'About' }).hasAt…
+    [90m 93|[39m     await screen.findByTestId('enquiry-thread')
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[33m8 skipped[39m[90m (9)[39m
+[2m   Start at [22m 14:41:34
+[2m   Duration [22m 1.07s[2m (environment 51%, transform 19%, tests 16%, setup 9%, import 5%)[22m
+
+
+::error file=/home/runner/work/broka/broka/web/src/app/store/[name]/messages/page.test.tsx,title=src/app/store/[name]/messages/page.test.tsx > messaging a store on its website > marks Messages as the section the buyer is in - not About%2C which the page used to mark,line=91,column=29::TestingLibraryElementError: Unable to find an accessible element with the role "link" and name "Messages"%0A%0AHere are the accessible roles:%0A%0A  link:%0A%0A  Name "Home":%0A  <a%0A    href="/store/clanix"%0A  />%0A%0A  Name "Shop":%0A  <a%0A    href="/store/clanix/shop"%0A  />%0A%0A  Name "Electronics":%0A  <a%0A    href="/store/clanix/shop?category=Electronics"%0A  />%0A%0A  Name "About":%0A  <a%0A    aria-current="page"%0A    class="_storeNavActive_680caa"%0A    href="/store/clanix/about"%0A  />%0A%0A  --------------------------------------------------%0A%0AIgnored nodes: comments, script, style%0A<nav%0A  aria-label="Store sections"%0A  class="_storeNav_680caa"%0A>%0A  <div%0A    class="_storeNavInner_680caa"%0A  >%0A    <a%0A      href="/store/clanix"%0A    >%0A      Home%0A    </a>%0A    <a%0A      href="/store/clanix/shop"%0A    >%0A      Shop%0A    </a>%0A    <a%0A      href="/store/clanix/shop?category=Electronics"%0A    >%0A      Electronics%0A    </a>%0A    <a%0A      aria-current="page"%0A      class="_storeNavActive_680caa"%0A      href="/store/clanix/about"%0A    >%0A      About%0A    </a>%0A  </div>%0A</nav>%0A ❯ Object.getElementError node_modules/@testing-library/dom/dist/config.js:37:19%0A ❯ node_modules/@testing-library/dom/dist/query-helpers.js:76:38%0A ❯ node_modules/@testing-library/dom/dist/query-helpers.js:52:17%0A ❯ node_modules/@testing-library/dom/dist/query-helpers.js:95:19%0A ❯ src/app/store/[name]/messages/page.test.tsx:91:29%0A%0A
+vitest exit code on main's code: 1

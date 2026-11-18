@@ -1,0 +1,34 @@
+FAILED messaging desktop flows: locator.waitFor: Error: strict mode violation: getByText('We also have the light blue one in stock') resolved to 2 elements:
+    1) <span class="messaging-module__PqbbCW__rowPreview messaging-module__PqbbCW__rowPreviewTheirs">We also have the light blue one in stock, if you …</span> aka getByRole('link', { name: 'Samsung Galaxy A15 · 128 GB 17:43 We also have the light blue one in stock, if' })
+    2) <p class="messaging-module__PqbbCW__bubble  ">We also have the light blue one in stock, if you …</p> aka getByTestId('enquiry-thread').getByText('We also have the light blue')
+
+Call log:
+  - waiting for getByText('We also have the light blue one in stock') to be visible
+
+    at /home/runner/work/broka/broka/scratch/storefront-qa/shoot.mjs:202:68
+    at async step (/home/runner/work/broka/broka/scratch/storefront-qa/shoot.mjs:144:5)
+    at async file:///home/runner/work/broka/broka/scratch/storefront-qa/shoot.mjs:182:1 {
+  log: [
+    "  - waiting for getByText('We also have the light blue one in stock') to be visible"
+  ]
+}
+FAILED messaging phone flows: locator.textContent: Error: strict mode violation: getByRole('alert') resolved to 2 elements:
+    1) <p role="alert">…</p> aka getByText('Not sent - you\'ve sent')
+    2) <div role="alert" aria-live="assertive" id="__next-route-announcer__"></div> aka locator('[id="__next-route-announcer__"]')
+
+Call log:
+  - waiting for getByRole('alert')
+
+    at /home/runner/work/broka/broka/scratch/storefront-qa/shoot.mjs:267:58
+    at async step (/home/runner/work/broka/broka/scratch/storefront-qa/shoot.mjs:144:5)
+    at async file:///home/runner/work/broka/broka/scratch/storefront-qa/shoot.mjs:227:1 {
+  log: [ "  - waiting for getByRole('alert')" ]
+}
+{
+  "pagesChecked": 46,
+  "horizontalOverflow": [],
+  "smallTapTargets": [],
+  "footerUnderBottomBar": [],
+  "errors": 2
+}
+[]
