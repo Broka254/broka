@@ -80,6 +80,11 @@ async def confirm_delivery(
         await db.commit()
         raise HTTPException(status_code=409, detail="This deal has already been finalised")
     deal = locked_deal
+    # Paid out, its units are sold - with payments off, the first moment
+    # they count at all. Counted under the listing's lock, after the
+    # deal's, like every payout (domains/listings/inventory.py, DEAL MOVES).
+    from api.domains.listings import inventory
+    move = await inventory.lock_for_deal_move(db, deal, DealStatus.released)
 
     now = datetime.utcnow()
     deal.status = DealStatus.released
@@ -94,6 +99,7 @@ async def confirm_delivery(
     if seller:
         seller.completed_deals = (seller.completed_deals or 0) + 1
 
+    await inventory.settle_deal_move(db, move)
     await db.commit()
     logger.info("Escrow released for deal %s → seller %s", deal_id, deal.seller_id)
     return {

@@ -21,9 +21,10 @@ a sold listing "completed". Now:
              changed here
 
 The listing moves when a deal is agreed (EscrowService.finalize_deal, under
-the listing's row lock) and in the five-minute sweep (sync_listing_stock),
-which catches every other way a deal ends - refunds, cancellations, payouts
-- without touching the money paths that end them.
+the listing's row lock), when a deal is paid out (every payout path, under
+the same lock - inventory.py, DEAL MOVES) and in the five-minute sweep
+(sync_listing_stock), which catches the other ways a deal ends - refunds and
+cancellations - without touching the money paths that end them.
 
 Auctions are left alone: one item, sold through its own lifecycle
 (domains/auctions/lifecycle.py), which already sets these statuses itself.
@@ -73,6 +74,19 @@ def holding_deal():
     """SQL: a deal whose units are off sale - for the shared count
     (listings/inventory.py)."""
     return _holding_deal()
+
+
+def holds_units(status) -> bool:
+    """_holding_deal() for one status, in Python: whether a deal in `status`
+    has its units off sale. The two must agree - inventory.lock_for_deal_move
+    decides from this whether a deal's move changes the count, and the
+    count itself is _holding_deal()."""
+    value = getattr(status, "value", status)
+    if value is None:
+        return False  # NOT IN / = leave a NULL status out in SQL too
+    if deals_hold_stock():
+        return value not in {s.value for s in _RELEASING_STATUSES}
+    return value == DealStatus.released.value
 
 # A deal in one of these holds its units. Refunded and cancelled deals gave
 # them back; "negotiating" is not an agreement (every Deal row is created at

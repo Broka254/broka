@@ -2471,6 +2471,13 @@ async def send_message(
                 f"instantly here. You don't need to do anything else."
             ), via_ai=False)
 
+        # Paid out, the deal's units are sold - with payments off, the first
+        # moment they count at all: the listing is locked after the deal
+        # (held above) and counted, like every payout
+        # (domains/listings/inventory.py, DEAL MOVES). Nothing below calls
+        # out before the commit.
+        from api.domains.listings import inventory
+        stock_move = await inventory.lock_for_deal_move(db, active_deal, DealStatus.released)
         now = _dt.utcnow()
         payout = round(active_deal.agreed_price * (1 - COMMISSION_RATE), 2)
         active_deal.status = DealStatus.released
@@ -2487,6 +2494,7 @@ async def send_message(
         await ledger.record_escrow_released(
             db, active_deal.id, active_deal.agreed_price, active_deal.commission,
         )
+        await inventory.settle_deal_move(db, stock_move)
         await db.commit()
         # After commit: this is what writes the ledger entry and updates an
         # open deal screen - the chat release used to publish nothing.
