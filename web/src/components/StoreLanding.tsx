@@ -15,8 +15,8 @@ import { type ProductCardData, filtersQuery } from '@/lib/catalogue'
 import { categoryArtPath } from '@/lib/category-art'
 import { plural } from '@/lib/format'
 import { storeDetailsPath, storeMessagesPath, storeShopPath } from '@/lib/links'
-import { replyTimeLabel } from '@/lib/ratings'
-import type { StoreCategory } from '@/lib/types'
+import { buyerStars, replyTimeLabel, reviewCountLabel, reviewDate } from '@/lib/ratings'
+import type { StoreCategory, StoreReviews } from '@/lib/types'
 import type { StoreView } from '@/lib/storefront'
 
 import { AppButton } from './AppButton'
@@ -24,6 +24,7 @@ import { Icon } from './Icon'
 import { Perks } from './Perks'
 import { Price } from './Price'
 import { ProductCard } from './ProductCard'
+import { Stars } from './Stars'
 import styles from './store-landing.module.css'
 
 const HEX = /^#[0-9a-f]{6}$/i
@@ -36,11 +37,14 @@ export function StoreLanding({
   categories,
   products,
   storeId,
+  reviews = null,
 }: {
   view: StoreView
   categories: StoreCategory[]
   products: ProductCardData[]
   storeId: string
+  /** The store's buyer reviews, for "What buyers say"; null hides it. */
+  reviews?: StoreReviews | null
 }) {
   const { store } = view
   const owner = store.owner
@@ -66,10 +70,21 @@ export function StoreLanding({
     ? `Explore the collection from ${store.name} and see what is available today.`
     : `Browse ${store.name}'s departments and check back as new products are added.`)
   const deals = owner?.completed_deals ?? 0
-  // Where it is or where it delivers, when it opens, how fast it answers:
-  // only what the store's record says, never a guess.
-  const status = view.isVirtual ? view.delivery : view.hours.length > 0 ? view.openLabel : null
+  // When it opens, for a shop with premises and hours: only what the
+  // store's record says, never a guess. (An online store's delivery area is
+  // already on the line under its name.)
+  const status = !view.isVirtual && view.hours.length > 0 ? view.openLabel : null
   const reply = replyTimeLabel(store.response_minutes)
+  const fallbackArt = categoryArtPath(store.category)
+  // Buyer reviews worth quoting: the ones with words in them, newest first
+  // as the API sends them.
+  const quoted = (reviews?.reviews ?? [])
+    .flatMap((review) => {
+      const text = review.comment?.trim()
+      return text ? [{ ...review, text }] : []
+    })
+    .slice(0, 3)
+  const reviewSummary = reviews?.summary && reviews.summary.count > 0 ? reviews.summary : null
   const [tintA, tintB] = view.gradient
   const lit = {
     '--tint-a': tintA,
@@ -150,7 +165,16 @@ export function StoreLanding({
                   fetchPriority="high"
                 />
               ) : (
-                <span className={styles.visualMonogram} aria-hidden="true">{view.initial}</span>
+                // No cover yet: the store's initial, lit, over its
+                // category's art held back in the dark - the store's own
+                // sign first, not a stock picture passed off as its shop.
+                <span className={styles.visualFallback} aria-hidden="true">
+                  {fallbackArt && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={fallbackArt} alt="" className={styles.visualFallbackArt} />
+                  )}
+                  <span className={styles.visualMonogram}>{view.initial}</span>
+                </span>
               )}
               <span className={styles.visualShade} />
               <span className={styles.visualFrame} />
@@ -240,6 +264,55 @@ export function StoreLanding({
               {shownProducts.map((product) => (
                 <ProductCard key={product.id} product={product} storeId={storeId} />
               ))}
+            </div>
+          </section>
+        )}
+
+        {reviewSummary && quoted.length > 0 && (
+          <section className={styles.section} aria-labelledby="buyers-title" data-testid="buyer-quotes">
+            <div className={styles.sectionHead}>
+              <div>
+                <p className={styles.sectionEyebrow}>FROM BUYERS ON BROKA</p>
+                <h2 id="buyers-title">What buyers say</h2>
+              </div>
+              <Link href={`${storeDetailsPath(store.slug)}#reviews`} className={styles.textLink}>
+                All reviews <Icon name="arrow" size={15} />
+              </Link>
+            </div>
+            <div className={styles.quotes}>
+              {/* The buyer-review average is out of 5 - a different figure
+                  from the store's 0-10 score in the hero, and labelled so. */}
+              <div className={styles.quoteSummary}>
+                <p className={styles.quoteScore}>
+                  {(reviewSummary.avg ?? 0).toFixed(1)}
+                  <span>/5</span>
+                </p>
+                <Stars
+                  value={buyerStars(reviewSummary.avg ?? 0)}
+                  label={`Buyer rating ${(reviewSummary.avg ?? 0).toFixed(1)} out of 5`}
+                  size={17}
+                />
+                <p className={styles.quoteCount}>From {reviewCountLabel(reviewSummary.count)}</p>
+              </div>
+              {quoted.map((review) => {
+                const name = review.reviewer_name?.trim() || 'BROKA buyer'
+                const date = reviewDate(review.created_at)
+                return (
+                  <figure key={review.id} className={styles.quote}>
+                    <Stars value={review.rating} label={`${review.rating} out of 5 stars`} size={14} />
+                    <blockquote>{review.text}</blockquote>
+                    <figcaption>
+                      <span className={styles.quoteAvatar} aria-hidden="true">
+                        {(Array.from(name)[0] ?? 'B').toUpperCase()}
+                      </span>
+                      <span>
+                        <strong>{name}</strong>
+                        {date && <small>{date}</small>}
+                      </span>
+                    </figcaption>
+                  </figure>
+                )
+              })}
             </div>
           </section>
         )}

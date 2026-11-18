@@ -86,6 +86,19 @@
   gap: 10px;
 }
 
+/* A panel decides from its own width, not the window's: in the cart's
+   order summary, beside the products, two choices side by side left each
+   line of their text two or three words wide. */
+.panel {
+  container-type: inline-size;
+}
+
+@container (max-width: 440px) {
+  .choices {
+    grid-template-columns: 1fr;
+  }
+}
+
 .choice {
   display: flex;
   gap: 10px;

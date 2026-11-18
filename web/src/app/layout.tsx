@@ -15,7 +15,9 @@ import './globals.css'
 // nothing (CI and Vercel build without a network call for fonts), and a
 // visitor's browser asks no third party for them. Inter for reading and
 // the controls, Sora for the store's name, headings and prices.
-const sans = localFont({
+// The family names in the CSS come from these constants' names: distinct
+// ones, so a page can never mean a system font called "sans".
+const brokaInter = localFont({
   src: './fonts/inter-latin-wght.woff2',
   weight: '100 900',
   style: 'normal',
@@ -23,7 +25,7 @@ const sans = localFont({
   variable: '--font-inter',
 })
 
-const display = localFont({
+const brokaSora = localFont({
   src: './fonts/sora-latin-wght.woff2',
   weight: '100 800',
   style: 'normal',
@@ -59,7 +61,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${sans.variable} ${display.variable}`}>
+    <html lang="en" className={`${brokaInter.variable} ${brokaSora.variable}`}>
       <body>
         <BrandBackground />
         <OpenInApp />

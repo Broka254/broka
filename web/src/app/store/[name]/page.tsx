@@ -1,7 +1,8 @@
 // A store's home on the web: https://broka.co.ke/store/<name> - the shop's
 // front window. Its cover photo and name, what buying here means, its
-// departments, a few featured and new products, and the way into the full
-// catalogue (/shop) and the business behind it (/about).
+// departments, a few featured and new products, what its buyers say, and
+// the way into the full catalogue (/shop) and the business behind it
+// (/about).
 //
 // Rendered on the server (link previews and search engines read it as is);
 // store data is cached for a minute. Filtered views live on /shop, so a
@@ -15,11 +16,12 @@ import { StoreFooter } from '@/components/StoreFooter'
 import { StoreHeader } from '@/components/StoreHeader'
 import { StorefrontShell } from '@/components/StorefrontShell'
 import { VisitBeacon } from '@/components/VisitBeacon'
-import { getStore, getStoreCategories, getStoreListings } from '@/lib/api'
+import { getStore, getStoreCategories, getStoreListings, getStoreReviews } from '@/lib/api'
 import { filtersQuery, readFilters, toProductCard } from '@/lib/catalogue'
 import { campaignToken, storeCartPath, storeShopPath, viaTag } from '@/lib/links'
 import { API_URL } from '@/lib/server-config'
 import { jsonLdScript, storeDescription, storeJsonLd, storePreviewImage, storeView } from '@/lib/storefront'
+import type { Listing, StoreCategory, StoreReviews } from '@/lib/types'
 
 type Props = {
   params: Promise<{ name: string }>
@@ -72,13 +74,16 @@ export default async function StorePage({ params, searchParams }: Props) {
   }
 
   const view = storeView(store)
-  const [categories, featured, newest] = store.is_active
+  const [categories, featured, newest, reviews]: [StoreCategory[], Listing[], Listing[], StoreReviews | null] = store.is_active
     ? await Promise.all([
         getStoreCategories(store.id),
         getStoreListings(store.id, { limit: 8 }),
         getStoreListings(store.id, { sort: 'newest', limit: 8 }),
+        // "What buyers say" is additive, as on the store details page: a
+        // reviews read that fails leaves the section out, never the page.
+        getStoreReviews(store.id).catch(() => null),
       ])
-    : [[], [], []]
+    : [[], [], [], null]
   const featuredCards = featured.map((listing) => toProductCard(listing, store.slug, API_URL))
   const featuredIds = new Set(featuredCards.map((product) => product.id))
   const newestCards = newest
@@ -89,7 +94,7 @@ export default async function StorePage({ params, searchParams }: Props) {
   return (
     <StorefrontShell>
       <StoreHeader view={view} active="home" searchBase={shopPath} />
-      <StoreLanding view={view} categories={categories} products={landingProducts} storeId={store.id} />
+      <StoreLanding view={view} categories={categories} products={landingProducts} storeId={store.id} reviews={reviews} />
       <div className="page">
         <VisitBeacon storeId={store.id} via={via} campaign={campaign} />
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLdScript(storeJsonLd(view)) }} />
