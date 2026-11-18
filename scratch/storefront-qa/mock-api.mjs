@@ -522,7 +522,13 @@ const routes = [
     return s ? [200, s] : [404, { detail: 'Store not found' }]
   }],
   ['GET', /^\/stores\/([\w-]+)\/categories$/, (m) => [200, CATEGORIES[m[1]] ?? []]],
-  ['GET', /^\/stores\/([\w-]+)\/reviews$/, () => [200, REVIEWS]],
+  // Clanix has reviews; Java Home has a summary but no review with words in
+  // it (no quotes to show); the new store has none at all.
+  ['GET', /^\/stores\/([\w-]+)\/reviews$/, (m) => [200, m[1] === 's1'
+    ? REVIEWS
+    : m[1] === 's2'
+      ? { ...REVIEWS, summary: { avg: 4.0, count: 1, distribution: { 5: 0, 4: 1, 3: 0, 2: 0, 1: 0 } }, reviews: [{ id: 'r9', rating: 4, comment: null, created_at: ago(60 * 24 * 3), reviewer_name: 'Kevin N.' }] }
+      : { summary: { avg: null, count: 0, distribution: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 } }, reviews: [], seller_standing: null }]],
   ['GET', /^\/stores\/([\w-]+)\/listings$/, (m, q) => {
     let rows = LISTINGS.filter((l) => l.store_id === m[1])
     const search = (q.get('search') ?? '').toLowerCase()
