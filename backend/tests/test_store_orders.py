@@ -1359,6 +1359,12 @@ async def _pay_out(client, token: str, deal_id: str):
     return await client.post(f"/deal/{deal_id}/confirm-delivery", json={}, headers=_auth(token))
 
 
+async def _deal_status(deal_id: str) -> DealStatus:
+    """The deal's status as committed - what another transaction sees."""
+    async with db_module.AsyncSessionLocal() as db:
+        return (await db.execute(select(Deal.status).where(Deal.id == deal_id))).scalar_one()
+
+
 async def _shelf(listing_id: str):
     """The listing's units by the shared count (listings/inventory.py) -
     the figures every decision on either channel is taken by."""
@@ -1549,8 +1555,9 @@ class TestCrossChannelStock:
         payout = asyncio.create_task(_pay_out(client, deal_token, deal_id))
         await asyncio.wait_for(in_payout.wait(), 30)
         accept = asyncio.create_task(_post(client, seller_token, f"/orders/{oid}/accept"))
-        # Waiting on the listing's lock, not counting.
+        # Waiting on the listing's lock, not counting - nothing reserved yet.
         assert await _waits_on_a_lock(accept), (await accept).text
+        assert (await _listing_row(lid))[1] == 0
         go_on.set()
         paid_out, accepted = await asyncio.wait_for(asyncio.gather(payout, accept), 30)
 
@@ -1610,8 +1617,12 @@ class TestCrossChannelStock:
         accept = asyncio.create_task(_post(client, seller_token, f"/orders/{oid}/accept"))
         await asyncio.wait_for(counting.wait(), 30)
         payout = asyncio.create_task(_pay_out(client, deal_token, deal_id))
-        # Waiting on the listing's lock, not committing.
+        # Waiting on the listing's lock before it releases anything. (The
+        # old payout committed first, and only then waited: its chat note
+        # about the payout needs the listing row, which the acceptance
+        # held.)
         assert await _waits_on_a_lock(payout), (await payout).text
+        assert await _deal_status(deal_id) == DealStatus.paid
         go_on.set()
         accepted, paid_out = await asyncio.wait_for(asyncio.gather(accept, payout), 30)
 
