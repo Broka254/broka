@@ -19,7 +19,7 @@ and no stock controls.
 | Part | Where |
 |---|---|
 | Backend | `backend/api/domains/store_orders/` (`lifecycle.py`, `pricing.py`, `stock.py`, `service.py`, `notify.py`, `analytics.py`, `messages.py`, `router.py`), `backend/api/models/store_order.py` |
-| Web | `web/src/lib/session.ts` (server), `web/src/app/api/stores/{session,orders,[id]/orders,[id]/enquiries,[id]/cart-events}`, `web/src/components/{WebCheckout,OrderView,OrdersList,EnquiryThread,SignInPanel}.tsx`, pages `/store/orders`, `/store/orders/<id>`, `/store/<name>/messages`, `/store/legal/<doc>` |
+| Web | `web/src/lib/session.ts` (server), `web/src/app/api/stores/{session,orders,conversations,[id]/orders,[id]/enquiries,[id]/cart-events}`, `web/src/components/{WebCheckout,OrderView,OrdersList,EnquiryThread,MessagingWorkspace,ConversationList,SignInPanel}.tsx`, `web/src/lib/{conversations,messages}.ts`, pages `/store/orders`, `/store/orders/<id>`, `/store/<name>/messages`, `/store/account/messages`, `/store/legal/<doc>` |
 | App | `flutter_app/lib/features/stores/presentation/{store_orders_tab,store_order_screen}.dart`, `widgets/store_stock_sheet.dart`, `domain/models/store_order.dart` |
 | Tests | `backend/tests/test_store_order_rules.py`, `test_store_orders.py`, `test_store_orders_migration.py`, `test_deal_payout_stock.py`; `web/src/**/*{orders,checkout,stores-api,legal,availability}*.test.*`; `flutter_app/test/store_orders_test.dart` |
 
@@ -265,12 +265,28 @@ page keeps the app handoff (the production default).
   returns the same order. A refusal names the product it is about.
 - **Order page** (`/store/orders/<id>`): status, the store's changes in words,
   deadline, actions behind confirmations, payment choice (direct or a listed
-  independent provider) and reports, history. **Orders list**
-  (`/store/orders`). Never indexed.
+  independent provider) and reports, history, and the store it is with -
+  its page, its messages, each product's page. **Orders list**
+  (`/store/orders`), every store's orders, each naming its store. Both wear
+  the buyer's account header (`AccountHeader.tsx`), not a store's. Never
+  indexed.
 - **Messages** (`/store/<name>/messages`, `?product=`): the same conversation
   the app shows, read from the existing negotiate history endpoints (no Zeno
   notes, no media addresses) and written through the rate-limited
   `POST /stores/{id}/enquiries` (12 per user, 60 per address, per 10 minutes).
+  The buyer's own messages carry back the `client_msg_id` they were sent
+  with, so a message shown as "Sending..." is replaced by its stored copy
+  rather than drawn twice, and a retry is the same message.
+- **Conversations** (`GET /api/stores/conversations?user=<id>`, read-only):
+  the buyer's side of `GET /negotiate/inbox/{user_id}`, cut down to what a
+  store page can open - store threads, and product threads whose listing
+  belongs to a store with web messages. The inbox names a product thread's
+  listing, not its store, so each listing and store is looked up through
+  the cached public reads (at most 40 threads, 6 lookups at a time). Shown
+  beside the open conversation on a wide screen, and on the account's
+  Messages page (`/store/account/messages`; "account" is a reserved link
+  name). No unread counts: the website marks nothing read (`mark-read` would
+  also send the seller "seen" receipts), so they would never go down.
 - Product pages say "Out of stock" (counted stock, none left) or "not taking
   orders for this product for now" (paused), separately from "no longer
   available" (sold, removed, or every unit of a stated quantity promised).
