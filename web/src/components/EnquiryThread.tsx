@@ -313,6 +313,14 @@ export function EnquiryThread({
 
   const busy = pending.some((p) => p.status === 'sending')
 
+  // A message that fails grows by its reason and its Retry, below what was
+  // in view: brought into view - on a phone they were left under the box
+  // pinned along the bottom - unless the buyer has scrolled away.
+  const failures = pending.filter((p) => p.status === 'failed').length
+  useEffect(() => {
+    if (failures && nearLatest.current) scrollToLatest(smoothly())
+  }, [failures, scrollToLatest])
+
   const submit = () => {
     const content = text.trim()
     if (sending.current || content.length < MIN_MESSAGE_LENGTH) return

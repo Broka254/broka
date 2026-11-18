@@ -156,6 +156,24 @@ describe('writing to a store', () => {
     expect(stub.to(THREAD, 'POST')).toHaveLength(0)
   })
 
+  it('brings a failed message, with its reason and Retry, into view', async () => {
+    stubFetch({
+      '/api/stores/session': json(SIGNED_IN),
+      [THREAD]: (c: Call) =>
+        c.method === 'GET'
+          ? json({ messages: [] })
+          : json({ error: { code: 'RATE_LIMITED', message: 'Too many tries.' } }, 429),
+    })
+    render(<EnquiryThread storeId="s1" storeName="Clanix" />)
+    fireEvent.change(await box(), { target: { value: 'Can you deliver it this evening?' } })
+    fireEvent.click(sendButton())
+    // Once to the message as it is sent...
+    await waitFor(() => expect(scrolled).toHaveBeenCalledTimes(1))
+    await screen.findByRole('button', { name: 'Retry' })
+    // ...and again once it has grown by its reason and its Retry.
+    await waitFor(() => expect(scrolled).toHaveBeenCalledTimes(2))
+  })
+
   it('a refusal is not retried - the buyer gets the message back to change it', async () => {
     const stub = stubFetch({
       '/api/stores/session': json(SIGNED_IN),
