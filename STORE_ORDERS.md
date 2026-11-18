@@ -21,7 +21,7 @@ and no stock controls.
 | Backend | `backend/api/domains/store_orders/` (`lifecycle.py`, `pricing.py`, `stock.py`, `service.py`, `notify.py`, `analytics.py`, `messages.py`, `router.py`), `backend/api/models/store_order.py` |
 | Web | `web/src/lib/session.ts` (server), `web/src/app/api/stores/{session,orders,[id]/orders,[id]/enquiries,[id]/cart-events}`, `web/src/components/{WebCheckout,OrderView,OrdersList,EnquiryThread,SignInPanel}.tsx`, pages `/store/orders`, `/store/orders/<id>`, `/store/<name>/messages`, `/store/legal/<doc>` |
 | App | `flutter_app/lib/features/stores/presentation/{store_orders_tab,store_order_screen}.dart`, `widgets/store_stock_sheet.dart`, `domain/models/store_order.dart` |
-| Tests | `backend/tests/test_store_order_rules.py`, `test_store_orders.py`, `test_store_orders_migration.py`; `web/src/**/*{orders,checkout,stores-api,legal,availability}*.test.*`; `flutter_app/test/store_orders_test.dart` |
+| Tests | `backend/tests/test_store_order_rules.py`, `test_store_orders.py`, `test_store_orders_migration.py`, `test_deal_payout_stock.py`; `web/src/**/*{orders,checkout,stores-api,legal,availability}*.test.*`; `flutter_app/test/store_orders_test.dart` |
 
 ---
 
@@ -51,7 +51,7 @@ ready_for_pickup/dispatched/delivered ──confirm_received──▶ completed
 | Confirming | The buyer confirms one exact offer: `POST /orders/{id}/confirm {revision}`. A stale revision is `409 ORDER_REVISION_STALE`. |
 | Cancelling | The buyer may cancel until the store starts preparing (reason optional). The store may cancel from `confirmed` to `dispatched`, and must give a reason (`ORDER_REASON_REQUIRED`). Neither can once it is reported delivered. |
 | Declining | Store only, with a reason the buyer sees. |
-| Expiry | A request the store hasn't answered expires after `STORE_ORDER_SELLER_RESPONSE_HOURS` (72). An offer the buyer hasn't confirmed lapses after `STORE_ORDER_RESERVATION_HOURS` (48). The 5-minute sweep (`task_store_order_sweep`) expires them; opening a lapsed order expires it on the spot. |
+| Expiry | A request the store hasn't answered expires after `STORE_ORDER_SELLER_RESPONSE_HOURS` (72). An offer the buyer hasn't confirmed lapses after `STORE_ORDER_RESERVATION_HOURS` (48). The 5-minute sweep (`task_store_order_sweep`) expires them; opening a lapsed order, or acting on it, expires it on the spot. Each expiry is its own transaction under the order's lock, re-checked, so two replicas or a buyer acting at the same moment expire it once. A pass takes the 200 most overdue; the rest wait for the next pass. An expiry that fails rolls back whole (the order keeps its units) and the next pass tries it again. A pass that can't take its lease is skipped rather than ending the sweep. |
 | Problems | The buyer can report a problem from handover onwards, including after completion. It notifies the store and does not move the order. |
 
 Statuses: `submitted`, `seller_proposed_changes`, `awaiting_buyer_confirmation`,
@@ -104,11 +104,25 @@ available = total - reserved - in deals - sold through orders   (never below 0)
 
 Every path that takes units locks the listing row first (`inventory.lock`,
 `SELECT ... FOR UPDATE`, in id order), counts, then writes, in one
-transaction: `finalize_deal`, an order's acceptance or proposal, and the stock
-controls. Two requests from the two channels for the last unit run one after
-the other, and the second is refused. Before this, `finalize_deal` counted
-chat deals only, an acceptance counted chat deals before locking anything, and
-a product whose seller didn't count it reserved nothing.
+transaction: `finalize_deal`, an order's acceptance or proposal, the stock
+controls, and a chat deal's payout. Two requests from the two channels for the
+last unit run one after the other, and the second is refused. Before this,
+`finalize_deal` counted chat deals only, an acceptance counted chat deals
+before locking anything, and a product whose seller didn't count it reserved
+nothing.
+
+A payout is when a deal's units count as sold, and with payments off the first
+moment they count at all. All six payout paths (the buyer's release, the
+legacy `/escrow` route, the timer sweep, a dispute decided for the seller, the
+chat's "all good", and E-Confirm reporting every payment paid out) lock the
+deal, then its listing, count, move the deal and settle the listing's status in
+one transaction (`inventory.lock_for_deal_move`, `settle_deal_move`). They used
+to commit without the listing's lock, so an order accepted at the same moment
+counted the payout's unit as free. The buyer's own release took no deal lock
+either, so two taps released a deal twice. No provider, SMS or push call is
+made while those locks are held. Refunds take no listing lock: they only give
+units back, and two of them make the M-Pesa refund call inside their
+transaction.
 
 | Moment | Effect |
 |---|---|
@@ -116,7 +130,8 @@ a product whose seller didn't count it reserved nothing.
 | Chat deal agreed | Under the same lock, refused when orders and other deals left fewer ("This listing is sold out." / "Only N left"). The deal's units are counted from its row; `quantity` is not touched. |
 | Declined, cancelled, rejected proposal, expired | Releases what the order held. |
 | Delivered or completed (whichever comes first) | Moves the units from reserved to sold, once: counted stock takes them off `quantity`; a stated quantity counts them from the order line. |
-| Chat deal refunded or cancelled | Its units count again (the chat rule, unchanged). |
+| Chat deal paid out | Under the listing lock, after the deal's: counted, its units marked sold, and the listing's status settled at once. Never refused for stock, since the buyer has paid and has the goods. With payments off, if an order was accepted for those units while the paid deal held none, the payout still goes ahead and writes the conflict down: an audit row `deal_stock_over_allocated` on the listing and a reconciliation alert, for a person to settle with the store. |
+| Chat deal refunded or cancelled | Its units count again (the chat rule, unchanged). The 5-minute stock sweep puts the listing back on sale. |
 | Owner edits stock | `PATCH /stores/{id}/manage/listings/{listing_id}/stock`, below. |
 
 **Counted or not** is how the seller writes the stock down. It no longer
@@ -369,11 +384,16 @@ On a development API (`STORE_ORDERS_ENABLED` on by default):
 
 ## 12. Known limits
 
-- An order past its deadline holds its units until it is marked expired, by
-  the 5-minute sweep or when someone opens it.
-- With payments off, a deal paid before payments were switched off starts
-  counting when it is paid out, outside the listing lock (the chat rule,
-  `listings/stock.deals_hold_stock`).
+- An order past its deadline holds its units until it is marked expired: by
+  the next 5-minute sweep (200 per pass, most overdue first), or at once when
+  someone opens it or acts on it. A sweep pass also runs once at start-up.
+- With payments off, a deal paid before payments were switched off holds no
+  units until it is paid out (the chat rule, `listings/stock.deals_hold_stock`).
+  Its payout now counts under the listing lock, so it can no longer slip past
+  an acceptance. But an order may still be accepted for those units while the
+  paid deal holds none. The payout then goes ahead and records the conflict
+  (`deal_stock_over_allocated`) for a person to settle. Preventing it means
+  counting paid deals while payments are off, which is a business decision.
 - Pausing a product (`temporarily_unavailable`) stops new orders, not chat
   deals.
 - Web-only buyers get no push notifications (the page and the feed show
