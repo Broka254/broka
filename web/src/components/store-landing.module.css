@@ -565,8 +565,12 @@
   line-height: 1.25;
 }
 
+/* The store's colour, lifted toward white: some category colours (the
+   violet of Gaming, Books, Arts and Other) are under 4.5:1 on the glass as
+   they are. Browsers without color-mix keep the first line. */
 .spotlightText small {
-  color: var(--tint-a, var(--cyan));
+  color: #c9d6ff;
+  color: color-mix(in srgb, var(--tint-a, #54d7e9) 62%, #fff);
   font-size: 10px;
   font-weight: 750;
   letter-spacing: 0.16em;
