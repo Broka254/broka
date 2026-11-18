@@ -825,8 +825,7 @@ class TestExpirySweep:
         a = asyncio.create_task(sweep())
         await asyncio.wait_for(inside.wait(), 30)
         b = asyncio.create_task(sweep())
-        await asyncio.sleep(0.5)
-        assert not b.done()
+        assert await _waits_on_a_lock(b)
         go_on.set()
         pushed_a, pushed_b = await asyncio.wait_for(asyncio.gather(a, b), 30)
 
@@ -1325,6 +1324,25 @@ async def _owner_product(client, token: str, store_id: str, listing_id: str) -> 
     return next(p for p in page["items"] if p["id"] == listing_id)
 
 
+async def _waits_on_a_lock(task: asyncio.Task, timeout: float = 15.0) -> bool:
+    """True once PostgreSQL shows a session of this database waiting on a
+    lock while `task` is still running; False if `task` finishes first -
+    the code that took no lock and didn't wait. Asked from a connection of
+    its own: a fixed sleep can't tell "waiting" from "slow"."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not task.done() and loop.time() < deadline:
+        async with db_module.engine.connect() as connection:
+            waiting = (await connection.execute(text(
+                "SELECT count(*) FROM pg_stat_activity "
+                "WHERE datname = current_database() AND wait_event_type = 'Lock'"
+            ))).scalar_one()
+        if waiting and not task.done():
+            return True
+        await asyncio.sleep(0.05)
+    return False
+
+
 async def _paid_chat_deal(client, listing_id: str, quantity: int = 1) -> tuple[str, str]:
     """(deal_id, buyer token): a chat deal for `quantity` units, paid the
     legacy way (no E-Confirm escrow), its buyer about to confirm delivery."""
@@ -1531,9 +1549,8 @@ class TestCrossChannelStock:
         payout = asyncio.create_task(_pay_out(client, deal_token, deal_id))
         await asyncio.wait_for(in_payout.wait(), 30)
         accept = asyncio.create_task(_post(client, seller_token, f"/orders/{oid}/accept"))
-        await asyncio.sleep(0.5)
         # Waiting on the listing's lock, not counting.
-        assert not accept.done(), (await accept).text
+        assert await _waits_on_a_lock(accept), (await accept).text
         go_on.set()
         paid_out, accepted = await asyncio.wait_for(asyncio.gather(payout, accept), 30)
 
@@ -1593,9 +1610,8 @@ class TestCrossChannelStock:
         accept = asyncio.create_task(_post(client, seller_token, f"/orders/{oid}/accept"))
         await asyncio.wait_for(counting.wait(), 30)
         payout = asyncio.create_task(_pay_out(client, deal_token, deal_id))
-        await asyncio.sleep(0.5)
         # Waiting on the listing's lock, not committing.
-        assert not payout.done(), (await payout).text
+        assert await _waits_on_a_lock(payout), (await payout).text
         go_on.set()
         accepted, paid_out = await asyncio.wait_for(asyncio.gather(accept, payout), 30)
 

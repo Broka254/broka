@@ -188,6 +188,25 @@ async def _shelf(listing_id: str) -> inventory.Inventory:
         return await inventory.count(db, await db.get(Listing, listing_id))
 
 
+async def _waits_on_a_lock(task: asyncio.Task, timeout: float = 15.0) -> bool:
+    """True once PostgreSQL shows a session of this database waiting on a
+    lock while `task` still runs; False if it finishes first. Asked from a
+    connection of its own: a fixed sleep can't tell "waiting" from "slow"."""
+    from sqlalchemy import text
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not task.done() and loop.time() < deadline:
+        async with db_module.engine.connect() as connection:
+            waiting = (await connection.execute(text(
+                "SELECT count(*) FROM pg_stat_activity "
+                "WHERE datname = current_database() AND wait_event_type = 'Lock'"
+            ))).scalar_one()
+        if waiting and not task.done():
+            return True
+        await asyncio.sleep(0.05)
+    return False
+
+
 async def _audits(action: str, resource_id: str) -> list:
     async with AsyncSessionLocal() as db:
         return (await db.execute(select(AuditLog).where(
@@ -309,8 +328,7 @@ class TestAPayoutHappensOnce:
         first = asyncio.create_task(tap())
         await asyncio.wait_for(in_first.wait(), 30)
         second = asyncio.create_task(tap())
-        await asyncio.sleep(0.5)
-        assert not second.done(), (await second).text
+        assert await _waits_on_a_lock(second), (await second).text
         go_on.set()
         answers = await asyncio.wait_for(asyncio.gather(first, second), 30)
 
