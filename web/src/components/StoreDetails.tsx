@@ -23,6 +23,7 @@ import type { StoreReviews } from '@/lib/types'
 
 import type { EscrowDirectory } from '@/lib/escrow-providers'
 import { EscrowBox } from './EscrowBox'
+import { Icon } from './Icon'
 import { Stars } from './Stars'
 import styles from './store.module.css'
 
@@ -132,7 +133,11 @@ export function StoreDetails({
                     Built from this shop&apos;s buyer reviews, how fast it answers and how long it has traded
                     on BROKA. Different from the seller&apos;s buyer rating below, which is out of 5.
                   </p>
-                  {reply && <p className={styles.mutedLine}>⏱ {reply}</p>}
+                  {reply && (
+                    <p className={`${styles.mutedLine} ${styles.iconLine}`}>
+                      <Icon name="clock" size={15} /> {reply}
+                    </p>
+                  )}
                 </div>
               </div>
             </section>
@@ -154,34 +159,28 @@ export function StoreDetails({
                   </p>
                 </div>
               </div>
-              {/* The seller's record in three numbers, each with what it counts. */}
+              {/* The seller's record in three numbers, each with what it
+                  counts. Drawn icons, not emoji (🤝, 🗓️ looked different on
+                  every phone: STORES_UI_REVIEW.md L6). */}
               <dl className={styles.ownerFacts}>
                 <div>
                   <dt>{deals === 1 ? 'Deal done' : 'Deals done'}</dt>
                   <dd>
-                    <span className={styles.factIcon} aria-hidden="true">
-                      🤝
-                    </span>
+                    <Icon name="handshake" size={18} className={styles.factIcon} />
                     {deals}
                   </dd>
                 </div>
                 <div>
                   <dt>{sellerRating ? `Rating · ${reviewCountLabel(ownerReviews)}` : 'No reviews yet'}</dt>
                   <dd>
-                    <span className={`${styles.factIcon} ${styles.star}`} aria-hidden="true">
-                      ★
-                    </span>
+                    <Icon name="star" size={18} className={`${styles.factIcon} ${styles.star}`} />
                     {sellerRating ? `${sellerRating}/5` : 'New'}
                   </dd>
                 </div>
                 <div>
                   <dt>On BROKA since</dt>
                   <dd>
-                    {/* Not 📅: most phones draw it as a page reading "July 17",
-                        which looks like the date they joined. */}
-                    <span className={styles.factIcon} aria-hidden="true">
-                      🗓️
-                    </span>
+                    <Icon name="calendar" size={18} className={styles.factIcon} />
                     {since ?? '–'}
                   </dd>
                 </div>
@@ -310,7 +309,9 @@ export function StoreDetails({
                 Delivery and service area
               </h2>
               <div className={`card ${styles.detailsCard}`}>
-                <p className={styles.strongLine}>🚚 {view.delivery ?? 'Where it delivers: ask the store'}</p>
+                <p className={`${styles.strongLine} ${styles.iconLine}`}>
+                  <Icon name="truck" size={16} /> {view.delivery ?? 'Where it delivers: ask the store'}
+                </p>
                 {view.deliveryNote && <p className={styles.strongLine}>{view.deliveryNote}</p>}
                 <p className={styles.mutedLine}>
                   This is an online store: there is no shop to visit. Agree delivery or collection with the seller
@@ -324,7 +325,9 @@ export function StoreDetails({
                 Location
               </h2>
               <div className={`card ${styles.detailsCard}`}>
-                <p className={landmark ? styles.mutedLine : styles.strongLine}>📍 {area}</p>
+                <p className={`${landmark ? styles.mutedLine : styles.strongLine} ${styles.iconLine}`}>
+                  <Icon name="pin" size={16} /> {area}
+                </p>
                 {landmark && <p className={styles.strongLine}>{landmark}</p>}
                 {mapQuery && mapQuery !== store.country && (
                   <a

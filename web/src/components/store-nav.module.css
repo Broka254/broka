@@ -1,8 +1,13 @@
 /* Navigation for the storefront: a store's header with its sections
    (StoreHeader), the bar along the bottom of a phone (StoreBottomNav), and
-   the header of the buyer's BROKA account pages (AccountHeader). Wide
-   screens get the row of sections under the header; up to 860px the same
-   sections move to the bottom bar - one or the other, never both. */
+   the header of the buyer's BROKA account pages (AccountHeader).
+
+   Storefront 4.0: on a wide screen the header is one floating console -
+   the store's sign, its sections, the search and the cart in a single
+   lit capsule (two rows inside it below 1200px). Up to 860px the sections
+   move to a dock along the bottom - one or the other, never both. Every
+   bar is solid: the capsule floats over the page with a gap around it, but
+   nothing scrolls under its own surface. */
 
 /* ── Store header ───────────────────────────────────────────────────────── */
 
@@ -10,38 +15,50 @@
   position: sticky;
   top: 0;
   z-index: 30;
-  /* Opaque (globals.css --surface-bar): the products scroll under it. The
-     sheen on top of it is painted over the solid colour, not instead of it. */
-  background:
-    radial-gradient(60% 140% at 12% 0%, rgb(139 117 255 / 0.1), transparent 60%),
-    radial-gradient(50% 140% at 92% 0%, rgb(84 215 233 / 0.07), transparent 60%),
-    var(--surface-bar);
-  border-bottom: 1px solid var(--border);
-  box-shadow: 0 18px 40px -30px rgb(0 0 0 / 0.95);
-}
-
-/* The aurora line along the header's foot, fading out at both ends. */
-.header::after {
-  position: absolute;
-  right: 0;
-  bottom: -1px;
-  left: 0;
-  height: 1px;
-  background: var(--line-aurora);
-  content: '';
-  opacity: 0.5;
+  padding: 12px var(--gutter) 0;
+  /* The gap around the capsule is the page's own: let the pointer through
+     it, to what is scrolling there. */
   pointer-events: none;
 }
 
 .bar {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
-  grid-template-areas: 'brand search actions';
+  /* The sections keep their width; the search takes what is left (and
+     below 1280px the sections get a row of their own). */
+  grid-template-columns: auto auto minmax(180px, 1fr) auto;
+  grid-template-areas: 'brand sections search actions';
   align-items: center;
-  gap: clamp(16px, 2.4vw, 32px);
-  max-width: calc(var(--shell) + 2 * var(--gutter));
+  gap: 16px;
+  max-width: var(--shell);
+  min-height: 68px;
   margin: 0 auto;
-  padding: 12px var(--gutter);
+  padding: 10px 12px 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 24px;
+  background:
+    radial-gradient(40% 160% at 0% 0%, rgb(139 117 255 / 0.14), transparent 70%) padding-box,
+    radial-gradient(36% 160% at 100% 0%, rgb(84 215 233 / 0.09), transparent 70%) padding-box,
+    linear-gradient(180deg, #0c1022, #070a16) padding-box,
+    var(--edge) border-box;
+  box-shadow:
+    0 28px 60px -34px rgb(0 0 0 / 0.98),
+    0 0 0 1px rgb(0 0 0 / 0.45),
+    inset 0 1px rgb(255 255 255 / 0.06);
+  pointer-events: auto;
+}
+
+/* A thread of light along the console's foot. */
+.bar::after {
+  position: absolute;
+  right: 12%;
+  bottom: -1px;
+  left: 12%;
+  height: 1px;
+  background: var(--line-aurora);
+  content: '';
+  opacity: 0.9;
+  pointer-events: none;
 }
 
 .brand {
@@ -50,36 +67,45 @@
   align-items: center;
   gap: 12px;
   min-width: 0;
-  max-width: 340px;
-  border-radius: var(--radius-md);
+  max-width: 250px;
+  padding: 2px 6px 2px 2px;
+  border-radius: var(--radius-lg);
 }
 
-/* The store's sign in a ring of BROKA's colours. */
+/* The store's sign in a ring of BROKA's colours, the light turning slowly
+   around it. */
 .brandMark {
   position: relative;
   flex: none;
-  width: 44px;
-  height: 44px;
+  width: 46px;
+  height: 46px;
   padding: 1.5px;
-  border-radius: 15px;
-  background: conic-gradient(from 210deg, #8b75ff, #54d7e9, #608cff, #b9a8ff, #8b75ff);
+  border-radius: 16px;
+  background: conic-gradient(from var(--spin), #8b75ff, #54d7e9, #608cff, #c9bcff, #8b75ff);
   box-shadow:
     0 0 0 4px rgb(139 117 255 / 0.08),
-    0 10px 24px -12px rgb(139 117 255 / 0.9);
+    0 12px 28px -12px rgb(139 117 255 / 0.95);
+  animation: ring-turn 9s linear infinite;
   transition: box-shadow 0.3s var(--ease);
 }
 
 .brand:hover .brandMark {
   box-shadow:
-    0 0 0 5px rgb(139 117 255 / 0.14),
-    0 12px 30px -10px rgb(139 117 255 / 1);
+    0 0 0 5px rgb(139 117 255 / 0.15),
+    0 14px 34px -10px rgb(139 117 255 / 1);
+}
+
+@keyframes ring-turn {
+  to {
+    --spin: 360deg;
+  }
 }
 
 .brandLogo {
   display: block;
   width: 100%;
   height: 100%;
-  border-radius: 13.5px;
+  border-radius: 14.5px;
   object-fit: cover;
   background: var(--surface-solid);
 }
@@ -93,7 +119,7 @@
 .brandNameRow {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -104,37 +130,115 @@
   font-size: 17px;
   font-weight: 700;
   line-height: 1.2;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.025em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .brandVerified {
   flex: none;
-  color: #34d399;
-  filter: drop-shadow(0 0 6px rgb(52 211 153 / 0.45));
+  color: var(--mint);
+  filter: drop-shadow(0 0 7px rgb(62 230 181 / 0.55));
 }
 
 .brandTag {
   overflow: hidden;
-  background: linear-gradient(90deg, #b9a8ff, #8fb2ff 60%, #7fdeee);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.18em;
-  line-height: 1.5;
+  color: var(--text-low);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.2em;
+  line-height: 1.6;
   text-overflow: ellipsis;
   text-transform: uppercase;
   white-space: nowrap;
 }
 
+/* The store's sections: capsules, the one in view lit from inside. */
+.sections {
+  grid-area: sections;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.sectionList {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  background: rgb(255 255 255 / 0.025);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.05);
+  list-style: none;
+}
+
+.sectionLink {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 15px;
+  border-radius: var(--radius-pill);
+  color: var(--text-mid);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+  white-space: nowrap;
+  transition:
+    color 0.2s ease,
+    background 0.25s ease,
+    box-shadow 0.25s ease;
+}
+
+.sectionLink:hover {
+  background: rgb(255 255 255 / 0.05);
+  color: var(--text-high);
+}
+
+.sectionLink[aria-current] {
+  background:
+    radial-gradient(90% 120% at 50% 0%, rgb(167 147 255 / 0.36), transparent 70%),
+    linear-gradient(180deg, rgb(122 92 240 / 0.3), rgb(74 104 224 / 0.18));
+  box-shadow:
+    inset 0 0 0 1px rgb(196 182 255 / 0.36),
+    inset 0 1px rgb(255 255 255 / 0.16),
+    0 8px 24px -10px rgb(122 92 240 / 0.95);
+  color: #fff;
+}
+
+.accountLink {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 14px 0 12px;
+  border-radius: var(--radius-pill);
+  color: var(--text-mid);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    color 0.2s ease,
+    background 0.2s ease;
+}
+
+.accountLink svg {
+  color: var(--violet-text);
+}
+
+.accountLink:hover {
+  background: rgb(139 117 255 / 0.1);
+  color: var(--text-high);
+}
+
 .search {
   grid-area: search;
-  justify-self: center;
+  justify-self: end;
   width: 100%;
-  max-width: 660px;
+  max-width: 440px;
   min-width: 0;
 }
 
@@ -149,108 +253,59 @@
   display: none !important;
 }
 
-/* The row of the store's sections. */
-.sections {
-  border-top: 1px solid rgb(255 255 255 / 0.04);
+/* A narrower computer: the console keeps its sign, search and cart on the
+   first row, and lays the sections out along a second. */
+@media (max-width: 1279px) and (min-width: 861px) {
+  .bar {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      'brand search actions'
+      'sections sections sections';
+    row-gap: 8px;
+    padding-bottom: 8px;
+  }
+
+  .search {
+    justify-self: center;
+    max-width: 560px;
+  }
+
+  .sections {
+    justify-content: space-between;
+    padding-top: 8px;
+    border-top: 1px solid rgb(255 255 255 / 0.05);
+  }
 }
 
-.sectionsInner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  max-width: calc(var(--shell) + 2 * var(--gutter));
-  margin: 0 auto;
-  padding: 0 var(--gutter);
-}
-
-.sectionList {
-  display: flex;
-  gap: 2px;
-  min-width: 0;
-  margin: 0 0 0 -14px;
-  padding: 0;
-  list-style: none;
-}
-
-.sectionLink {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  min-height: 46px;
-  padding: 0 14px;
-  color: var(--text-mid);
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  transition: color 0.2s ease;
-}
-
-/* The mark under the section in view: an aurora bar with a glow, drawn
-   out from the middle. */
-.sectionLink::after {
-  position: absolute;
-  right: 14px;
-  bottom: -1px;
-  left: 14px;
-  height: 2px;
-  border-radius: 2px 2px 0 0;
-  background: linear-gradient(90deg, #a48bff, #608cff 55%, #54d7e9);
-  box-shadow: 0 0 14px rgb(139 117 255 / 0.9);
-  content: '';
-  transform: scaleX(0);
-  transition: transform 0.35s var(--ease-out);
-}
-
-.sectionLink:hover {
-  color: var(--text-high);
-}
-
-.sectionLink:hover::after {
-  transform: scaleX(0.4);
-}
-
-.sectionLink[aria-current] {
-  color: var(--text-high);
-}
-
-.sectionLink[aria-current]::after {
-  transform: scaleX(1);
-}
-
-.accountLink {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 8px;
-  min-height: 34px;
-  padding: 0 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  background: rgb(255 255 255 / 0.02);
-  color: var(--text-mid);
-  font-size: 13px;
-  font-weight: 600;
-  transition:
-    border-color 0.2s ease,
-    color 0.2s ease,
-    background 0.2s ease;
-}
-
-.accountLink:hover {
-  border-color: var(--border-accent);
-  background: rgb(139 117 255 / 0.08);
-  color: var(--text-high);
-}
-
+/* A phone: one solid bar from edge to edge - the sign and two icons, then
+   the search; the sections are the dock along the bottom. */
 @media (max-width: 860px) {
+  .header {
+    padding: 0;
+  }
+
   .bar {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
       'brand actions'
       'search search';
-    gap: 10px 12px;
+    gap: 10px 10px;
+    min-height: 0;
     padding: 10px var(--gutter) 12px;
+    border-width: 0 0 1px;
+    border-radius: 0;
+    background:
+      radial-gradient(60% 140% at 0% 0%, rgb(139 117 255 / 0.13), transparent 70%),
+      radial-gradient(50% 140% at 100% 0%, rgb(84 215 233 / 0.08), transparent 70%),
+      var(--surface-bar);
+    border-bottom-color: var(--border);
+    box-shadow: 0 18px 40px -30px rgb(0 0 0 / 0.95);
+  }
+
+  .bar::after {
+    right: 0;
+    left: 0;
+    opacity: 0.55;
   }
 
   .search {
@@ -281,7 +336,7 @@
   }
 
   .actions a[aria-current] {
-    border-color: var(--border-accent);
+    box-shadow: inset 0 0 0 1px var(--border-accent);
     color: var(--violet-text);
   }
 
@@ -291,34 +346,35 @@
   }
 }
 
-/* ── The bar along the bottom of a phone ────────────────────────────────── */
+/* ── The dock along the bottom of a phone ──────────────────────────────── */
 
 .bottomNav {
   display: none;
 }
 
 @media (max-width: 860px) {
-  /* A dock floating just above the screen's edge: solid, so nothing under
-     it shows through, with the lit hairline edge of the rest of the site. */
+  /* Floating just above the screen's edge: solid, so nothing under it
+     shows through, with the lit hairline edge of the rest of the site. */
   .bottomNav {
     position: fixed;
     right: 10px;
-    bottom: calc(8px + env(safe-area-inset-bottom));
+    bottom: calc(10px + env(safe-area-inset-bottom));
     left: 10px;
     z-index: 35;
     display: block;
     padding: 5px;
     border: 1px solid transparent;
-    border-radius: 24px;
+    border-radius: 26px;
     background:
-      linear-gradient(180deg, #10142a, #080a16) padding-box,
+      radial-gradient(70% 120% at 50% 0%, rgb(139 117 255 / 0.12), transparent 70%) padding-box,
+      linear-gradient(180deg, #0f1329, #070915) padding-box,
       var(--edge) border-box;
     box-shadow:
-      0 22px 44px -14px rgb(0 0 0 / 0.95),
-      0 0 0 1px rgb(0 0 0 / 0.5),
-      0 -10px 40px -24px rgb(139 117 255 / 0.5);
+      0 24px 48px -14px rgb(0 0 0 / 0.98),
+      0 0 0 1px rgb(0 0 0 / 0.55),
+      0 -12px 44px -26px rgb(139 117 255 / 0.6);
     transition:
-      transform 0.3s var(--ease),
+      transform 0.35s var(--ease-out),
       opacity 0.3s ease;
   }
 
@@ -346,15 +402,15 @@
   justify-content: center;
   gap: 3px;
   width: 100%;
-  min-height: 54px;
+  min-height: 56px;
   padding: 4px 2px;
   border: 0;
-  border-radius: 18px;
+  border-radius: 20px;
   background: none;
   color: var(--text-low);
   font-size: 10.5px;
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.015em;
   line-height: 1.2;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
@@ -376,12 +432,12 @@
   color: var(--text-high);
 }
 
-/* The section in view: its icon on a lit pill. */
+/* The section in view: its icon on a lit capsule with a glow under it. */
 .tabIcon {
   position: relative;
   display: grid;
-  width: 46px;
-  height: 28px;
+  width: 48px;
+  height: 29px;
   place-items: center;
   border-radius: var(--radius-pill);
   transition:
@@ -393,15 +449,16 @@
 .tab[aria-current] .tabIcon {
   background: var(--cta);
   box-shadow:
-    0 8px 18px -8px rgb(122 92 240 / 0.95),
-    inset 0 1px rgb(255 255 255 / 0.22);
+    0 8px 20px -6px rgb(122 92 240 / 1),
+    0 0 18px -4px rgb(139 117 255 / 0.7),
+    inset 0 1px rgb(255 255 255 / 0.28);
   color: #fff;
 }
 
 .tabBadge {
   position: absolute;
   top: -5px;
-  left: calc(50% + 5px);
+  left: calc(50% + 6px);
   min-width: 18px;
   height: 18px;
   padding: 0 5px;
@@ -409,21 +466,19 @@
   background: linear-gradient(135deg, #f472b6, #c056f0);
   box-shadow:
     0 0 0 2px #0b0e1d,
-    0 4px 12px -2px rgb(244 114 182 / 0.7);
+    0 4px 12px -2px rgb(244 114 182 / 0.75);
   color: #fff;
+  font-family: var(--font-display);
   font-size: 10.5px;
-  font-weight: 800;
+  font-weight: 700;
   line-height: 18px;
   text-align: center;
-  animation: badgeIn 0.4s var(--ease-out);
+  animation: badgeIn 0.45s var(--ease-spring);
 }
 
 @keyframes badgeIn {
   0% {
     transform: scale(0.4);
-  }
-  60% {
-    transform: scale(1.25);
   }
   100% {
     transform: scale(1);
@@ -437,9 +492,11 @@
   top: 0;
   z-index: 30;
   background:
-    radial-gradient(60% 140% at 12% 0%, rgb(139 117 255 / 0.1), transparent 60%),
+    radial-gradient(60% 140% at 12% 0%, rgb(139 117 255 / 0.13), transparent 60%),
+    radial-gradient(40% 140% at 92% 0%, rgb(84 215 233 / 0.08), transparent 60%),
     var(--surface-bar);
   border-bottom: 1px solid var(--border);
+  box-shadow: 0 18px 40px -30px rgb(0 0 0 / 0.95);
 }
 
 .accountHeader::after {
@@ -450,7 +507,7 @@
   height: 1px;
   background: var(--line-aurora);
   content: '';
-  opacity: 0.45;
+  opacity: 0.55;
   pointer-events: none;
 }
 
@@ -472,22 +529,24 @@
 }
 
 .accountWord {
-  background: linear-gradient(90deg, #b9a8ff, #8fb2ff 55%, #7fdeee);
+  background: var(--holo-text);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
   font-family: var(--font-display);
   font-size: 15px;
   font-weight: 800;
-  letter-spacing: 0.2em;
+  letter-spacing: 0.22em;
 }
 
 .accountContext {
   padding-left: 14px;
   border-left: 1px solid var(--border-strong);
-  color: var(--text-mid);
-  font-size: 13px;
-  font-weight: 600;
+  color: var(--text-low);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -499,11 +558,11 @@
   max-width: min(56vw, 340px);
   min-height: 40px;
   margin-left: auto;
-  padding: 0 14px;
+  padding: 0 15px;
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
   background:
-    linear-gradient(180deg, rgb(21 27 52 / 0.9), rgb(11 14 30 / 0.92)) padding-box,
+    linear-gradient(180deg, rgb(22 28 54 / 0.92), rgb(10 13 28 / 0.94)) padding-box,
     var(--edge) border-box;
   color: var(--text-high);
   font-size: 13px;
@@ -518,7 +577,7 @@
 }
 
 .continue:hover {
-  box-shadow: 0 10px 26px -16px rgb(122 92 240 / 0.9);
+  box-shadow: 0 12px 28px -16px rgb(122 92 240 / 0.95);
 }
 
 .accountTabs {
@@ -526,7 +585,7 @@
   gap: 4px;
   max-width: 880px;
   margin: 0 auto;
-  padding: 0 16px;
+  padding: 0 16px 6px;
 }
 
 .accountTab {
@@ -534,38 +593,32 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 46px;
-  padding: 0 14px;
+  min-height: 42px;
+  padding: 0 16px;
+  border-radius: var(--radius-pill);
   color: var(--text-mid);
   font-size: 14px;
   font-weight: 600;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease;
 }
 
-.accountTab:hover,
-.accountTab[aria-current] {
+.accountTab:hover {
+  background: rgb(255 255 255 / 0.05);
   color: var(--text-high);
 }
 
+.accountTab[aria-current] {
+  background: linear-gradient(180deg, rgb(122 92 240 / 0.3), rgb(74 104 224 / 0.18));
+  box-shadow:
+    inset 0 0 0 1px rgb(196 182 255 / 0.36),
+    0 8px 22px -12px rgb(122 92 240 / 0.95);
+  color: #fff;
+}
+
 .accountTab[aria-current] svg {
-  color: var(--violet-text);
-}
-
-.accountTab::after {
-  position: absolute;
-  right: 14px;
-  bottom: -1px;
-  left: 14px;
-  height: 2px;
-  border-radius: 2px 2px 0 0;
-  background: linear-gradient(90deg, #a48bff, #608cff 55%, #54d7e9);
-  box-shadow: 0 0 14px rgb(139 117 255 / 0.9);
-  content: '';
-  transform: scaleX(0);
-  transition: transform 0.35s var(--ease-out);
-}
-
-.accountTab[aria-current]::after {
-  transform: scaleX(1);
+  color: #fff;
 }
 
 @media (max-width: 560px) {
@@ -574,7 +627,7 @@
   }
 
   .accountTabs {
-    padding: 0 8px;
+    padding: 0 8px 6px;
   }
 
   .accountTab {

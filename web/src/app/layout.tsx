@@ -9,14 +9,15 @@ import { PAY_RULE } from '@/lib/safety'
 
 import './globals.css'
 
-// The storefront's two typefaces, served from this site (./fonts, the
-// latin subset of each variable font, SIL Open Font License - the licence
-// files sit beside them). Self-hosted on purpose: the build fetches
-// nothing (CI and Vercel build without a network call for fonts), and a
-// visitor's browser asks no third party for them. Inter for reading and
-// the controls, Sora for the store's name, headings and prices.
-// The family names in the CSS come from these constants' names: distinct
-// ones, so a page can never mean a system font called "sans".
+// The storefront's three typefaces, served from this site (./fonts, the
+// latin subset of each, SIL Open Font License - the licence files sit
+// beside them). Self-hosted on purpose: the build fetches nothing (CI and
+// Vercel build without a network call for fonts), and a visitor's browser
+// asks no third party for them. Inter for reading and the controls, Sora
+// for the store's name, headings and prices, Space Mono for the small
+// instrument labels (counts, tags, the section numbers) - one weight,
+// 16 KB. The family names in the CSS come from these constants' names:
+// distinct ones, so a page can never mean a system font called "sans".
 const brokaInter = localFont({
   src: './fonts/inter-latin-wght.woff2',
   weight: '100 900',
@@ -31,6 +32,14 @@ const brokaSora = localFont({
   style: 'normal',
   display: 'swap',
   variable: '--font-sora',
+})
+
+const brokaMono = localFont({
+  src: './fonts/space-mono-latin-400.woff2',
+  weight: '400',
+  style: 'normal',
+  display: 'swap',
+  variable: '--font-space-mono',
 })
 
 export const metadata: Metadata = {
@@ -61,7 +70,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${brokaInter.variable} ${brokaSora.variable}`}>
+    <html lang="en" className={`${brokaInter.variable} ${brokaSora.variable} ${brokaMono.variable}`}>
       <body>
         <BrandBackground />
         <OpenInApp />

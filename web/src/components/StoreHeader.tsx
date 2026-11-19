@@ -58,6 +58,9 @@ export function StoreHeader({
         Skip to content
       </a>
       <header className={styles.header} data-section={active}>
+        {/* One bar: the store's sign, its sections, the search and the
+            cart - a single row on a wide screen, two on a narrower one, and
+            on a phone the sections move to the bottom bar. */}
         <div className={styles.bar}>
           <Link href={view.path} className={styles.brand} aria-label={`${store.name} home`}>
             {/* The sign in a lit ring: the store's own logo, BROKA's when it uploaded none. */}
@@ -73,6 +76,22 @@ export function StoreHeader({
               <span className={styles.brandTag}>Store on BROKA</span>
             </span>
           </Link>
+          <nav className={styles.sections} aria-label="Store sections">
+            <ul className={styles.sectionList}>
+              {sections.map((s) => (
+                <li key={s.key}>
+                  <Link href={s.href} className={styles.sectionLink} aria-current={currentMark(s.key, active)}>
+                    {s.label}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+            {paths.orders && (
+              <Link href={paths.orders} className={styles.accountLink}>
+                <Icon name="receipt" size={16} /> Your orders
+              </Link>
+            )}
+          </nav>
           <div className={styles.search}>
             <CatalogueControls
               basePath={searchBase ?? paths.shop}
@@ -98,24 +117,6 @@ export function StoreHeader({
             )}
           </div>
         </div>
-        <nav className={styles.sections} aria-label="Store sections">
-          <div className={styles.sectionsInner}>
-            <ul className={styles.sectionList}>
-              {sections.map((s) => (
-                <li key={s.key}>
-                  <Link href={s.href} className={styles.sectionLink} aria-current={currentMark(s.key, active)}>
-                    {s.label}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-            {paths.orders && (
-              <Link href={paths.orders} className={styles.accountLink}>
-                <Icon name="receipt" size={17} /> Your orders
-              </Link>
-            )}
-          </div>
-        </nav>
       </header>
       {active !== 'messages' && <StoreBottomNav storeId={store.id} paths={paths} page={active} />}
       <RememberStore slug={store.slug} name={store.name} />

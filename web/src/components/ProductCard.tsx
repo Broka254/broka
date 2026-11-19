@@ -12,7 +12,8 @@ import styles from './shop.module.css'
 
 export function ProductCard({ product, storeId }: { product: ProductCardData; storeId: string }) {
   return (
-    <article className={styles.product}>
+    // data-spot: the pointer's light crosses the card (Spotlight.tsx).
+    <article className={styles.product} data-spot>
       <Link href={product.href} className={styles.productLink}>
         <div className={styles.productImage}>
           {product.image ? (

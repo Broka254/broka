@@ -291,7 +291,10 @@ describe('StoreDetails', () => {
     ] as const) {
       expect(within(screen.getByText(label).parentElement!).getByText(value)).toBeTruthy()
     }
-    expect(screen.getByText('📍 Starehe, Nairobi')).toBeTruthy()
+    // The area under a drawn pin, not the 📍 emoji (STORES_UI_REVIEW.md L6).
+    const area = screen.getByText('Starehe, Nairobi')
+    expect(area.querySelector('svg')).not.toBeNull()
+    expect(area.textContent).not.toContain('📍')
     expect(screen.getByText('Moi Avenue, Bazaar Plaza')).toBeTruthy()
     expect(screen.getByText('Find it on the map').getAttribute('href')).toBe(
       'https://www.google.com/maps/search/?api=1&query=Moi%20Avenue%2C%20Bazaar%20Plaza%2C%20Starehe%2C%20Nairobi%2C%20Kenya',
