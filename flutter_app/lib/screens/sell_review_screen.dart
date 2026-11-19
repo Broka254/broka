@@ -197,8 +197,9 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
                   ? (data.deliveryNote.isEmpty ? 'Can arrange' : 'Can arrange - ${data.deliveryNote}')
                   : 'Buyer picks up'),
           _row('Location', data.location),
-          if (data.description.trim().isNotEmpty)
-            _row('Description', data.description.trim()),
+          // What buyers will read: the seller's words, or their details.
+          if (data.descriptionToPost.isNotEmpty)
+            _row('Description', data.descriptionToPost),
         ])),
       ]),
     );

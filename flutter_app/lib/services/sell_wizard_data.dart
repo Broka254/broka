@@ -15,6 +15,7 @@
 import 'dart:io';
 import 'dart:math';
 import '../features/auctions/domain/auctions_enabled.dart';
+import '../utils/listing_details_text.dart';
 import 'sell_draft_store.dart';
 import 'photo_upload_tracker.dart';
 
@@ -110,6 +111,17 @@ class SellWizardData {
   /// visit, they are brought up to date with the details; once the seller
   /// has edited them, they are the seller's and left alone.
   String autoDescription = '';
+
+  /// What the listing is posted with, and what Review shows: the seller's
+  /// description, or - when they left the box empty - their details as its
+  /// lines. The server writes the same lines for an empty one, so posting
+  /// them here keeps Review saying exactly what buyers will read.
+  String get descriptionToPost {
+    final own = description.trim();
+    if (own.isNotEmpty) return own;
+    return ListingDetailsText.compose(
+        condition: condition, attributes: attributes, maxLength: maxDescriptionLength);
+  }
   String reserve = '';
   final List<File> verifiedPhotos = [];
   // Each photo uploads in the background as soon as it's taken (Online

@@ -261,7 +261,92 @@ async def test_with_no_launch_slot_the_founding_band_still_covers_the_first(clie
     assert (await _listing(client, h))["listing_fee"]["status"] == "unpaid"
 
 
+@pytest.mark.asyncio
+async def test_listings_posted_into_a_store_leave_the_free_listing_alone(client, monkeypatch):
+    """A store listing is covered by its store's plan: it was never the
+    seller's free listing, so their first own listing still is."""
+    uid, h = await _user(store_owner=True)
+    store = await _store(client, h)
+    for _ in range(2):
+        covered = await _listing(client, h, store_id=store["id"])
+        assert covered["listing_fee"]["status"] == "store_covered"
+    assert (await _offers(client, h))["listing_free"]["already_claimed"] is False
+    assert (await _quote(client, h))["launch_offer"]["eligible"] is True
+    own = await _listing(client, h)
+    assert _is_free(own) and abs(_days_left(own) - 60) <= 1
+    assert [c.entity_id for c in await _claims(uid, LaunchOfferType.LISTING_FREE)] == [own["id"]]
+
+
+@pytest.mark.asyncio
+async def test_with_fees_off_the_claim_is_still_the_first_listing_only(client, monkeypatch):
+    """While fees are off every listing goes live on a window; the claim
+    (which counts against the 50) is taken by a seller's first listing
+    only - not by a later one of a seller who already had one live."""
+    _patch(monkeypatch, listing_fees_enabled=False)
+    uid, h = await _user()
+    now = datetime.utcnow()
+    async with AsyncSessionLocal() as db:
+        db.add(Listing(seller_id=uid, name="From before the offer", category="Electronics",
+                       price=9000, lat=-1.28, lng=36.82, paid_until=None,
+                       created_at=now - timedelta(days=40)))
+        await db.commit()
+    later = await _listing(client, h)
+    assert _is_free(later) and later["paid_until"] is not None  # a window, as ever
+    assert await _claims(uid, LaunchOfferType.LISTING_FREE) == []
+
+    newcomer, nh = await _user()
+    first = await _listing(client, nh)
+    assert [c.entity_id for c in await _claims(newcomer, LaunchOfferType.LISTING_FREE)] == [first["id"]]
+
+
+@pytest.mark.asyncio
+async def test_a_listing_taken_out_of_its_store_is_no_free_listing(client, monkeypatch):
+    """Posted into the store it had no listing time of its own, and taken
+    out it read as "free, never expires" - a way round the fee."""
+    _, h = await _user(store_owner=True)
+    store = await _store(client, h)
+    covered = await _listing(client, h, store_id=store["id"])
+    out = await client.delete(f"/listings/{covered['id']}/store", headers=h)
+    assert out.status_code == 200, out.text
+    assert out.json()["store_id"] is None
+    assert out.json()["listing_fee"]["status"] == "unpaid"
+    assert out.json()["listing_fee"]["needs_payment"] is True
+
+    # While fees are off it is a personal listing like any other: a window.
+    _patch(monkeypatch, listing_fees_enabled=False)
+    covered = await _listing(client, h, store_id=store["id"])
+    out = (await client.delete(f"/listings/{covered['id']}/store", headers=h)).json()
+    assert out["listing_fee"]["status"] in ("live", "ending")
+    assert abs(_days_left(out) - 60) <= 1
+
+    # Personal before it moved in: it keeps the time it had.
+    _patch(monkeypatch)
+    own = await _listing(client, h)
+    before = own["paid_until"]
+    assert (await client.post(f"/listings/{own['id']}/store", headers=h,
+                              json={"store_id": store["id"]})).status_code == 200
+    back = (await client.delete(f"/listings/{own['id']}/store", headers=h)).json()
+    assert back["paid_until"] == before
+
+
 # ── Stores ───────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_an_owner_who_had_a_store_before_gets_no_free_one(client, monkeypatch):
+    """A store from before the offer (free while billing was off), deleted,
+    and another opened: the free store is a person's first."""
+    _patch(monkeypatch, free_store_offer_limit=0)
+    owner, h = await _user(store_owner=True)
+    old = await _store(client, h)
+    assert (await client.delete(f"/stores/{old['id']}", headers=h)).status_code == 200
+
+    _patch(monkeypatch)
+    offers = (await _offers(client, h))["store_free"]
+    assert offers["already_claimed"] is True and offers["eligible"] is False
+    new = await _store(client, h)
+    assert new["billing"]["active"] is False
+    assert await _claims(owner, LaunchOfferType.STORE_FREE) == []
+
 
 @pytest.mark.asyncio
 async def test_deleting_the_free_store_gives_no_second_free_store(client):

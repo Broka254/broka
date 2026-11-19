@@ -15,7 +15,8 @@ Eligibility, beyond the global limit:
     offer existed, and deleted since or not - has had theirs
     (listing_offer_used). The founding offer's free band used to go live
     without a claim, so a founding seller's second listing took the launch
-    claim as well: two free listings for one seller;
+    claim as well: two free listings for one seller. The free store is a
+    person's first store the same way (_had_a_store);
   * personal listings only - a store listing is already covered by its
     store's plan and must not burn a launch slot (listings/paid.fee_applies).
 
@@ -143,6 +144,23 @@ async def _had_a_listing_live(db: AsyncSession, user_id: str,
     return (await db.execute(query.limit(1))).scalar_one_or_none() is not None
 
 
+async def _had_a_store(db: AsyncSession, user_id: str,
+                       exclude_store_id: Optional[str] = None) -> bool:
+    """Whether the user has had a store before - open, paused or deleted
+    since. The free store is a person's first, as the free listing is: an
+    owner whose earlier store predates the offer (free while billing was
+    off) used to delete it and open another on the offer.
+
+    `exclude_store_id`: the store being created, flushed just before its
+    claim."""
+    from api.models.store import Store
+
+    query = select(Store.id).where(Store.owner_id == user_id)
+    if exclude_store_id is not None:
+        query = query.where(Store.id != exclude_store_id)
+    return (await db.execute(query.limit(1))).scalar_one_or_none() is not None
+
+
 async def listing_offer_used(db: AsyncSession, user_id: str,
                              exclude_listing_id: Optional[str] = None) -> bool:
     """Whether this seller has had their one free listing: they claimed the
@@ -162,6 +180,8 @@ async def _peek(db: AsyncSession, offer_type: str, user_id: str) -> bool:
         return False
     if (offer_type == LaunchOfferType.LISTING_FREE
             and await _had_a_listing_live(db, user_id)):
+        return False
+    if offer_type == LaunchOfferType.STORE_FREE and await _had_a_store(db, user_id):
         return False
     return await _claimed_count(db, offer_type) < limit
 
@@ -187,6 +207,9 @@ async def _claim(db: AsyncSession, offer_type: str, user_id: str,
     # that would make this seller's free listing used.
     if (offer_type == LaunchOfferType.LISTING_FREE
             and await _had_a_listing_live(db, user_id, exclude_listing_id=entity_id)):
+        return None
+    if (offer_type == LaunchOfferType.STORE_FREE
+            and await _had_a_store(db, user_id, exclude_store_id=entity_id)):
         return None
     expires_at = now + timedelta(days=days)
     for _ in range(_MAX_CLAIM_ATTEMPTS):
@@ -238,11 +261,12 @@ async def offers_status(db: AsyncSession, user_id: Optional[str] = None) -> dict
     """Both offers for GET /pricing/launch-offers and the sell/store screens.
 
     `already_claimed` is true once the offer is no longer this user's to
-    take: for stores, they claimed it; for listings, they have had their
-    one free listing (listing_offer_used). The app hides every "post your
-    first listing free" teaser on it, older builds included - a seller
-    whose first listing went free on the founding offer was still shown
-    the launch offer, and the server then gave them a second free listing.
+    take: for listings, they have had their one free listing
+    (listing_offer_used); for stores, they claimed it or have had a store
+    before. The app hides every "post your first listing free" teaser on
+    it, older builds included - a seller whose first listing went free on
+    the founding offer was still shown the launch offer, and the server
+    then gave them a second free listing.
     """
     out: dict = {}
     for key, offer_type, peek, billing_on in (
@@ -257,7 +281,8 @@ async def offers_status(db: AsyncSession, user_id: Optional[str] = None) -> dict
         if user_id:
             already = (await listing_offer_used(db, user_id)
                        if offer_type == LaunchOfferType.LISTING_FREE
-                       else await _user_claim(db, offer_type, user_id) is not None)
+                       else (await _user_claim(db, offer_type, user_id) is not None
+                             or await _had_a_store(db, user_id)))
         out[key] = st.to_dict(eligible=eligible, already_claimed=already,
                               enabled=bool(billing_on and st.limit > 0))
     return out

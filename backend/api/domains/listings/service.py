@@ -543,21 +543,28 @@ class ListingService:
                 if claim is not None:
                     listing.paid_until = claim.expires_at
                     awaiting_fee = False
-                elif awaiting_fee and not await launch_offers.listing_offer_used(
-                        self.db, seller_id, exclude_listing_id=listing.id):
-                    # A founding seller on 100% off is posted live, paid up
-                    # to the end of their offer; from then on it renews at
-                    # the full fee. Asked about this listing, now flushed:
-                    # only a seller's first listing is discounted.
-                    from api.domains.pricing.service import founding_discount
+                elif awaiting_fee:
+                    # Two first listings from one seller at once would each
+                    # find no other and both go free: with no claim to
+                    # collide on, the seller's row lock makes the second
+                    # wait for the first's commit, and then see it.
+                    await self.db.execute(
+                        select(User.id).where(User.id == seller_id).with_for_update())
+                    if not await launch_offers.listing_offer_used(
+                            self.db, seller_id, exclude_listing_id=listing.id):
+                        # A founding seller on 100% off is posted live, paid
+                        # up to the end of their offer; from then on it
+                        # renews at the full fee. Asked about this listing,
+                        # now flushed: only a seller's first is discounted.
+                        from api.domains.pricing.service import founding_discount
 
-                    founding = await founding_discount(
-                        self.db, seller_id, listing_id=listing.id)
-                    if founding.percent >= 100:
-                        listing.paid_until = founding.ends_at
-                        # It IS live (paid_until is in the future), so it
-                        # must be announced below like any live listing.
-                        awaiting_fee = False
+                        founding = await founding_discount(
+                            self.db, seller_id, listing_id=listing.id)
+                        if founding.percent >= 100:
+                            listing.paid_until = founding.ends_at
+                            # It IS live (paid_until is in the future), so
+                            # it must be announced below like any live one.
+                            awaiting_fee = False
                 elif not settings.listing_fees_enabled:
                     listing.paid_until = (
                         datetime.utcnow()
@@ -1580,9 +1587,23 @@ class ListingService:
     async def remove_listing_store(self, listing_id: str, requester_id: str) -> dict:
         """Inverse of set_listing_store - returns the listing to a
         personal (store_id=NULL) listing. Only the listing's own seller
-        may do this, same ownership check as set_listing_store."""
+        may do this, same ownership check as set_listing_store.
+
+        A listing posted into the store never had listing time of its own
+        (paid_until NULL - the store's plan was its clock), and NULL on a
+        personal listing reads as "free, never expires": taken out, it was
+        a free listing for good, the way round paying for one. It gets the
+        time a personal listing posted now would - none while fees are on
+        (hidden until its fee is paid, as a new listing waits), a launch
+        window while they are off. One that was personal before it moved in
+        keeps the time it had."""
         listing = await self._get_owned_listing_or_403(listing_id, requester_id)
         listing.store_id = None
+        if listing.paid_until is None and fee_applies(listing):
+            listing.paid_until = (
+                listing.created_at if settings.listing_fees_enabled and listing.created_at
+                else datetime.utcnow() + timedelta(days=settings.free_listing_offer_days)
+            )
         await self.db.commit()
         await self.db.refresh(listing)
         seller = (await self.db.execute(select(User).where(User.id == listing.seller_id))).scalar_one_or_none()

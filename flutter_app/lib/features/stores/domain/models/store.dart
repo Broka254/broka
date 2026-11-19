@@ -539,11 +539,22 @@ class Store {
   /// online store's exclusions apply, less the store's own category - a
   /// car yard's Automobiles.
   bool mayHold(String listingCategory) {
-    final name = listingCategory.trim().toLowerCase();
-    if (name.isEmpty) return false;
     final excluded = excludedListingCategories ??
         StoreCategories.onlineExcluded.where((c) => c != category).toList(growable: false);
-    return !excluded.any((c) => c.toLowerCase() == name);
+    return !excluded.contains(_filedUnder(listingCategory));
+  }
+
+  /// The category a listing counts under, as the server files it
+  /// (stores/categories.for_listing): a canonical name in its own spelling,
+  /// "Vehicles" as the Automobiles it was renamed to, and anything else -
+  /// free text from older builds - as Other.
+  static String _filedUnder(String listingCategory) {
+    final name = listingCategory.trim().toLowerCase();
+    if (name == 'vehicles') return 'Automobiles';
+    for (final canonical in StoreCategories.all) {
+      if (canonical.toLowerCase() == name) return canonical;
+    }
+    return 'Other';
   }
 
   /// The live "Open now" status, calculated from the stored schedule and the

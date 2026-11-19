@@ -13,11 +13,16 @@ import 'dart:io';
 
 import 'package:broka/core/network/api_client.dart';
 import 'package:broka/core/utils/result.dart';
+import 'package:broka/features/categories/domain/models/category.dart';
 import 'package:broka/features/listing_fee/data/listing_fee_repository.dart';
+import 'package:broka/features/listings/data/repositories/listings_repository.dart';
 import 'package:broka/features/stores/domain/models/store.dart';
+import 'package:broka/features/stores/presentation/my_store_screen.dart';
 import 'package:broka/screens/sell_description_screen.dart';
+import 'package:broka/screens/sell_details_screen.dart';
 import 'package:broka/screens/sell_review_screen.dart';
 import 'package:broka/screens/sell_zeno_alert_screen.dart';
+import 'package:broka/services/api_service.dart';
 import 'package:broka/services/image_upload_service.dart';
 import 'package:broka/services/listing_publisher.dart';
 import 'package:broka/services/photo_upload_tracker.dart';
@@ -103,6 +108,11 @@ void main() {
       for (final trade in ['Land', 'land', 'Automobiles', 'Property', 'Services', 'Other']) {
         expect(shop.mayHold(trade), isFalse, reason: trade);
       }
+      // Filed as the server files them: the old name of Automobiles, and
+      // free text from an older build as Other.
+      expect(shop.mayHold('Vehicles'), isFalse);
+      expect(shop.mayHold('furniture'), isFalse);
+      expect(shop.mayHold(''), isFalse);
     });
 
     test('a car yard holds cars, not land', () {
@@ -111,6 +121,7 @@ void main() {
         'excluded_listing_categories': ['Land', 'Other', 'Property', 'Services'],
       });
       expect(yard.mayHold('Automobiles'), isTrue);
+      expect(yard.mayHold('vehicles'), isTrue);
       expect(yard.mayHold('Land'), isFalse);
     });
 
@@ -150,6 +161,44 @@ void main() {
       await _open(tester, SellReviewScreen(data: data, loadMyStore: () async => const Success(null)));
       expect(find.text('LIST UNDER'), findsNothing);
       expect(data.storeId, isNull);
+    });
+  });
+
+  group('Move listings in', () {
+    Map<String, dynamic> row(String id, String name, String category) => {
+          'id': id, 'seller_id': 'seller-1', 'name': name, 'category': category,
+          'price': 1000, 'lat': -1.0, 'lng': 36.0,
+        };
+
+    Future<void> openSheet(WidgetTester tester, List<Map<String, dynamic>> rows) async {
+      ApiService.currentUserId = 'seller-1';
+      addTearDown(() => ApiService.currentUserId = null);
+      final repo = ListingsRepository(client: ApiClient(client: MockClient((_) async => _json(rows))));
+      await _open(tester, Scaffold(
+        body: Builder(builder: (ctx) => TextButton(
+              onPressed: () => showAddExistingListings(ctx, _shop(), listings: repo),
+              child: const Text('open'),
+            )),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('offers only what the store may hold', (tester) async {
+      await openSheet(tester, [
+        row('l1', 'Samsung A54', 'Electronics'),
+        row('l2', 'Plot in Kitengela', 'Land'),
+        row('l3', 'Old shelf item', 'furniture'),
+      ]);
+      expect(find.text('Samsung A54'), findsOneWidget);
+      expect(find.text('Plot in Kitengela'), findsNothing);
+      expect(find.text('Old shelf item'), findsNothing);
+    });
+
+    testWidgets('says why there is nothing to move in', (tester) async {
+      await openSheet(tester, [row('l2', 'Plot in Kitengela', 'Land')]);
+      expect(find.byKey(const Key('move-in-empty')), findsOneWidget);
+      expect(find.textContaining("categories your store doesn't sell"), findsOneWidget);
     });
   });
 
@@ -263,6 +312,45 @@ void main() {
       expect(box(tester), 'Barely used, no scratches.');
       expect(own.description, 'Barely used, no scratches.');
       expect(find.byKey(const Key('sell-description-details-in')), findsNothing);
+    });
+
+    test('a box left empty posts the details, as Review shows them', () {
+      final data = phone();
+      expect(data.descriptionToPost, 'Condition: Used\nBrand: Samsung\nStorage: 128GB\nRAM: 8GB');
+      Map<String, dynamic> payload() => ListingPublisher.payloadFor(
+          data, photoIds: const ['photo-1'], showcaseId: null, lat: -1.0, lng: 36.0);
+      expect(payload()['description'], data.descriptionToPost);
+      data.description = '  Barely used.  ';
+      expect(payload()['description'], 'Barely used.');
+    });
+
+    testWidgets('Review shows the description buyers will read', (tester) async {
+      final data = phone();
+      await _open(tester, SellReviewScreen(data: data, loadMyStore: () async => const Success(null)));
+      expect(find.text('Condition: Used\nBrand: Samsung\nStorage: 128GB\nRAM: 8GB'), findsOneWidget);
+    });
+
+    testWidgets('the Details step keeps them in the order it asks for them', (tester) async {
+      final data = _listing(category: 'Electronics')..attributes = {};
+      await _open(tester, SellDetailsScreen(
+        data: data,
+        loadFields: (_) async => Success([
+          CategoryFilterField(fieldName: 'storage', fieldType: 'select', options: ['64GB', '128GB']),
+          CategoryFilterField(fieldName: 'ram', fieldType: 'select', options: ['4GB', '8GB']),
+          CategoryFilterField(fieldName: 'brand', fieldType: 'text', options: ['Samsung', 'Apple']),
+        ]),
+      ));
+      // Tapped last to first; kept brand first (the step's own order), then
+      // storage and RAM as the fields came.
+      await _tap(tester, find.text('8GB'));
+      await tester.pumpAndSettle();
+      await _tap(tester, find.text('128GB'));
+      await tester.pumpAndSettle();
+      await _tap(tester, find.text('Samsung'));
+      await tester.pumpAndSettle();
+      expect(data.attributes.keys.toList(), ['brand', 'storage', 'ram']);
+      expect(ListingDetailsText.compose(attributes: data.attributes),
+          'Brand: Samsung\nStorage: 128GB\nRAM: 8GB');
     });
 
     testWidgets('lines the seller edited are theirs, and stay as edited', (tester) async {

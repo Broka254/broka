@@ -1804,8 +1804,12 @@ class _ProductsTabState extends State<_ProductsTab> {
       builder: (d) => AlertDialog(
         backgroundColor: BrokaColors.bgMid,
         title: const Text('Take out of your store?', style: TextStyle(color: BrokaColors.textHigh)),
-        content: Text('"${product.listing.name}" stays on BROKA as your own listing; '
-            'it just won\'t appear in your store.',
+        // Taken out, it is a personal listing like any other: no longer
+        // covered by the store's plan, it pays its own listing fee where
+        // fees apply (backend ListingService.remove_listing_store).
+        content: Text('"${product.listing.name}" leaves your store and stays on BROKA as your '
+            'own listing. Your own listings pay the listing fee where it applies - buyers '
+            'see this one again once it is paid.',
             style: const TextStyle(color: BrokaColors.textMid)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')),
