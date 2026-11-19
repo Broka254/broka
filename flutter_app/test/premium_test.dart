@@ -359,11 +359,13 @@ void main() {
     });
   });
 
+  // AI covers are off in this build for now (kAiCoversEnabled); these hold
+  // the step to how it works when they are back.
   group('AI cover step', () {
     testWidgets('says how many free tries are left', (tester) async {
       final backend = _PremiumBackend(me: _me(coversLeft: 2));
       await _open(tester, SellShowcaseScreen(
-          data: _draft(), generator: _FakeGenerator(), premium: backend.repository));
+          data: _draft(), generator: _FakeGenerator(), premium: backend.repository, aiCovers: true));
       expect(find.byKey(const Key('showcase-tries-left')), findsOneWidget);
       expect(find.text('2 free AI cover tries left'), findsOneWidget);
     });
@@ -373,7 +375,8 @@ void main() {
       final generator = _FakeGenerator();
       await _open(
         tester,
-        SellShowcaseScreen(data: _draft(), generator: generator, premium: backend.repository),
+        SellShowcaseScreen(
+            data: _draft(), generator: generator, premium: backend.repository, aiCovers: true),
         routes: {'/premium': (_) => const Scaffold(body: Text('plans'))},
       );
       expect(find.text('🔒  Get more AI covers'), findsOneWidget);
@@ -390,7 +393,8 @@ void main() {
       final generator = _FakeGenerator(error: const ApiException(402,
           "You've used this month's 20 AI cover tries on BROKA Pro.", code: 'ALLOWANCE_USED',
           details: {'code': 'ALLOWANCE_USED', 'upgrade_to': 'elite'}));
-      await _open(tester, SellShowcaseScreen(data: _draft(), generator: generator, premium: backend.repository));
+      await _open(tester, SellShowcaseScreen(
+          data: _draft(), generator: generator, premium: backend.repository, aiCovers: true));
       expect(find.text('2 of 20 AI cover tries left this month'), findsOneWidget);
       backend.me = _me(plan: 'pro', coversLeft: 0);
       await _tap(tester, find.byKey(const Key('showcase-generate')));
@@ -408,9 +412,20 @@ void main() {
     testWidgets('with plans off, nothing about tries', (tester) async {
       final backend = _PremiumBackend(me: _me(enabled: false));
       await _open(tester, SellShowcaseScreen(
-          data: _draft(), generator: _FakeGenerator(), premium: backend.repository));
+          data: _draft(), generator: _FakeGenerator(), premium: backend.repository, aiCovers: true));
       expect(find.byKey(const Key('showcase-tries-left')), findsNothing);
       expect(find.textContaining('Create my'), findsOneWidget);
+    });
+
+    testWidgets('with AI covers off, only the upload - no plans asked, no tries', (tester) async {
+      final backend = _PremiumBackend(me: _me(coversLeft: 2));
+      final generator = _FakeGenerator();
+      await _open(tester, SellShowcaseScreen(
+          data: _draft(), generator: generator, premium: backend.repository, aiCovers: false));
+      expect(find.byKey(const Key('showcase-generate')), findsNothing);
+      expect(find.byKey(const Key('showcase-tries-left')), findsNothing);
+      expect(find.byKey(const Key('showcase-gallery')), findsOneWidget);
+      expect(generator.calls, isEmpty);
     });
   });
 

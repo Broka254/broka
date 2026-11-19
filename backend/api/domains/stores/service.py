@@ -2059,6 +2059,13 @@ class StoreService:
             # Every category the store chose, primary first; `category`
             # above stays the first element for app builds that read one.
             "categories": self._ordered_categories(category, category_names),
+            # Listing categories this store may not hold
+            # (stores/categories.may_hold): the sell wizard and "Move
+            # listings in" offer the store only for the rest. Keyed on the
+            # same store.category as billing's rate card and the checks in
+            # ListingService, so the app and the server never disagree.
+            "excluded_listing_categories": store_categories.excluded_listing_categories(
+                store.category),
             # What app builds before phase 2 display.
             "specialization": category,
             "description": store.description,

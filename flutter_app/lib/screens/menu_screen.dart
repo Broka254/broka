@@ -32,6 +32,7 @@ import '../features/safe_payment/payments_shown.dart';
 import '../features/safe_payment/safe_payment.dart' show safePaymentRepository;
 import '../features/stores/presentation/widgets/menu_store_section.dart';
 import '../main.dart';
+import '../services/ai_covers_enabled.dart';
 import '../services/api_service.dart';
 import '../services/global_poller_service.dart';
 import '../utils/auth_gate.dart';
@@ -352,7 +353,9 @@ class _MenuScreenState extends State<MenuScreen> {
           icon: Icons.workspace_premium_rounded,
           tint: BrokaColors.gold,
           title: 'BROKA Premium',
-          subtitle: 'Voice mode, the Buying Agent, AI covers and your plan',
+          subtitle: kAiCoversEnabled
+              ? 'Voice mode, the Buying Agent, AI covers and your plan'
+              : 'Voice mode, the Buying Agent and your plan',
           onTap: () => _open('/premium'),
         ),
         MenuTile(

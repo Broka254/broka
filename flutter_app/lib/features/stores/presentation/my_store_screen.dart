@@ -1804,8 +1804,12 @@ class _ProductsTabState extends State<_ProductsTab> {
       builder: (d) => AlertDialog(
         backgroundColor: BrokaColors.bgMid,
         title: const Text('Take out of your store?', style: TextStyle(color: BrokaColors.textHigh)),
-        content: Text('"${product.listing.name}" stays on BROKA as your own listing; '
-            'it just won\'t appear in your store.',
+        // Taken out, it is a personal listing like any other: no longer
+        // covered by the store's plan, it pays its own listing fee where
+        // fees apply (backend ListingService.remove_listing_store).
+        content: Text('"${product.listing.name}" leaves your store and stays on BROKA as your '
+            'own listing. Your own listings pay the listing fee where it applies - buyers '
+            'see this one again once it is paid.',
             style: const TextStyle(color: BrokaColors.textMid)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')),
@@ -2567,6 +2571,8 @@ class _AddExistingSheetState extends State<_AddExistingSheet> {
   static const _pageSize = 50;
   final List<BrokaListing> _candidates = [];
   final Set<String> _picked = {};
+  // The seller's own listings this store may not hold, left out above.
+  int _notForStore = 0;
   int _offset = 0;
   bool _hasMore = true;
   bool _loading = false;
@@ -2593,7 +2599,17 @@ class _AddExistingSheetState extends State<_AddExistingSheet> {
           _offset += data.length;
           _hasMore = data.length == _pageSize;
           final seen = _candidates.map((l) => l.id).toSet();
-          _candidates.addAll(data.where((l) => l.storeId == null && !seen.contains(l.id)));
+          // Only what the store may hold (Store.mayHold): a land or vehicle
+          // listing is not offered for an online store - the server would
+          // refuse the move.
+          for (final l in data) {
+            if (l.storeId != null || seen.contains(l.id)) continue;
+            if (widget.store.mayHold(l.category)) {
+              _candidates.add(l);
+            } else {
+              _notForStore++;
+            }
+          }
         case Failure(:final message):
           _error = message;
       }
@@ -2649,7 +2665,13 @@ class _AddExistingSheetState extends State<_AddExistingSheet> {
                     ? const CircularProgressIndicator(color: BrokaColors.gold)
                     : Padding(
                         padding: const EdgeInsets.all(24),
-                        child: Text(_error ?? 'All your listings are already in your store.',
+                        child: Text(
+                            _error ??
+                                (_notForStore > 0
+                                    ? 'Nothing to move in: the rest of your listings are in '
+                                        "categories your store doesn't sell."
+                                    : 'All your listings are already in your store.'),
+                            key: const Key('move-in-empty'),
                             textAlign: TextAlign.center,
                             style: const TextStyle(color: BrokaColors.textMid)),
                       ))

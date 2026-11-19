@@ -93,6 +93,46 @@ def filter_online_store_categories(names: list[str]) -> list[str]:
     return out
 
 
+def _trade_categories(store_category: Optional[str]) -> tuple[str, ...]:
+    """The categories the store's own rate card is for - Automobiles for a
+    car yard, Property and Land for an agent, none for an online (goods)
+    store. The card a store is billed on (stores/billing.rate_card_for),
+    so what it may hold and what it pays for never disagree."""
+    from api.domains.stores.billing import rate_card_for
+
+    return rate_card_for(store_category).categories
+
+
+def excluded_listing_categories(store_category: Optional[str]) -> list[str]:
+    """The listing categories a store with this primary category may not
+    hold, alphabetical: the ONLINE_STORE_EXCLUDED trades, less its own."""
+    own = _trade_categories(store_category)
+    return sorted(name for name in ONLINE_STORE_EXCLUDED if name not in own)
+
+
+def may_hold(store_category: Optional[str], listing_category: Optional[str]) -> bool:
+    """Whether a store may hold a listing filed under `listing_category`.
+
+    Automobiles, Land and Property listings are not sold through an online
+    store, and Services and Other through none: a land listing put in a
+    phone shop was covered by the shop's plan - no listing fee - and sold
+    under a trade the store doesn't carry. A car yard holds Automobiles and
+    an agent Property and Land, the trades of their own cards. Free text
+    from before the taxonomy files under Other, as the store rail does."""
+    name = for_listing(listing_category)
+    return name not in ONLINE_STORE_EXCLUDED or name in _trade_categories(store_category)
+
+
+def not_allowed_detail(listing_category: Optional[str]) -> dict:
+    """The 400 detail for a listing a store may not hold (may_hold)."""
+    name = for_listing(listing_category)
+    return {
+        "code": "STORE_CATEGORY_NOT_ALLOWED",
+        "message": (f"{name} listings can't go in your online store. "
+                    "Post it as your own listing instead."),
+    }
+
+
 def for_listing(value: Optional[str]) -> str:
     """The top-level category a listing counts under in a store's
     category rail. Listing.category is canonical for anything posted

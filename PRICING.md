@@ -21,13 +21,14 @@ Figures are in Kenyan shillings (KES), at **USD 1 = KES 129.5** (late September
 |---|---|
 | **Buyer-to-seller payments** | **Paused** (`IN_APP_PAYMENTS_ENABLED=false`): buyers pay sellers directly, so BROKA charges **no commission** for now. The app advises meeting to inspect first, and lists independent escrow services for deals at a distance (`GET /pricing/safe-payment`). See "While BROKA handles no payments" below |
 | **Commission**, when payments return | Negotiated deal: buyer pays **4.49%** (BROKA 3.49%, never under KES 20, + E-Confirm 1%). Auction: **5%** (BROKA 4% + E-Confirm 1%) |
-| **Listing fee** | Per listing, **for two months at a time** (2026-10-11), a cube root of its **value - price × quantity**: **f = 8.91822 × ∛value − 42.1011, between KES 10 and 2,000** (set 2026-10-09), never under what the listing costs to serve for those two months. A KES 1,500 dress pays KES 60 for two months, a KES 20,000 phone 200, a KES 800,000 car 785; from KES 12M of value (200 KES 180,000 iPhones, a house) it is KES 2,000. **Founding sellers' first listing is discounted by the order they joined**: the first 50 sellers list it free, the next 150 at half price, for 30 days (`FOUNDING_SELLER_TIERS`, `FOUNDING_DISCOUNT_DAYS`; costed in LAUNCH_DISCOUNT_MODEL.md). 2, 4 or 6 months at a time; longer is cheaper per month |
+| **Listing fee** | Per listing, **for two months at a time** (2026-10-11), a cube root of its **value - price × quantity**: **f = 8.91822 × ∛value − 42.1011, between KES 10 and 2,000** (set 2026-10-09), never under what the listing costs to serve for those two months. A KES 1,500 dress pays KES 60 for two months, a KES 20,000 phone 200, a KES 800,000 car 785; from KES 12M of value (200 KES 180,000 iPhones, a house) it is KES 2,000. **Founding sellers' first listing is discounted by the order they joined**: the first 50 sellers list it free, the next 150 at half price, for 30 days (`FOUNDING_SELLER_TIERS`, `FOUNDING_DISCOUNT_DAYS`; costed in LAUNCH_DISCOUNT_MODEL.md). **One free listing per seller, ever**: the launch offer (first 50 listings, 60 days) and the founding offer's free band never stack, and deleting the free listing doesn't free another. 2, 4 or 6 months at a time; longer is cheaper per month |
 | **Featured placement** | Short-term sellers only: KES 99 for 7 days, KES 350 for 28 days |
 | **Plus** | KES 199 / month: Zeno writing listing descriptions from photos, voice mode (15 requests every day), Zeno's texts, a Buying Agent watch, AI covers for ~2 listings |
 | **Pro** | KES 599 / month: pricing listings with Zeno against the market, Zeno negotiating for you, 3 watches, AI covers for ~7 listings, 2 auctions |
 | **Elite** | KES 1,499 / month: volume allowances, AI covers for ~20 listings, priority support |
 | **Free** | Buying, selling, typing to Zeno, negotiating, bidding and your own photos - plus one AI cover try and one listing written by Zeno from its photo |
-| **Store** | Any size the owner picks (`GET /pricing/store-plan`). Shops: KES 599 for up to 30 listings, then 16 a listing to 100, 14 to 250, 12 to 1,000 (40 listings 759, 100 listings 1,719, 500 listings 6,819). Car yards and agents: KES 2,999 for 10, then by the listing. KES 299 to open (waived on 6+ months); store listings pay no listing fee. Billing is not built yet |
+| **AI covers** | **Off for now** (`AI_COVERS_ENABLED=false`, 2026-11-19): sellers upload their own cover; no plan offers or counts AI covers and the free try is withheld until they are switched back on |
+| **Store** | Any size the owner picks (`GET /pricing/store-plan`). Shops (online stores): KES 60 a listing per two months for the first 20 - KES 1,199 for two months - then 15 a listing a month to 30, 14 to 100, 13 to 1,000 (30 listings 1,499 for two months, 100 listings 3,459), no opening fee. Car yards and agents: KES 2,999 a month for 10, then by the listing, KES 299 to open (waived on 6+ months). Store listings pay no listing fee |
 
 ---
 
@@ -208,6 +209,14 @@ survival is how many sellers pay after it.
 - It replaces the category launch offer while payments are paused (that one
   fades with escrow deals, which can't happen); with payments on, the
   larger of the two applies.
+- **One free listing per seller, ever** (2026-11-19). The free launch offer
+  (the first `FREE_LISTING_OFFER_LIMIT` listings, 60 days, one per person:
+  `pricing/launch_offers.py`) is a seller's first listing; the 100% band
+  here covers that first listing only when no launch slot is left. They
+  never stack: a seller who has had a listing live - free or paid, deleted
+  since or moved into their store - gets neither again. They used to: the
+  100% band posted the first listing without a claim, and the second then
+  took the launch offer.
 
 `FREE_LISTINGS_PER_SELLER` (default 0) can instead give every seller a
 number of free active listings for good. It never ends, so it is off.
@@ -659,15 +668,18 @@ types, and tiers on it had cliffs (BUSINESS_MODEL_REVIEW.md section 6).
 
 | Card | Base price covers | Then, per listing | Most in the app |
 |---|---|---|---|
-| **Shops** (everything but vehicles, property and land) | **KES 599** for up to 30 | 16 to 100, 14 to 250, 12 to 1,000 | 1,000 |
+| **Shops** (online stores: everything but vehicles, property, land, services and Other) | **KES 600** a month for 20 - KES 60 a listing per two months, 1,199 for two months (2026-11-19; it was 50, 999) | 15 to 30, 14 to 100, 13 to 250, 13 to 1,000 | 1,000 |
 | **Car yards** (Automobiles; at least 5 live) | **KES 2,999** for up to 10 | 200 to 25, 114 to 60, 100 to 200 | 200 |
 | **Agents** (Property and Land; at least 5 live) | **KES 2,999** for up to 10 | 150 to 30, 57 to 100, 50 to 300 | 300 |
 
-| Shop size | 30 | 40 | 50 | 100 | 250 | 500 | 1,000 |
-|---|---|---|---|---|---|---|---|
-| Price / month | 599 | 759 | 919 | 1,719 | 3,819 | 6,819 | 12,819 |
-| Per listing | 20.0 | 19.0 | 18.4 | 17.2 | 15.3 | 13.6 | 12.8 |
-| The fixed plan it replaces | 499 (20) | 999 (50) | 999 | 1,799 | 3,999 | 6,999 | by hand |
+Shops are billed every two months (2, 4, 6 or 12 at a time) and carry no
+opening fee (`plans.STORE_RATE_CARDS`):
+
+| Shop size | 20 | 30 | 40 | 50 | 100 | 250 | 500 | 1,000 |
+|---|---|---|---|---|---|---|---|---|
+| Price / month | 600 | 750 | 890 | 1,030 | 1,730 | 3,680 | 6,930 | 13,430 |
+| Two months | 1,199 | 1,499 | 1,779 | 2,059 | 3,459 | 7,359 | 13,859 | 26,859 |
+| Per listing, two months | 60.0 | 50.0 | 44.5 | 41.2 | 34.6 | 29.4 | 27.7 | 26.9 |
 
 | Car yard / agent size | 10 | 25 | 30 | 60 | 100 | 200 | 300 |
 |---|---|---|---|---|---|---|---|
@@ -675,8 +687,9 @@ types, and tiers on it had cliffs (BUSINESS_MODEL_REVIEW.md section 6).
 | Agent | 2,999 | 5,249 | 5,999 | 7,709 | 9,989 | 14,989 | 19,989 |
 
 - **Why these prices:**
-  - **A shop pays KES 20 a listing or less.** A KES 20,000 phone listed on
-    its own pays 100. Small store builders charge KES 460-1,999 a month, and
+  - **A shop pays KES 30 a listing a month or less** (60 per two months
+    at the smallest size). A KES 20,000 phone listed on its own pays 200
+    for two months. Small store builders charge KES 460-1,999 a month, and
     the WhatsApp catalogue is free.
   - **A car yard pays KES 120-300 a car**, against ~866 a month for a KABA
     member's Sunday spot at Jamhuri, and 1,120 for one KES 800,000 car
@@ -688,7 +701,11 @@ types, and tiers on it had cliffs (BUSINESS_MODEL_REVIEW.md section 6).
   - A car yard or agent store needs 5 live listings. A one-house "store"
     would undercut that house's own listing fee: 2,999 against 7,840 a month
     for a KES 20M house.
-  - A shop can't hold vehicles, property or land.
+  - A shop can't hold vehicles, property, land, services or Other; a car
+    yard holds Automobiles and an agent Property and Land as well as other
+    goods. Enforced on posting into a store, moving a listing in and quoting
+    it as store-covered (`stores/categories.may_hold`, 2026-11-19); the sell
+    wizard offers the store only for what it may hold.
 - **SMS alerts:** the availability reminder is free for every seller, so a store plan does not gate it.
 - **Prepaying** uses the premium discounts (8% / 15% / 20%).
 - **The margin rule is checked at every size of every card**, prepaid periods

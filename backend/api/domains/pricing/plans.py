@@ -81,6 +81,22 @@ class PremiumPlan:
     # The pitch while auctions are off (AUCTIONS_ENABLED), for a plan whose
     # pitch sells them; empty means the pitch never mentions auctions.
     pitch_without_auctions: str = ""
+    # The same while AI covers are off (AI_COVERS_ENABLED), and with both off.
+    pitch_without_covers: str = ""
+    pitch_without_auctions_or_covers: str = ""
+
+    def current_pitch(self) -> str:
+        """The pitch for what is switched on now: a plan must not sell
+        auctions nobody can host or AI covers nobody can make."""
+        auctions, covers = settings.auctions_enabled, settings.ai_covers_enabled
+        for applies, text in (
+            (not auctions and not covers, self.pitch_without_auctions_or_covers),
+            (not covers, self.pitch_without_covers),
+            (not auctions, self.pitch_without_auctions),
+        ):
+            if applies and text:
+                return text
+        return self.pitch
 
     def max_monthly_cost(self) -> float:
         usage = (
@@ -106,13 +122,14 @@ class PremiumPlan:
         # host one (auctions/paused.py). The allowance stays in the plan -
         # and in its cost above - for when they come back; it is only not
         # offered, so the app lists nothing about auctions (it shows an
-        # allowance only when it is over 0, older builds included).
+        # allowance only when it is over 0, older builds included). AI
+        # covers the same while AI_COVERS_ENABLED is off: none is made.
         auctions = settings.auctions_enabled
+        covers = settings.ai_covers_enabled
         return {
             "id": self.id,
             "name": self.name,
-            "pitch": self.pitch if auctions or not self.pitch_without_auctions
-            else self.pitch_without_auctions,
+            "pitch": self.current_pitch(),
             "monthly_price": self.monthly_price,
             "periods": period_prices(self.monthly_price),
             "allowances": {
@@ -120,12 +137,13 @@ class PremiumPlan:
                 "sms_alerts": self.sms_alerts,
                 "agent_watches": self.agent_watches,
                 "auto_negotiations": self.auto_negotiations,
-                "ai_covers": self.ai_covers,
+                "ai_covers": self.ai_covers if covers else 0,
                 # What the tries come to in listings: a seller thinks in
                 # "covers for how many listings", not in model calls. Rounded,
                 # not floored: the app says "about", and 20 tries are nearer
                 # 7 listings than 6.
-                "ai_cover_listings": round(self.ai_covers / costs.AI_COVER_TRIES_PER_LISTING),
+                "ai_cover_listings": (round(self.ai_covers / costs.AI_COVER_TRIES_PER_LISTING)
+                                      if covers else 0),
                 "auctions_hosted": self.auctions_hosted if auctions else 0,
                 "ai_descriptions": self.ai_descriptions,
                 "price_checks": self.price_checks,
@@ -167,6 +185,8 @@ PREMIUM_PLANS: tuple[PremiumPlan, ...] = (
         id="plus", name="Plus", monthly_price=199,
         pitch="Zeno writes your listings from their photos, gives them AI covers, "
               "talks with you and texts you when a buyer is waiting.",
+        pitch_without_covers="Zeno writes your listings from their photos, talks with you "
+                             "and texts you when a buyer is waiting.",
         voice_requests=15, sms_alerts=30, agent_watches=1, auto_negotiations=0,
         ai_covers=6, auctions_hosted=0, ai_descriptions=30,
     ),
@@ -176,6 +196,10 @@ PREMIUM_PLANS: tuple[PremiumPlan, ...] = (
               "covers for a week of listings, and your own auctions.",
         pitch_without_auctions="Zeno prices your listings against the market, hunts and "
                                "haggles for you, and makes covers for a week of listings.",
+        pitch_without_covers="Zeno prices your listings against the market and hunts and "
+                             "haggles for you, and you host your own auctions.",
+        pitch_without_auctions_or_covers="Zeno prices your listings against the market "
+                                         "and hunts and haggles for you.",
         voice_requests=40, sms_alerts=80, agent_watches=3, auto_negotiations=25,
         ai_covers=20, auctions_hosted=2, ai_descriptions=100, price_checks=40,
     ),
@@ -349,18 +373,19 @@ def _slot_cost(category: str) -> float:
     return costs.listing_month_cost(for_category(category).chats_per_month)
 
 
-# VAT included. An online (goods) store is KES 50 a listing per two months:
-# 20 listings (the smallest plan) is 1,000 -> 999 charmed for two months
-# (500 a month), 30 listings is 650 a month -> 1,299 for two months instead
-# of 1,300, and the per-listing rate keeps falling after that (14 to 100,
-# 13 to 250 and 13 to 1,000 a month - ~28/26/26 per two months).
+# VAT included. An online (goods) store is KES 60 a listing per two months
+# (2026-11-19; it was 50): 20 listings (the smallest plan) is 1,200 -> 1,199
+# charmed for two months (600 a month), 30 listings is 750 a month -> 1,499
+# for two months instead of 1,500, and the per-listing rate keeps falling
+# after that (15 to 30, 14 to 100, 13 to 250 and 13 to 1,000 a month -
+# ~30/28/26/26 per two months).
 # No opening fee. Car yards and agents start at 2,999 for 10: KES 167-300
 # a car, against ~866 a month for a KABA member's Sunday spot at Jamhuri
 # and 1,120 for one KES 800,000 car listed alone; Househunt charges agents
 # 10,000 for 20 listings. tests/test_pricing.py checks the margin rule at
 # every size of every card.
 STORE_RATE_CARDS: tuple[StoreRateCard, ...] = (
-    StoreRateCard(id="goods", name="Store", included=20, base_price=500,
+    StoreRateCard(id="goods", name="Store", included=20, base_price=600,
                   bands=((30, 15), (100, 14), (250, 13), (1_000, 13)), max_listings=1_000,
                   min_listings=20, setup_fee=0),
     StoreRateCard(id="vehicles", name="Car yard", included=10, base_price=2_999,

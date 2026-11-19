@@ -10,6 +10,13 @@ Eligibility, beyond the global limit:
   * one per user - a second listing/store never qualifies, even after the
     first is deleted (the per-user unique index, checked here for a clean
     answer instead of an IntegrityError);
+  * the free listing is the seller's first: a seller who has already had
+    a listing live - free on the founding offer, paid, or from before the
+    offer existed, and deleted since or not - has had theirs
+    (listing_offer_used). The founding offer's free band used to go live
+    without a claim, so a founding seller's second listing took the launch
+    claim as well: two free listings for one seller. The free store is a
+    person's first store the same way (_had_a_store);
   * personal listings only - a store listing is already covered by its
     store's plan and must not burn a launch slot (listings/paid.fee_applies).
 
@@ -35,11 +42,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.config import settings
+from api.database import Listing, ListingType
+from api.domains.listings.paid import posted_personal
 from api.models.launch_offer import LaunchOfferClaim, LaunchOfferType
 
 logger = logging.getLogger(__name__)
@@ -111,11 +120,68 @@ async def status(db: AsyncSession, offer_type: str,
     return OfferStatus(offer_type, limit, await _claimed_count(db, offer_type), days)
 
 
+async def _had_a_listing_live(db: AsyncSession, user_id: str,
+                              exclude_listing_id: Optional[str] = None) -> bool:
+    """Whether the seller has posted a listing of their own that went live
+    - free (the founding offer, a launch window, before fees) or paid, in
+    any status since: a deleted listing still counts, so deleting it never
+    makes the next one "first". One posted and never paid (paid_until ==
+    created_at, never shown to a buyer) does not count, nor does one posted
+    into a store (posted_personal) or an auction (no listing fee).
+
+    `exclude_listing_id`: the listing being created, flushed just before
+    its claim - while fees are off it has no paid_until yet, which reads
+    as live."""
+    went_live = or_(Listing.paid_until.is_(None), Listing.paid_until > Listing.created_at)
+    query = select(Listing.id).where(
+        Listing.seller_id == user_id,
+        or_(Listing.listing_type.is_(None), Listing.listing_type != ListingType.auction),
+        posted_personal(),
+        went_live,
+    )
+    if exclude_listing_id is not None:
+        query = query.where(Listing.id != exclude_listing_id)
+    return (await db.execute(query.limit(1))).scalar_one_or_none() is not None
+
+
+async def _had_a_store(db: AsyncSession, user_id: str,
+                       exclude_store_id: Optional[str] = None) -> bool:
+    """Whether the user has had a store before - open, paused or deleted
+    since. The free store is a person's first, as the free listing is: an
+    owner whose earlier store predates the offer (free while billing was
+    off) used to delete it and open another on the offer.
+
+    `exclude_store_id`: the store being created, flushed just before its
+    claim."""
+    from api.models.store import Store
+
+    query = select(Store.id).where(Store.owner_id == user_id)
+    if exclude_store_id is not None:
+        query = query.where(Store.id != exclude_store_id)
+    return (await db.execute(query.limit(1))).scalar_one_or_none() is not None
+
+
+async def listing_offer_used(db: AsyncSession, user_id: str,
+                             exclude_listing_id: Optional[str] = None) -> bool:
+    """Whether this seller has had their one free listing: they claimed the
+    launch offer, or a listing of theirs has already been live. Either way
+    neither free-listing offer is theirs again - not the launch offer, and
+    not the founding offer's free band (ListingService.create_listing)."""
+    if await _user_claim(db, LaunchOfferType.LISTING_FREE, user_id) is not None:
+        return True
+    return await _had_a_listing_live(db, user_id, exclude_listing_id)
+
+
 async def _peek(db: AsyncSession, offer_type: str, user_id: str) -> bool:
     limit, _ = _limit_and_days(offer_type)
     if limit <= 0:
         return False
     if await _user_claim(db, offer_type, user_id) is not None:
+        return False
+    if (offer_type == LaunchOfferType.LISTING_FREE
+            and await _had_a_listing_live(db, user_id)):
+        return False
+    if offer_type == LaunchOfferType.STORE_FREE and await _had_a_store(db, user_id):
         return False
     return await _claimed_count(db, offer_type) < limit
 
@@ -136,6 +202,14 @@ async def _claim(db: AsyncSession, offer_type: str, user_id: str,
     if limit <= 0:
         return None
     if await _user_claim(db, offer_type, user_id) is not None:
+        return None
+    # The listing being claimed for is already flushed: it is not the one
+    # that would make this seller's free listing used.
+    if (offer_type == LaunchOfferType.LISTING_FREE
+            and await _had_a_listing_live(db, user_id, exclude_listing_id=entity_id)):
+        return None
+    if (offer_type == LaunchOfferType.STORE_FREE
+            and await _had_a_store(db, user_id, exclude_store_id=entity_id)):
         return None
     expires_at = now + timedelta(days=days)
     for _ in range(_MAX_CLAIM_ATTEMPTS):
@@ -184,7 +258,16 @@ async def claim_for_entity(db: AsyncSession, offer_type: str,
 
 
 async def offers_status(db: AsyncSession, user_id: Optional[str] = None) -> dict:
-    """Both offers for GET /pricing/launch-offers and the sell/store screens."""
+    """Both offers for GET /pricing/launch-offers and the sell/store screens.
+
+    `already_claimed` is true once the offer is no longer this user's to
+    take: for listings, they have had their one free listing
+    (listing_offer_used); for stores, they claimed it or have had a store
+    before. The app hides every "post your first listing free" teaser on
+    it, older builds included - a seller whose first listing went free on
+    the founding offer was still shown the launch offer, and the server
+    then gave them a second free listing.
+    """
     out: dict = {}
     for key, offer_type, peek, billing_on in (
         ("listing_free", LaunchOfferType.LISTING_FREE, peek_listing_offer,
@@ -196,7 +279,10 @@ async def offers_status(db: AsyncSession, user_id: Optional[str] = None) -> dict
         eligible = await peek(db, user_id) if user_id else None
         already = None
         if user_id:
-            already = await _user_claim(db, offer_type, user_id) is not None
+            already = (await listing_offer_used(db, user_id)
+                       if offer_type == LaunchOfferType.LISTING_FREE
+                       else (await _user_claim(db, offer_type, user_id) is not None
+                             or await _had_a_store(db, user_id)))
         out[key] = st.to_dict(eligible=eligible, already_claimed=already,
                               enabled=bool(billing_on and st.limit > 0))
     return out

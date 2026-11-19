@@ -31,6 +31,7 @@ import 'package:flutter/material.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/utils/result.dart';
 import '../../../main.dart';
+import '../../../services/ai_covers_enabled.dart';
 import '../../../services/api_service.dart';
 import '../../../services/photo_upload_tracker.dart';
 import '../../../services/sell_wizard_data.dart';
@@ -105,6 +106,7 @@ class ZenoAutolistScreen extends StatefulWidget {
     this.repository,
     this.generator,
     this.premium,
+    this.aiCovers,
     this.animateBackground = true,
   });
 
@@ -115,6 +117,10 @@ class ZenoAutolistScreen extends StatefulWidget {
   final ZenoSellingRepository? repository;
   final ShowcaseGenerator? generator;
   final PremiumRepository? premium;
+
+  /// Whether Zeno offers an AI cover at the end; this build's
+  /// kAiCoversEnabled unless a test says otherwise.
+  final bool? aiCovers;
 
   /// False renders the constellation as one still frame - for tests.
   final bool animateBackground;
@@ -404,12 +410,15 @@ class _ZenoAutolistScreenState extends State<ZenoAutolistScreen> {
 
   // ── 3. The cover ─────────────────────────────────────────────────────────
 
-  bool get _coversOn => _premium?.enabled ?? false;
+  // Off in this build for now (kAiCoversEnabled), and off whenever plans
+  // are (PRICING.md).
+  bool get _coversOn => (widget.aiCovers ?? kAiCoversEnabled) && (_premium?.enabled ?? false);
   bool get _coversLocked => !(_premium?.canUse(PremiumFeature.aiCovers) ?? true);
 
   void _offerCover() {
-    // AI covers are off whenever plans are (PRICING.md): there is nothing
-    // to offer, and the Cover step still takes one from the gallery.
+    // AI covers are off whenever plans are (PRICING.md), and in this build
+    // for now: there is nothing to offer, and the Cover step still takes
+    // one from the gallery.
     if (!_coversOn || _data.hasShowcase) {
       _finish();
       return;

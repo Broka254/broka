@@ -45,6 +45,8 @@ import '../features/launch_offers/presentation/launch_offer_widgets.dart';
 import '../features/listing_fee/data/listing_fee_repository.dart';
 import '../features/listing_fee/domain/listing_fee.dart';
 import '../features/listing_fee/presentation/listing_fee_screen.dart';
+import '../features/stores/data/repositories/stores_repository.dart';
+import '../features/stores/domain/models/store.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../widgets/delivery_nudge.dart';
@@ -80,8 +82,12 @@ class SellZenoAlertScreen extends StatefulWidget {
   /// For tests: the listing-fee quote and payment.
   final ListingFeeRepository? feeRepository;
 
+  /// For tests: the seller's store (null: none) instead of GET /stores/mine.
+  final Future<Result<Store?>> Function()? loadMyStore;
+
   const SellZenoAlertScreen({
     super.key, required this.data, this.publisher, this.question, this.feeRepository,
+    this.loadMyStore,
   });
   @override
   State<SellZenoAlertScreen> createState() => _SellZenoAlertScreenState();
@@ -150,7 +156,30 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
     super.dispose();
   }
 
+  // The store chosen on Review, checked again before anything is quoted or
+  // published (_checkStore): Go live is where a restored draft reopens.
+  late final Future<void> _storeChecked = _checkStore();
+
+  /// A draft reopened here never passed through Review, so its store is
+  /// checked again: one that is gone, or may not hold this category (an
+  /// online store takes no land, vehicles, property, services or Other),
+  /// is dropped and the listing posts as the seller's own - instead of a
+  /// "covered by your store" banner and then the server's refusal.
+  Future<void> _checkStore() async {
+    if (_data.storeId == null) return;
+    final r = await (widget.loadMyStore ?? storesRepository.getMyStore)();
+    if (!mounted) return;
+    if (r case Success(:final data)) {
+      if (data == null || data.id != _data.storeId || !data.mayHold(_data.category)) {
+        setState(() => _data.storeId = null);
+        unawaited(_data.persist());
+      }
+    }
+  }
+
   Future<void> _loadFee() async {
+    await _storeChecked;
+    if (!mounted) return;
     final price = parseKesInput(_data.price);
     if (_data.isAuction || price == null || price <= 0) return;
     final r = await (widget.feeRepository ?? listingFeeRepository).quoteForDraft(
@@ -237,6 +266,9 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
       _error = null;
     });
     try {
+      // Never publish into a store before it has been checked (_checkStore).
+      await _storeChecked;
+      if (!mounted) return;
       final created = await (widget.publisher ?? ListingPublisher()).publish(
         _data,
         lat: ApiService.currentUserLat ?? -1.286389,

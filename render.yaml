@@ -49,6 +49,11 @@ services:
                              # AI covers return a clear error, gallery covers still work.
       - key: HF_SHOWCASE_MODEL
         value: "Qwen/Qwen-Image-Edit-2511"   # any Hub model HF serves for image-to-image via fal-ai
+      - key: AI_COVERS_ENABLED
+        value: "false"       # Off for now: no AI cover is generated (SHOWCASE_UNAVAILABLE) and plans
+                             # don't offer them - sellers upload their own cover. true: AI covers
+                             # are back, as PREMIUM_ENABLED allows. The app hides them in the same
+                             # release (kAiCoversEnabled).
       - key: DEEPGRAM_API_KEY
         sync: false          # Deepgram streaming speech-to-text, for the Zeno voice card,
                              # and Zeno's first stand-in voice (Aura) when Edge TTS fails.

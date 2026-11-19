@@ -38,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import Listing
 from api.core import hf_image_client
+from api.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +187,16 @@ async def _get_owned_listing(db: AsyncSession, listing_id: str, user_id: str) ->
     if listing.seller_id != user_id:
         raise HTTPException(status_code=403, detail="Only the seller can manage this listing's showcase image")
     return listing
+
+
+def _require_ai_covers() -> None:
+    """AI covers switched off (AI_COVERS_ENABLED, off for now): nothing is
+    generated, whoever asks. First thing in both entry points - before the
+    photo is read or a rate-limit slot is spent - with the reply older app
+    builds already show as "upload a cover from your gallery"."""
+    if not settings.ai_covers_enabled:
+        raise _failure(hf_image_client.ImageGenerationError(
+            "AI_COVERS_ENABLED is off", code="unavailable"))
 
 
 async def _spend_a_cover(db: AsyncSession, user_id: str) -> None:
@@ -366,6 +377,7 @@ async def generate_showcase_preview(
     showcase). Generates and returns a preview - does NOT save it. The
     seller previews it and calls set_showcase_image() to actually use it,
     or discards it by simply not calling that."""
+    _require_ai_covers()
     listing = await _get_owned_listing(db, listing_id, user_id)
     theme = _theme_or_400(theme)
     image_ref = await _first_actual_photo_data_uri(db, listing)
@@ -393,6 +405,7 @@ async def generate_showcase_preview_standalone(
     The photo is `photo_id` - the seller's first photo, already uploaded
     when it was taken, so nothing is sent twice - or, from older builds,
     `photo_data_uri`, the photo itself."""
+    _require_ai_covers()
     theme = _theme_or_400(theme)
     if photo_id:
         photo = await _photo_from_asset(db, user_id, photo_id)

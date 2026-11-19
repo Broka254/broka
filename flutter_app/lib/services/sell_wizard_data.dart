@@ -15,6 +15,7 @@
 import 'dart:io';
 import 'dart:math';
 import '../features/auctions/domain/auctions_enabled.dart';
+import '../utils/listing_details_text.dart';
 import 'sell_draft_store.dart';
 import 'photo_upload_tracker.dart';
 
@@ -104,6 +105,23 @@ class SellWizardData {
   String get location =>
       [subcounty, county].where((s) => s.trim().isNotEmpty).join(', ');
   String description = '';
+
+  /// The Details step's answers as the Description step last wrote them
+  /// into [description] (ListingDetailsText). Found there again on a later
+  /// visit, they are brought up to date with the details; once the seller
+  /// has edited them, they are the seller's and left alone.
+  String autoDescription = '';
+
+  /// What the listing is posted with, and what Review shows: the seller's
+  /// description, or - when they left the box empty - their details as its
+  /// lines. The server writes the same lines for an empty one, so posting
+  /// them here keeps Review saying exactly what buyers will read.
+  String get descriptionToPost {
+    final own = description.trim();
+    if (own.isNotEmpty) return own;
+    return ListingDetailsText.compose(
+        condition: condition, attributes: attributes, maxLength: maxDescriptionLength);
+  }
   String reserve = '';
   final List<File> verifiedPhotos = [];
   // Each photo uploads in the background as soon as it's taken (Online
@@ -185,6 +203,7 @@ class SellWizardData {
     'county': county,
     'subcounty': subcounty,
     'description': description,
+    'autoDescription': autoDescription,
     'reserve': reserve,
     'category': category,
     'categoryId': categoryId,
@@ -240,6 +259,7 @@ class SellWizardData {
       ..county      = draft['county']      as String? ?? ''
       ..subcounty   = draft['subcounty']   as String? ?? ''
       ..description = draft['description'] as String? ?? ''
+      ..autoDescription = draft['autoDescription'] as String? ?? ''
       ..reserve     = draft['reserve']     as String? ?? ''
       // "Vehicles" in a draft from before the rename is the same category.
       ..category    = _currentCategoryName(draft['category'] as String? ?? '')

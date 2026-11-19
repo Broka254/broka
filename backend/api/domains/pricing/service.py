@@ -6,7 +6,7 @@ category's trade so far and whether they are a short- or long-term seller.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.config import settings
 from api.database import Deal, Listing, ListingStatus, ListingType, SellerTier, User
+from api.domains.listings.paid import posted_personal
 from api.domains.pricing import engine
 from api.domains.pricing.categories import (
     CATEGORIES, CategoryPricing, for_category, stored_names,
@@ -162,9 +163,11 @@ async def founding_discount(
     now = datetime.utcnow()
     # Store listings are not a seller's "first listing" for fee offers: they
     # never pay a fee, so counting one would burn the seller's founding /
-    # launch-offer place on a listing that was free anyway.
+    # launch-offer place on a listing that was free anyway. A listing posted
+    # personal and moved into a store since still is (posted_personal):
+    # otherwise the move made the seller's next listing "first" again.
     not_auction = Listing.listing_type != ListingType.auction
-    personal = Listing.store_id.is_(None)
+    personal = posted_personal()
     first_row = (await db.execute(
         select(Listing.id, Listing.created_at)
         .where(Listing.seller_id == seller_id, not_auction, personal)
@@ -199,8 +202,16 @@ async def listing_fee_quote(
     in_category = await category_completed_deals(db, category)
     tier = (await db.execute(select(User.seller_tier).where(User.id == user_id))).scalar()
     start = starts_at or datetime.utcnow()
+    from api.domains.pricing import launch_offers
+
     # A quote for a draft (no listing_id) is for a listing about to be posted.
     founding = await founding_discount(db, user_id, start, listing_id)
+    # One free listing per seller, whichever offer gives it: a seller who
+    # has had theirs gets no founding discount on another
+    # (ListingService.create_listing), and is quoted as such.
+    if (new_listing and founding.percent
+            and await launch_offers.listing_offer_used(db, user_id)):
+        founding = replace(founding, percent=0)
     # 100% is not priced (the fee floor would charge the cost of serving
     # the listing): the listing is posted live until the offer ends.
     founding_free = founding.percent >= 100
@@ -235,8 +246,6 @@ async def listing_fee_quote(
     # a peek only - the slot is claimed in ListingService.create_listing's
     # transaction, never by a quote, or refreshing the sell screen would
     # spend offers nobody posted.
-    from api.domains.pricing import launch_offers
-
     from api.models.launch_offer import LaunchOfferType
 
     launch_eligible = bool(new_listing and await launch_offers.peek_listing_offer(db, user_id))
@@ -251,8 +260,9 @@ async def listing_fee_quote(
         "remaining": (await launch_offers.status(
             db, LaunchOfferType.LISTING_FREE)).remaining,
     }
-    # A listing about to be posted into one of the seller's free places, or
-    # by a seller whose founding offer is 100%, pays nothing:
+    # A listing about to be posted into one of the seller's free places, on
+    # the launch offer, or by a seller whose founding offer is 100% (taken
+    # only when no launch slot is left for them), pays nothing:
     # ListingService.create posts it live.
     free = (new_listing and settings.listing_fees_enabled
             and (founding_free or launch_eligible

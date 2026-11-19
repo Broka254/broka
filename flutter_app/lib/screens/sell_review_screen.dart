@@ -25,7 +25,11 @@ import 'sell_flow.dart';
 
 class SellReviewScreen extends StatefulWidget {
   final SellWizardData data;
-  const SellReviewScreen({super.key, required this.data});
+
+  /// For tests: the seller's store (null: none) instead of GET /stores/mine.
+  final Future<Result<Store?>> Function()? loadMyStore;
+
+  const SellReviewScreen({super.key, required this.data, this.loadMyStore});
   @override
   State<SellReviewScreen> createState() => _SellReviewScreenState();
 }
@@ -58,15 +62,30 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
   }
 
   Future<void> _loadMyStore() async {
-    final result = await storesRepository.getMyStore();
+    final result = await (widget.loadMyStore ?? storesRepository.getMyStore)();
     if (!mounted) return;
     result.fold(
-      onSuccess: (store) => setState(() => _myStore = store),
+      onSuccess: (store) => setState(() {
+        _myStore = store;
+        // A store set before this step - "Add a product" from My Store, or
+        // a draft - that is gone, or may not hold this category (an online
+        // store takes no land, vehicles, property, services or Other): the
+        // listing posts as the seller's own. The server would refuse it
+        // anyway, after the seller was told the store covers it.
+        if (_data.storeId != null &&
+            (store == null || store.id != _data.storeId || !store.mayHold(_data.category))) {
+          _data.storeId = null;
+          _data.persist();
+        }
+      }),
       // A failed lookup (e.g. offline) just means no selector shows -
       // same as genuinely having no store.
       onFailure: (_, __) {},
     );
   }
+
+  /// The seller has a store, and it may hold this listing (Store.mayHold).
+  bool get _storeCanHold => _myStore?.mayHold(_data.category) ?? false;
 
   void _next() {
     // Every earlier step, checked again: a restored draft or a step
@@ -133,10 +152,15 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
         ),
         SellGap.section,
 
-        if (_myStore != null) ...[
+        if (_myStore != null && _storeCanHold) ...[
           sellStepLabel('LIST UNDER'),
           SellGap.label,
           _storeToggle(data),
+          SellGap.section,
+        ] else if (_myStore != null) ...[
+          // Said, not just left out: a seller who posts into their store
+          // every time would otherwise wonder where the choice went.
+          _storeNotForThis(_myStore!, data.category),
           SellGap.section,
         ],
 
@@ -173,8 +197,9 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
                   ? (data.deliveryNote.isEmpty ? 'Can arrange' : 'Can arrange - ${data.deliveryNote}')
                   : 'Buyer picks up'),
           _row('Location', data.location),
-          if (data.description.trim().isNotEmpty)
-            _row('Description', data.description.trim()),
+          // What buyers will read: the seller's words, or their details.
+          if (data.descriptionToPost.isNotEmpty)
+            _row('Description', data.descriptionToPost),
         ])),
       ]),
     );
@@ -229,6 +254,28 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
       }),
     ]);
   }
+
+  /// Why the store isn't offered for this listing.
+  Widget _storeNotForThis(Store store, String category) => Container(
+        key: const Key('sell-store-not-for-category'),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: BrokaColors.bgCard,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: BrokaColors.border),
+        ),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Icon(Icons.storefront_outlined, color: BrokaColors.textMid, size: 18),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '$category listings can\'t go in ${store.name}, so this one posts as your '
+              'own listing.',
+              style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.4),
+            ),
+          ),
+        ]),
+      );
 
   Widget _row(String label, String value) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 8),

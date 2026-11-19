@@ -107,7 +107,9 @@ class ListingPublisher {
       'location_county': data.county.trim(),
       'location_subcounty': data.subcounty.trim(),
       'listing_type': data.type,
-      'description': data.description.trim(),
+      // The seller's words, or their details as its lines when the box was
+      // left empty - what Review showed (SellWizardData.descriptionToPost).
+      'description': data.descriptionToPost,
       'photo_ids': photoIds,
       // Selling terms (2026-09-25). An auction sells the lot: no unit, one
       // of it, and bidding is its negotiation.
