@@ -67,7 +67,7 @@
   isolation: isolate;
   display: inline-flex;
   align-items: center;
-  gap: 11px;
+  gap: 14px;
   height: 46px;
   padding: 0 20px 0 15px;
   overflow: visible;
@@ -106,10 +106,11 @@
   place-items: center;
 }
 
+/* Above the basket, clear of the total beside it. */
 .cartBadge {
   position: absolute;
-  top: -10px;
-  right: -12px;
+  top: -14px;
+  right: -10px;
   min-width: 20px;
   height: 20px;
   padding: 0 5px;
@@ -510,7 +511,7 @@
   position: relative;
   isolation: isolate;
   margin-bottom: 8px;
-  padding: clamp(26px, 4vw, 44px) clamp(20px, 4vw, 44px);
+  padding: clamp(24px, 3vw, 36px) clamp(20px, 4vw, 44px);
   overflow: hidden;
   border: 1px solid transparent;
   border-radius: var(--radius-2xl);
@@ -544,29 +545,66 @@
   content: '';
 }
 
+/* The band is a title, not a hero: smaller than the store details' so the
+   first row of products reaches the first screen. */
+.catalogueHead h1 {
+  margin-bottom: 0;
+  font-size: clamp(36px, 4.6vw, 62px);
+}
+
+.catalogueCover {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: -2;
+  width: min(62%, 820px);
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.7;
+  -webkit-mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / 0.5) 35%, #000 75%);
+  mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / 0.5) 35%, #000 75%);
+  pointer-events: none;
+}
+
+@media (max-width: 860px) {
+  .catalogueCover {
+    width: 78%;
+    opacity: 0.4;
+  }
+}
+
+/* A dot in the gap before every part. The one before a part that starts a
+   line falls outside the box and is clipped, so a line that wraps on a
+   phone doesn't open with a dot. */
 .catalogueLead {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 14px;
+  gap: 8px 28px;
   margin: 12px 0 0;
   color: var(--text-mid);
   font-family: var(--font-mono);
   font-size: 12px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
+  clip-path: inset(-14px -14px -14px 0);
 }
 
-.catalogueLead span + span::before {
-  display: inline-block;
+.catalogueLead span {
+  position: relative;
+}
+
+.catalogueLead span::before {
+  position: absolute;
+  top: 50%;
+  left: -16.5px;
   width: 5px;
   height: 5px;
-  margin-right: 14px;
+  margin-top: -3px;
   border-radius: 50%;
   background: var(--cyan);
   box-shadow: 0 0 10px var(--cyan);
   content: '';
-  vertical-align: 2px;
 }
 
 .catalogue {
@@ -2360,7 +2398,7 @@
   position: relative;
   z-index: 1;
   isolation: isolate;
-  margin-top: 120px;
+  margin-top: clamp(64px, 9vw, 120px);
   padding: 72px var(--gutter) 0;
   overflow: hidden;
   background:

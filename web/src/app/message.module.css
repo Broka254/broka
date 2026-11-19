@@ -1,26 +1,90 @@
+/* Not found, and the API waking up: a lit mark, the message in the
+   hologram's colours, and the way back. */
 .main {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 4px;
-  min-height: 60vh;
+  min-height: 64vh;
   text-align: center;
 }
 
 .main h1 {
   margin: 8px 0 4px;
-  font-size: clamp(26px, 5vw, 34px);
+  padding-bottom: 0.06em;
+  background: var(--holo-text);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-family: var(--font-display);
+  font-size: clamp(30px, 6vw, 46px);
   font-weight: 700;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.045em;
+  line-height: 1.05;
+  text-wrap: balance;
 }
 
 .main p {
-  margin: 0 0 20px;
   max-width: 420px;
+  margin: 0 0 24px;
+  line-height: 1.6;
 }
 
-.emoji {
-  font-size: 48px;
-  margin: 0 !important;
+/* A drawn icon in a lit glass tile, inside a ring of light that turns. */
+.mark {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  width: 88px;
+  height: 88px;
+  margin-bottom: 26px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 28px;
+  background:
+    var(--glass-lit) padding-box,
+    var(--edge-strong) border-box;
+  box-shadow:
+    var(--shadow-raised),
+    0 0 64px -12px rgb(122 92 240 / 0.85);
+  color: var(--violet-text);
+}
+
+.mark::before {
+  position: absolute;
+  inset: -16px;
+  z-index: -1;
+  border-radius: 40px;
+  background: conic-gradient(
+    from var(--spin),
+    rgb(139 117 255 / 0.16) 0 64%,
+    rgb(139 117 255 / 0.9) 78%,
+    rgb(84 215 233 / 0.9) 86%,
+    rgb(139 117 255 / 0.16) 94%
+  );
+  content: '';
+  padding: 1px;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: markSpin 6s linear infinite;
+}
+
+.mark svg {
+  filter: drop-shadow(0 0 10px rgb(139 117 255 / 0.7));
+}
+
+@keyframes markSpin {
+  to {
+    --spin: 360deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mark::before {
+    animation: none;
+  }
 }

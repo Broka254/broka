@@ -154,9 +154,13 @@ export function StoreDetails({
                 </span>
                 <div>
                   <p className={styles.ownerName}>{ownerName}</p>
-                  <p className={owner?.verified ? styles.good : styles.mutedLine}>
-                    {owner?.verified ? '✓ Verified seller' : 'Not verified yet'}
-                  </p>
+                  {owner?.verified ? (
+                    <p className={`${styles.good} ${styles.iconLine}`}>
+                      <Icon name="verified" size={16} /> Verified seller
+                    </p>
+                  ) : (
+                    <p className={styles.mutedLine}>Not verified yet</p>
+                  )}
                 </div>
               </div>
               {/* The seller's record in three numbers, each with what it

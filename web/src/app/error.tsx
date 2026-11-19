@@ -5,6 +5,8 @@
 // dead end.
 import { useEffect } from 'react'
 
+import { Icon } from '@/components/Icon'
+
 import styles from './message.module.css'
 
 export default function ErrorPage({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
@@ -14,9 +16,9 @@ export default function ErrorPage({ error, reset }: { error: Error & { digest?: 
 
   return (
     <main className={`page ${styles.main}`}>
-      <p className={styles.emoji} aria-hidden="true">
-        ⏳
-      </p>
+      <span className={styles.mark} aria-hidden="true">
+        <Icon name="clock" size={32} />
+      </span>
       <h1>BROKA is waking up</h1>
       <p className="muted">That took longer than it should. Give it a moment and try again.</p>
       <button type="button" className="button" onClick={() => reset()}>

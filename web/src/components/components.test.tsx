@@ -281,7 +281,10 @@ describe('StoreDetails', () => {
     expect(screen.getByText('Open')).toBeTruthy()
     expect(screen.getByText('Genuine phones and accessories.')).toBeTruthy()
     expect(screen.getByText('Jane Wanjiru')).toBeTruthy()
-    expect(screen.getByText('✓ Verified seller')).toBeTruthy()
+    // The badge drawn, not the ✓ character (a box in a font without it).
+    const verified = screen.getByText('Verified seller')
+    expect(verified.querySelector('svg')).not.toBeNull()
+    expect(verified.textContent).not.toContain('✓')
     // Deals done, the buyer rating (with its review count) and the year
     // joined, each in its own tile.
     for (const [label, value] of [

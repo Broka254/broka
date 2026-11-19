@@ -113,6 +113,12 @@ export default async function StoreShopPage({ params, searchParams }: Props) {
       <StoreHeader view={view} active="shop" filters={filters} searchBase={path} />
       <main id="main-content" className={`page ${shop.storePage}`}>
         <header className={shop.catalogueHead}>
+          {/* The store's cover, faded in behind the band's right side:
+              decoration, so it has no alt text of its own. */}
+          {view.cover && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img className={shop.catalogueCover} src={view.cover.src} srcSet={view.cover.srcSet ?? undefined} sizes="(max-width: 860px) 80vw, 820px" alt="" />
+          )}
           <nav aria-label="Breadcrumb" className={shop.crumbs}>
             <Link href={view.path}>{store.name}</Link>
             <Icon name="chevron" size={14} />

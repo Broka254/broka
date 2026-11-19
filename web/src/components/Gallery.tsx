@@ -18,6 +18,19 @@ export interface GalleryImage {
 /** How far a finger moves sideways, in pixels, before it is a swipe. */
 const SWIPE = 40
 
+/**
+ * Marks a loaded photo as wider or taller than its frame. The stylesheet
+ * then sizes the image to the photo itself and fades out the two edges that
+ * fall inside the frame, so a wide photo melts into the light behind it
+ * instead of ending in a hard line across the frame. Until this runs (or
+ * without script) the photo is simply fitted inside the frame.
+ */
+function markShape(img: HTMLImageElement | null) {
+  const frame = img?.parentElement
+  if (!img || !frame || !img.naturalWidth || !img.naturalHeight || !frame.clientHeight) return
+  img.dataset.shape = img.naturalWidth / img.naturalHeight >= frame.clientWidth / frame.clientHeight ? 'wide' : 'tall'
+}
+
 export function Gallery({ images, alt, emoji }: { images: GalleryImage[]; alt: string; emoji: string }) {
   const [index, setIndex] = useState(0)
   const start = useRef<{ x: number; y: number } | null>(null)
@@ -67,6 +80,12 @@ export function Gallery({ images, alt, emoji }: { images: GalleryImage[]; alt: s
           alt={many ? `${alt}, photo ${index + 1} of ${images.length}` : alt}
           fetchPriority="high"
           draggable={false}
+          // A photo that finished loading before the page came alive fires
+          // no load event, so the ref looks at it too.
+          ref={(img) => {
+            if (img?.complete) markShape(img)
+          }}
+          onLoad={(e) => markShape(e.currentTarget)}
         />
         {many && (
           <>
