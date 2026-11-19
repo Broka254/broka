@@ -602,7 +602,9 @@ async def ensure_grace_subscriptions() -> int:
     """When billing first turns on, give every store that predates it its
     grace time, so a seller who opened a store while billing was off keeps
     their shop running instead of finding it dark. The opening fee is NOT
-    waived for them (PRICING.md §9): setup_fee_paid stays False.
+    waived for them (PRICING.md §9): setup_fee_paid stays False. A store
+    whose owner already had the free-store launch offer gets an unpaid row
+    instead - one free store period per person.
 
     A one-time round, not a startup sweep: the marker row in
     store_billing_meta is claimed before anything is granted. That matters
@@ -636,16 +638,29 @@ async def ensure_grace_subscriptions() -> int:
             # INSERT. The grace is that worker's to grant; ours would double it.
             return 0
         rows = (await db.execute(
-            select(Store.id)
+            select(Store.id, Store.owner_id)
             .outerjoin(StoreSubscription, StoreSubscription.store_id == Store.id)
             .where(StoreSubscription.id.is_(None))
-        )).scalars().all()
-        for store_id in rows:
+        )).all()
+        # An owner who already had their free store - the launch offer's
+        # free period, on a store they have deleted since - gets no grace
+        # on the one they opened after it: grace there was a second free
+        # period for one person. Their store opens unpaid instead, like a
+        # store opened while billing is on (create_unpaid_subscription).
+        # A claimed store has its own row already, so it is never in `rows`.
+        from api.models.launch_offer import LaunchOfferClaim, LaunchOfferType
+
+        had_free_store = set((await db.execute(
+            select(LaunchOfferClaim.user_id).where(
+                LaunchOfferClaim.offer_type == LaunchOfferType.STORE_FREE)
+        )).scalars().all())
+        for store_id, owner_id in rows:
             try:
                 async with db.begin_nested():
                     db.add(StoreSubscription(
                         store_id=store_id, plan_id=None, listings=0,
-                        setup_fee_paid=False, paid_until=paid_until,
+                        setup_fee_paid=False,
+                        paid_until=None if owner_id in had_free_store else paid_until,
                         created_at=now, updated_at=now,
                     ))
                 created += 1

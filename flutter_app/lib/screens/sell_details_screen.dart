@@ -86,10 +86,30 @@ class _SellDetailsScreenState extends State<SellDetailsScreen> {
           ...shown.where(DynamicAttributeField.suggests),
           ...shown.where((f) => !DynamicAttributeField.suggests(f)),
         ];
+        _orderAttributes();
         _loadingFields = false;
       }),
       onFailure: (_, __) => setState(() => _loadingFields = false),
     );
+  }
+
+  /// The details in the order this step asks for them (brand first), not
+  /// the order they were tapped: the Description step writes them into the
+  /// description as lines (ListingDetailsText), and the listing's Details
+  /// card lists them the same way. Anything this step doesn't show - a
+  /// land size, a detail from an older draft - keeps its place after them.
+  void _orderAttributes() {
+    if (_fields.isEmpty || _data.attributes.isEmpty) return;
+    final order = [for (final f in _fields) f.fieldName];
+    final ordered = <String, String>{
+      for (final name in order)
+        if (_data.attributes.containsKey(name)) name: _data.attributes[name]!,
+      for (final e in _data.attributes.entries)
+        if (!order.contains(e.key)) e.key: e.value,
+    };
+    _data.attributes
+      ..clear()
+      ..addAll(ordered);
   }
 
   String get _nameHint {
@@ -191,6 +211,7 @@ class _SellDetailsScreenState extends State<SellDetailsScreen> {
                       _data.attributes.remove(field.fieldName);
                     } else {
                       _data.attributes[field.fieldName] = v;
+                      _orderAttributes();
                     }
                   });
                   _scheduleSave();

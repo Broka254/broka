@@ -138,6 +138,18 @@ class Settings:
     # Whether AI covers are premium is PREMIUM_ENABLED's business now (the
     # premium domain), not a flag of the showcase's own - it replaced
     # SHOWCASE_AI_REQUIRE_PREMIUM.
+    #
+    # Whether AI covers exist at all (2026-11-19: off for now). Off, no cover
+    # is generated - POST /showcase/preview and /listings/{id}/showcase/
+    # generate answer SHOWCASE_UNAVAILABLE, which older app builds already
+    # word as "upload a cover from your gallery" - and plans neither sell
+    # nor count them. Sellers upload their own cover; that never changes.
+    # The app hides the AI half of its Cover step in the same release
+    # (flutter_app kAiCoversEnabled). On, AI covers work as PREMIUM_ENABLED
+    # says.
+    ai_covers_enabled: bool = field(default_factory=lambda: os.getenv(
+        "AI_COVERS_ENABLED", "false"
+    ).strip().lower() in ("1", "true", "yes", "on"))
 
     # ── M-Pesa ────────────────────────────────────────────────────────────────
     mpesa_env: str = field(default_factory=lambda: os.getenv("MPESA_ENV", "sandbox"))
@@ -1092,7 +1104,8 @@ def validate_startup() -> None:
     # generation is an optional, skippable step in listing creation
     # (sellers can upload a gallery cover or skip it entirely), so a
     # missing key degrades one feature rather than blocking registration.
-    if not s.hf_token:
+    # Nothing to warn about while AI covers are switched off.
+    if s.ai_covers_enabled and not s.hf_token:
         logger.warning(
             "[startup] ⚠  HF_TOKEN not set — AI showcase image generation "
             "will return a clear error instead of calling Hugging Face. Gallery "

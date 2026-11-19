@@ -21,7 +21,9 @@ class PremiumFeature {
 
   /// In the order a plan card lists them: what helps a listing sell first.
   /// Auctions only while this build offers them (kAuctionsEnabled): a plan
-  /// must not sell what nobody can host.
+  /// must not sell what nobody can host. AI covers need no such check: while
+  /// they are off the server sends no allowance for them (AI_COVERS_ENABLED),
+  /// and a card lists only allowances over 0.
   static List<String> get all => [
         aiDescriptions, aiCovers, priceChecks, voice, sms, watches, negotiations,
         if (kAuctionsEnabled) auctions,

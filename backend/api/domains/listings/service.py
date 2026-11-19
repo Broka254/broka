@@ -19,6 +19,7 @@ from api.core.events import publish, ListingCreated, InterestExpressed
 from api.core.config import settings
 from api.core.geo import distances_km, format_distance_km, haversine_km, round_distance_km
 from api.core.text_search import matches_all_terms, search_terms, term_matches
+from . import details_text
 from . import validation as rules
 from .location import canonical_county, listing_point, tidy_place
 from .handover import handover, is_deliverable
@@ -393,10 +394,20 @@ class ListingService:
         store: Optional[Store] = None
         if store_id:
             store = await self.db.get(Store, store_id)
-            if not store:
+            # A deleted store is gone for good (StoreService.delete_store):
+            # posting into one made a listing that pays no fee, covered by
+            # a shop that no longer exists.
+            if not store or store.deleted_at is not None:
                 raise HTTPException(status_code=400, detail="Store not found")
             if store.owner_id != seller_id:
                 raise HTTPException(status_code=403, detail="You do not own this store")
+            # What the store may hold (stores/categories.may_hold): the
+            # sell wizard offers the store only for these, and an older
+            # build that offers it anyway is refused here.
+            from api.domains.stores import categories as store_categories
+            if not store_categories.may_hold(store.category, category_name):
+                raise HTTPException(
+                    status_code=400, detail=store_categories.not_allowed_detail(category_name))
 
         # Auction terms are validated BEFORE the listing row exists, so a
         # rejected auction leaves no orphan listing behind.
@@ -418,11 +429,19 @@ class ListingService:
         lat, lng = listing_point(county, data["lat"], data["lng"])
 
         deliverable = is_deliverable(category_name)
+        # The description is optional, and a seller who skips it has still
+        # said what the item is on the Details step: those details become
+        # its lines (details_text.py), so a buyer reads "RAM: 8GB" without
+        # the seller typing it twice. Current app builds put them in the
+        # description box already; this is for one that arrives empty.
+        description = data.get("description")
+        if not description:
+            description = details_text.describe(data.get("condition"), attributes) or description
         listing = Listing(
             seller_id=seller_id,
             store_id=store.id if store else None,
             name=data["name"],
-            description=data.get("description"),
+            description=description,
             category=category_name,
             subcategory_id=subcategory_id,
             condition=data.get("condition"),
@@ -475,21 +494,10 @@ class ListingService:
         # (pricing/service.free_listings_left).
         awaiting_fee = settings.listing_fees_enabled and fee_applies(listing)
         if awaiting_fee:
-            from api.domains.pricing.service import founding_discount, free_listings_left
+            from api.domains.pricing.service import free_listings_left
             awaiting_fee = await free_listings_left(self.db, seller_id) <= 0
         if awaiting_fee:
             listing.created_at = listing.paid_until = datetime.utcnow()
-            # A founding seller on 100% off is posted live, paid up to the
-            # end of their offer; from then on it renews at the full fee.
-            founding = await founding_discount(self.db, seller_id)
-            if founding.percent >= 100:
-                listing.paid_until = founding.ends_at
-                # It IS live (paid_until is in the future), so it must be
-                # announced below like any live listing. awaiting_fee kept
-                # meaning "fees are on for this listing", not "hidden",
-                # and founding-free listings were created visible but
-                # never announced to the Buying Agent.
-                awaiting_fee = False
         # Hosting an auction is premium (PRICING.md): one of the seller's
         # plan's auctions, spent last - every check that could refuse the
         # listing has already run - and given back below if this turns out
@@ -503,13 +511,19 @@ class ListingService:
             # record. They used to be two commits, so a failure between
             # them left an auction with no window to open or close by.
             await self.db.flush()
-            # Launch offer: the first FREE_LISTING_OFFER_LIMIT personal
-            # listings post free, one per user (pricing/launch_offers.py).
-            # Claimed here - after the flush, so the claim binds the real
-            # listing id, and inside this transaction, so a rolled-back
-            # create consumes no slot. Store listings and auctions never
-            # qualify (fee_applies), and a founding-free listing already
-            # went live above without burning a slot.
+            # One free listing per seller, ever. The launch offer first:
+            # the first FREE_LISTING_OFFER_LIMIT personal listings post
+            # free, one per user, and only as a seller's first listing
+            # (pricing/launch_offers.py). Claimed here - after the flush,
+            # so the claim binds the real listing id, and inside this
+            # transaction, so a rolled-back create consumes no slot. Store
+            # listings and auctions never qualify (fee_applies).
+            #
+            # The founding offer's free band only when no launch slot can
+            # be had and this seller has never had their free listing. The
+            # two used to be granted separately - a founding seller's first
+            # listing went live free without a claim, and their second
+            # took the claim - so one seller posted two listings free.
             #
             # While fees are off there is no awaiting-fee branch, but the
             # launch window still applies: a claimed listing goes live on
@@ -529,6 +543,21 @@ class ListingService:
                 if claim is not None:
                     listing.paid_until = claim.expires_at
                     awaiting_fee = False
+                elif awaiting_fee and not await launch_offers.listing_offer_used(
+                        self.db, seller_id, exclude_listing_id=listing.id):
+                    # A founding seller on 100% off is posted live, paid up
+                    # to the end of their offer; from then on it renews at
+                    # the full fee. Asked about this listing, now flushed:
+                    # only a seller's first listing is discounted.
+                    from api.domains.pricing.service import founding_discount
+
+                    founding = await founding_discount(
+                        self.db, seller_id, listing_id=listing.id)
+                    if founding.percent >= 100:
+                        listing.paid_until = founding.ends_at
+                        # It IS live (paid_until is in the future), so it
+                        # must be announced below like any live listing.
+                        awaiting_fee = False
                 elif not settings.listing_fees_enabled:
                     listing.paid_until = (
                         datetime.utcnow()
@@ -619,6 +648,11 @@ class ListingService:
                 continue
             elif field == "delivery_note":
                 value = (value or None) if data.get("delivery_available") else None
+            elif field == "description" and not value:
+                # As at creation: no description says what the details say.
+                value = details_text.describe(
+                    data.get("condition", listing.condition),
+                    load_attributes(listing.attributes)) or value
             if getattr(listing, field) != value:
                 setattr(listing, field, value)
                 changed = True
@@ -1522,10 +1556,16 @@ class ListingService:
         """
         listing = await self._get_owned_listing_or_403(listing_id, requester_id)
         store = await self.db.get(Store, store_id)
-        if not store:
+        if not store or store.deleted_at is not None:
             raise HTTPException(status_code=404, detail="Store not found")
         if store.owner_id != requester_id:
             raise HTTPException(status_code=403, detail="You do not own this store")
+        # The same rule as posting into the store (create_listing): a land
+        # listing moved into a phone shop would be covered by its plan.
+        from api.domains.stores import categories as store_categories
+        if not store_categories.may_hold(store.category, listing.category):
+            raise HTTPException(
+                status_code=400, detail=store_categories.not_allowed_detail(listing.category))
 
         listing.store_id = store.id
         await self.db.commit()

@@ -27,6 +27,11 @@
 // to about 460 dp and put the description box - the step itself - below
 // the fold. The example now opens with the plans' sheet, where a seller
 // without a plan decides; the box is on screen from the start.
+//
+// 2026-11-19: the box opens with the Details step's answers in it - a
+// phone's condition, brand, storage, RAM - as "Label: value" lines
+// (ListingDetailsText). A seller who has nothing to add taps Next; the
+// details are in the listing's description without being typed twice.
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../core/network/api_client.dart';
@@ -41,6 +46,7 @@ import '../main.dart';
 import '../services/api_service.dart';
 import '../services/photo_upload_tracker.dart';
 import '../services/sell_wizard_data.dart';
+import '../utils/listing_details_text.dart';
 import '../widgets/sell_step_scaffold.dart';
 import '../widgets/sell_zeno_boost_card.dart';
 import 'sell_flow.dart';
@@ -79,9 +85,41 @@ class _SellDescriptionScreenState extends State<SellDescriptionScreen> {
   @override
   void initState() {
     super.initState();
+    _writeDetailsIn();
     _descCtrl = TextEditingController(text: _data.description);
     _loadPremium();
   }
+
+  /// What the seller told the Details step (RAM, storage, brand...) goes
+  /// into the description as its own lines, so they never type it twice
+  /// and can skip this step: an empty box gets the lines, and lines this
+  /// step wrote before are brought up to date with the details (the seller
+  /// went back and changed one). Once the seller has edited them they are
+  /// the seller's words, and stay as they are.
+  void _writeDetailsIn() {
+    final lines = ListingDetailsText.compose(
+      condition: _data.condition,
+      attributes: _data.attributes,
+      maxLength: SellWizardData.maxDescriptionLength,
+    );
+    final text = _data.description;
+    final written = _data.autoDescription;
+    String? updated;
+    if (text.trim().isEmpty) {
+      updated = lines;
+    } else if (written.isNotEmpty && written != lines && text.contains(written)) {
+      updated = text.replaceFirst(written, lines).trim();
+    }
+    if (updated == null || updated.length > SellWizardData.maxDescriptionLength) return;
+    _data
+      ..description = updated
+      ..autoDescription = lines;
+    _data.persist();
+  }
+
+  /// The details this step wrote in are still there, as written.
+  bool get _detailsWrittenIn =>
+      _data.autoDescription.isNotEmpty && _descCtrl.text.contains(_data.autoDescription);
 
   Future<void> _loadPremium() async {
     final r = await (widget.premium ?? premiumRepository).me();
@@ -290,6 +328,19 @@ class _SellDescriptionScreenState extends State<SellDescriptionScreen> {
           // Into the draft as typed - see SellDetailsScreen's name field.
           onChanged: _onChanged,
         ),
+        if (_detailsWrittenIn)
+          const Padding(
+            padding: EdgeInsets.only(bottom: 6),
+            child: Row(key: Key('sell-description-details-in'), children: [
+              Icon(Icons.check_circle_rounded, color: BrokaColors.success, size: 16),
+              SizedBox(width: 6),
+              Expanded(
+                child: Text('Your details are already in it. Add anything else buyers should '
+                    'know - or tap Next, it\'s ready to go.',
+                    style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.4)),
+              ),
+            ]),
+          ),
         SellGap.item,
         sellStepLabel('TAP TO ADD'),
         SellGap.label,

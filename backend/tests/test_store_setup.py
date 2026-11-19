@@ -109,6 +109,22 @@ async def _listing(client, headers, store_id, name, category="Electronics", pric
     return r.json()
 
 
+async def _legacy_store_listing(store_id, name, category, price=1000) -> str:
+    """A store listing filed under Other or free text, as stores held them
+    before online stores refused those (stores/categories.may_hold): the
+    API no longer posts one, but the rows are still stored and listed."""
+    from api.database import Listing
+    from api.models.store import Store
+    async with AsyncSessionLocal() as db:
+        store = await db.get(Store, store_id)
+        row = Listing(seller_id=store.owner_id, store_id=store_id, name=name,
+                      description="Posted before the category rule.", category=category,
+                      price=price, lat=-1.0, lng=36.0)
+        db.add(row)
+        await db.commit()
+        return row.id
+
+
 # ── Who can open a store ─────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -413,7 +429,7 @@ class TestCategory:
         word "Other"."""
         _, headers = await _register(client)
         store = await _store(client, headers, category="Gaming")
-        await _listing(client, headers, store["id"], "Old shelf item", category="furniture")
+        await _legacy_store_listing(store["id"], "Old shelf item", category="furniture")
         found = (await client.get(
             "/stores", params={"category": "Other", "limit": 100})).json()
         assert store["id"] in [s["id"] for s in found]
@@ -698,7 +714,7 @@ class TestCatalogue:
         await _listing(client, headers, sid, "Tecno Spark", price=12000)
         await _listing(client, headers, sid, "iPhone 12", price=45000)
         await _listing(client, headers, sid, "Office Chair", category="Home & Furniture", price=9000)
-        await _listing(client, headers, sid, "Mystery Item", category="random stuff", price=100)
+        await _legacy_store_listing(sid, "Mystery Item", category="random stuff", price=100)
 
         cats = (await client.get(f"/stores/{sid}/categories")).json()
         # Online stores never browse by Other (nor Property, Automobiles,
@@ -799,8 +815,8 @@ class TestCatalogue:
         store = await _store(client, headers)
         sid = store["id"]
         await _listing(client, headers, sid, "Phone", category="Electronics")
-        await _listing(client, headers, sid, "Mystery Item", category="random stuff")
-        await _listing(client, headers, sid, "Odd Thing", category="Other")
+        await _legacy_store_listing(sid, "Mystery Item", category="random stuff")
+        await _legacy_store_listing(sid, "Odd Thing", category="Other")
 
         cats = (await client.get(f"/stores/{sid}/categories")).json()
         assert all(c["name"] != "Other" for c in cats)

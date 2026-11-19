@@ -631,11 +631,29 @@ void main() {
   });
 
   group('Cover step', () {
-    testWidgets('asks for the chosen look with the photo id, and keeps the result by id',
+    testWidgets('with AI covers off (this build), the seller uploads a cover or skips',
         (tester) async {
       final generator = _FakeGenerator();
       final data = _complete();
       await _open(tester, SellShowcaseScreen(data: data, generator: generator));
+      expect(find.byKey(const Key('showcase-gallery')), findsOneWidget);
+      expect(find.byKey(const Key('showcase-upload-note')), findsOneWidget);
+      expect(find.byKey(const Key('showcase-generate')), findsNothing);
+      expect(find.byKey(const Key('showcase-theme-studio')), findsNothing);
+      expect(find.text("ZENO'S PICK"), findsNothing);
+      expect(find.textContaining('AI '), findsNothing);
+      expect(find.textContaining('✨'), findsNothing);
+      expect(find.text('SKIP - USE MY PHOTO'), findsOneWidget);
+      expect(generator.calls, isEmpty);
+    });
+
+    // AI covers are off in this build for now (kAiCoversEnabled); the rest
+    // hold the AI half of the step to how it works when they are back.
+    testWidgets('asks for the chosen look with the photo id, and keeps the result by id',
+        (tester) async {
+      final generator = _FakeGenerator();
+      final data = _complete();
+      await _open(tester, SellShowcaseScreen(data: data, generator: generator, aiCovers: true));
       // Agriculture's likeliest look.
       expect(find.text("ZENO'S PICK"), findsOneWidget);
 
@@ -662,7 +680,7 @@ void main() {
     testWidgets('a cancelled generation is ignored when it lands', (tester) async {
       final generator = _FakeGenerator();
       final data = _complete();
-      await _open(tester, SellShowcaseScreen(data: data, generator: generator));
+      await _open(tester, SellShowcaseScreen(data: data, generator: generator, aiCovers: true));
       await _tap(tester, find.byKey(const Key('showcase-generate')));
       await tester.pump();
       await _tap(tester, find.text('Cancel'));
@@ -676,7 +694,7 @@ void main() {
     testWidgets('a refusal reads as the server\'s sentence', (tester) async {
       final generator = _FakeGenerator(error: const ApiException(429,
           "You've made as many AI covers as we allow in a hour.", code: 'SHOWCASE_LIMIT'));
-      await _open(tester, SellShowcaseScreen(data: _complete(), generator: generator));
+      await _open(tester, SellShowcaseScreen(data: _complete(), generator: generator, aiCovers: true));
       await _tap(tester, find.byKey(const Key('showcase-generate')));
       await tester.pumpAndSettle();
       expect(find.textContaining('as many AI covers'), findsOneWidget);
@@ -796,7 +814,7 @@ void main() {
       await _animate(tester, SellZenoAlertScreen(data: _complete()));
       final generator = _FakeGenerator();
       await tester.pumpWidget(MaterialApp(
-          home: SellShowcaseScreen(data: _complete(), generator: generator)));
+          home: SellShowcaseScreen(data: _complete(), generator: generator, aiCovers: true)));
       // Every look, painted - in the order shown: Zeno's pick first.
       for (final id in ['nature', 'studio', 'luxury', 'wood', 'neon', 'pastel']) {
         final tile = find.byKey(Key('showcase-theme-$id'));

@@ -33,6 +33,11 @@
 // 2026-10-05: the step says what a cover is for - it is the first thing a
 // buyer sees on Home, and a listing that gets tapped sells sooner - since
 // the listing flow as a whole makes the case for a plan.
+//
+// 2026-11-19: AI covers are off for now (kAiCoversEnabled; the server
+// refuses them too). The step is the seller's own cover: upload one from
+// the gallery, or skip and use the first photo. The AI half - looks,
+// generation, tries - stays here for when they come back.
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
@@ -47,6 +52,7 @@ import '../features/premium/data/premium_repository.dart';
 import '../features/premium/domain/premium.dart';
 import '../features/premium/presentation/premium_upsell.dart';
 import '../main.dart';
+import '../services/ai_covers_enabled.dart';
 import '../services/photo_capture.dart';
 import '../services/photo_upload_tracker.dart';
 import '../services/sell_photo_store.dart';
@@ -65,7 +71,12 @@ class SellShowcaseScreen extends StatefulWidget {
   final ShowcaseGenerator? generator;
   final PremiumRepository? premium;
 
-  const SellShowcaseScreen({super.key, required this.data, this.generator, this.premium});
+  /// Whether the step offers AI covers; this build's kAiCoversEnabled
+  /// unless a test says otherwise.
+  final bool? aiCovers;
+
+  const SellShowcaseScreen(
+      {super.key, required this.data, this.generator, this.premium, this.aiCovers});
   @override
   State<SellShowcaseScreen> createState() => _SellShowcaseScreenState();
 }
@@ -101,12 +112,16 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> with TickerProv
   File? get _photo => _data.verifiedPhotos.isEmpty ? null : _data.verifiedPhotos.first;
   bool get _still => MediaQuery.maybeDisableAnimationsOf(context) ?? false;
 
+  /// AI covers offered at all (kAiCoversEnabled). Off, the step is the
+  /// gallery upload alone - nothing to count, so no premium status either.
+  bool get _aiOn => widget.aiCovers ?? kAiCoversEnabled;
+
   @override
   void initState() {
     super.initState();
     _ambient = AnimationController(vsync: this, duration: const Duration(seconds: 8));
     _theme = _data.showcaseTheme ?? ShowcaseGenerator.recommendedFor(_data.category);
-    _loadPremium();
+    if (_aiOn) _loadPremium();
   }
 
   Future<void> _loadPremium() async {
@@ -312,7 +327,8 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> with TickerProv
             : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 _hero(),
                 SellGap.item,
-                if (_result != null) _resultActions() else ...[
+                if (!_aiOn) ..._uploadOnly()
+                else if (_result != null) _resultActions() else ...[
                   if (_data.hasShowcase) _coverActions(),
                   SellGap.item,
                   _themePicker(),
@@ -347,20 +363,7 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> with TickerProv
                     Expanded(child: Divider(color: BrokaColors.border.withOpacity(0.9))),
                   ]),
                   const SizedBox(height: 12),
-                  OutlinedButton.icon(
-                    onPressed: _pickingGallery || _generating ? null : _pickFromGallery,
-                    icon: _pickingGallery
-                        ? const SizedBox(width: 16, height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: BrokaColors.textMid))
-                        : const Icon(Icons.photo_library_outlined, color: BrokaColors.textMid, size: 18),
-                    label: const Text('Upload a cover from my gallery', style: TextStyle(
-                        color: BrokaColors.textHigh, fontSize: 13, fontWeight: FontWeight.w700)),
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size.fromHeight(48),
-                      side: const BorderSide(color: BrokaColors.border),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                    ),
-                  ),
+                  _galleryButton(),
                   const SizedBox(height: 10),
                   const Text('Buyers still inspect your camera photos on the listing itself - '
                       'the AI only changes the setting, never the item.',
@@ -379,6 +382,37 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> with TickerProv
         ),
     ]);
   }
+
+  /// The step while AI covers are off: the seller's own cover, or none
+  /// (their first photo then).
+  List<Widget> _uploadOnly() => [
+        if (_data.hasShowcase) _coverActions(),
+        SellGap.item,
+        const _SellsFasterNote(),
+        SellGap.section,
+        _galleryButton(),
+        const SizedBox(height: 10),
+        const Text('Buyers still inspect your camera photos on the listing itself.',
+            key: Key('showcase-upload-note'),
+            style: TextStyle(color: BrokaColors.textMid, fontSize: 11, height: 1.4)),
+      ];
+
+  Widget _galleryButton() => OutlinedButton.icon(
+        key: const Key('showcase-gallery'),
+        onPressed: _pickingGallery || _generating ? null : _pickFromGallery,
+        icon: _pickingGallery
+            ? const SizedBox(width: 16, height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2, color: BrokaColors.textMid))
+            : const Icon(Icons.photo_library_outlined, color: BrokaColors.textMid, size: 18),
+        label: Text(_data.hasShowcase ? 'Upload another cover' : 'Upload a cover from my gallery',
+            style: const TextStyle(
+                color: BrokaColors.textHigh, fontSize: 13, fontWeight: FontWeight.w700)),
+        style: OutlinedButton.styleFrom(
+          minimumSize: const Size.fromHeight(48),
+          side: const BorderSide(color: BrokaColors.border),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        ),
+      );
 
   /// The big picture at the top: the new result (revealed, with a
   /// before/after slider), the chosen cover, or the seller's own photo.
@@ -411,7 +445,8 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> with TickerProv
       content = Stack(fit: StackFit.expand, children: [
         Image.file(photo, fit: BoxFit.cover, cacheWidth: 900,
             errorBuilder: (_, __, ___) => const ColoredBox(color: BrokaColors.bgCard)),
-        if (!_still) _ScanLine(animation: _ambient),
+        // "Zeno is looking at this" - only while there is an AI to look.
+        if (!_still && _aiOn) _ScanLine(animation: _ambient),
       ]);
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -464,8 +499,11 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> with TickerProv
   Widget _coverActions() => Row(children: [
         const Icon(Icons.check_circle_rounded, color: BrokaColors.success, size: 18),
         const SizedBox(width: 6),
-        const Expanded(child: Text('This is your cover. Pick another look to change it.',
-            style: TextStyle(color: BrokaColors.textMid, fontSize: 12))),
+        Expanded(child: Text(
+            _aiOn
+                ? 'This is your cover. Pick another look to change it.'
+                : 'This is your cover. Upload another to change it.',
+            style: const TextStyle(color: BrokaColors.textMid, fontSize: 12))),
         TextButton(
           onPressed: _removeCover,
           child: const Text('Remove', style: TextStyle(color: BrokaColors.danger,

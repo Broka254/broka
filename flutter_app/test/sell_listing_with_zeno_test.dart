@@ -200,8 +200,11 @@ Future<void> _tap(WidgetTester tester, Finder finder) async {
 }
 
 /// Opens Zeno's screen over a launcher, so its result can be read.
+/// AI covers are off in this build for now (kAiCoversEnabled); [aiCovers]
+/// holds the screen to how it offers one when they are back.
 Future<List<bool?>> _openZeno(WidgetTester tester, SellWizardData data,
-    {required _FakeSelling selling, _FakeGenerator? generator, PremiumStatus? status}) async {
+    {required _FakeSelling selling, _FakeGenerator? generator, PremiumStatus? status,
+    bool aiCovers = true}) async {
   final results = <bool?>[];
   await _app(tester, Builder(
     builder: (ctx) => Scaffold(
@@ -213,6 +216,7 @@ Future<List<bool?>> _openZeno(WidgetTester tester, SellWizardData data,
               repository: selling,
               generator: generator ?? _FakeGenerator(),
               premium: _FakePremium(status ?? _me()),
+              aiCovers: aiCovers,
               animateBackground: false,
             ),
           ))),
@@ -361,6 +365,20 @@ void main() {
       expect(data.name, 'Samsung Galaxy A54');
       expect(data.categoryId, 'elec');
       expect(data.description, isNot(contains('Battery health')));
+    });
+
+    testWidgets('with AI covers off there is no cover to offer, plan or not', (tester) async {
+      final generator = _FakeGenerator();
+      final data = _draft();
+      await _openZeno(tester, data, selling: _FakeSelling(), generator: generator,
+          status: _me(plan: 'pro'), aiCovers: false);
+      await _tap(tester, find.byKey(const Key('zeno-autolist-price')));
+      await _tap(tester, find.byKey(const Key('zeno-autolist-take-price')));
+      await _tap(tester, find.byKey(const Key('zeno-autolist-offers')));
+      expect(find.byKey(const Key('zeno-autolist-cover')), findsNothing);
+      expect(find.byKey(const Key('zeno-autolist-done')), findsOneWidget);
+      expect(generator.calls, isEmpty);
+      expect(data.hasShowcase, isFalse);
     });
 
     testWidgets('with plans off there is no AI cover to offer', (tester) async {

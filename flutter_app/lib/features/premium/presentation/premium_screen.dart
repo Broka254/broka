@@ -208,11 +208,13 @@ class _PremiumScreenState extends State<PremiumScreen> {
   Widget _choosing() {
     final status = _status!;
     if (!status.enabled) {
+      // AI covers are not in the list: with plans off the server makes
+      // none, and this build offers none (kAiCoversEnabled).
       return const CheckoutMessage(
         key: Key('premium-off'),
         icon: Icons.celebration_rounded,
         title: "It's all free right now",
-        body: 'Voice mode, the Buying Agent, AI covers and texts from Zeno are free for '
+        body: 'Voice mode, the Buying Agent and texts from Zeno are free for '
             'everyone while BROKA launches. Nothing to pay.',
       );
     }

@@ -72,6 +72,20 @@ def live_clause(now: Optional[datetime] = None, include_reported: bool = False):
                           Listing.listing_type != ListingType.auction))
 
 
+def posted_personal():
+    """SQL: the listing was posted as the seller's own listing, not into a
+    store - whether or not it has been moved into one since.
+
+    A listing posted into a store never gets listing time of its own
+    (fee_applies is False for it, so nothing stamps paid_until), so a store
+    listing that carries a paid_until was posted personal and moved in
+    later. The free-listing offers ask "has this seller posted before?" of
+    exactly this set: asked of store_id IS NULL alone, moving a first
+    listing into the seller's store made the next one their "first" again,
+    and the offer was handed out a second time."""
+    return or_(Listing.store_id.is_(None), Listing.paid_until.is_not(None))
+
+
 def is_live(listing: Listing, now: Optional[datetime] = None) -> bool:
     # Listing-level check only: a store listing's real gate is its store's
     # subscription (stores/billing.store_live), which callers serving store

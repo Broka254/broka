@@ -19,6 +19,9 @@ os.environ.setdefault("IN_APP_PAYMENTS_ENABLED", "true")
 # Auctions too are off in production for launch, and on here for the suites
 # that test them; test_auctions_off.py switches them off itself.
 os.environ.setdefault("AUCTIONS_ENABLED", "true")
+# AI covers are off in production for now (2026-11-19) and on here for the
+# suites written for them; the ai_covers_off fixture switches them off.
+os.environ.setdefault("AI_COVERS_ENABLED", "true")
 # The Verified badge and Zeno's unprompted escrow advice are off in
 # production for now (2026-10-09) and on here for the suites written for
 # them; test_payments_hidden.py switches them off.
@@ -78,6 +81,16 @@ def auctions_off():
     object.__setattr__(settings, "auctions_enabled", False)
     yield
     object.__setattr__(settings, "auctions_enabled", before)
+
+
+@pytest.fixture
+def ai_covers_off():
+    """AI_COVERS_ENABLED off, as production runs it for now."""
+    from api.core.config import settings
+    before = settings.ai_covers_enabled
+    object.__setattr__(settings, "ai_covers_enabled", False)
+    yield
+    object.__setattr__(settings, "ai_covers_enabled", before)
 
 
 @pytest.fixture

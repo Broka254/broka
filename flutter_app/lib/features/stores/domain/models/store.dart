@@ -7,6 +7,7 @@
 // record says who is behind the counter.
 import '../../../../models/listing_photo.dart';
 import '../../../launch_offers/domain/launch_offers.dart';
+import '../store_categories.dart';
 import 'store_billing.dart';
 
 /// The store owner's seller record, as shown on the storefront.
@@ -292,6 +293,13 @@ class Store {
   /// facet. Older responses carry only [category], which becomes the
   /// single entry here.
   final List<String> categories;
+
+  /// The listing categories this store may not hold, as the server says
+  /// (backend stores/categories.may_hold): an online store takes no
+  /// Automobiles, Land, Property, Services or Other listing, and a car
+  /// yard or an agent only its own of those trades. Null from backends
+  /// before the rule - [mayHold] then reads StoreCategories.onlineExcluded.
+  final List<String>? excludedListingCategories;
   final String? description;
   final String country;
   final String? county;
@@ -410,6 +418,7 @@ class Store {
     this.url = '',
     this.category,
     this.categories = const [],
+    this.excludedListingCategories,
     this.description,
     this.country = 'Kenya',
     this.county,
@@ -469,6 +478,9 @@ class Store {
       // is then the store's whole set.
       categories: (json['categories'] as List?)?.whereType<String>().toList(growable: false) ??
           [if (category != null) category],
+      excludedListingCategories: (json['excluded_listing_categories'] as List?)
+          ?.whereType<String>()
+          .toList(growable: false),
       description: json['description'] as String?,
       country:   json['country']   as String? ?? 'Kenya',
       county:    json['county']    as String?,
@@ -519,6 +531,20 @@ class Store {
   }
 
   bool get isVirtual => storeType == StoreType.virtual;
+
+  /// Whether a listing filed under [listingCategory] (a top-level category,
+  /// as the sell wizard holds it) may go in this store. The server refuses
+  /// the rest whatever the app sends; this decides whether the app offers
+  /// the store at all. Without the server's list (an older backend), an
+  /// online store's exclusions apply, less the store's own category - a
+  /// car yard's Automobiles.
+  bool mayHold(String listingCategory) {
+    final name = listingCategory.trim().toLowerCase();
+    if (name.isEmpty) return false;
+    final excluded = excludedListingCategories ??
+        StoreCategories.onlineExcluded.where((c) => c != category).toList(growable: false);
+    return !excluded.any((c) => c.toLowerCase() == name);
+  }
 
   /// The live "Open now" status, calculated from the stored schedule and the
   /// phone's clock in Nairobi time. Falls back to the server's answer when

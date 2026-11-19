@@ -54,12 +54,19 @@ async def listing_fee_quote(
     if store_id:
         # store_covered must mean YOUR store: quoting someone else's store
         # as covered would only fail later at create, after the seller was
-        # told there is no fee.
+        # told there is no fee. For the same reason, a store that is gone
+        # or may not hold this category (stores/categories.may_hold) is
+        # refused here as create refuses it.
+        from api.domains.stores import categories as store_categories
         from api.models.store import Store
 
         store = await db.get(Store, store_id)
-        if store is None or store.owner_id != current_user["id"]:
+        if (store is None or store.deleted_at is not None
+                or store.owner_id != current_user["id"]):
             raise HTTPException(status_code=403, detail="You do not own this store")
+        if not store_categories.may_hold(store.category, category):
+            raise HTTPException(status_code=400,
+                                detail=store_categories.not_allowed_detail(category))
     return await service.listing_fee_quote(db, current_user["id"], category, price, quantity,
                                            new_listing=True, store_id=store_id)
 

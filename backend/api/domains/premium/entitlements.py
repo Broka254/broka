@@ -397,6 +397,11 @@ async def summary(db: AsyncSession, user_id: str) -> dict:
     # app builds list every allowance over 0.
     if not settings.auctions_enabled:
         usage[Feature.AUCTION] = {"allowance": 0, "used": 0, "left": 0}
+    # The same for AI covers while they are switched off (AI_COVERS_ENABLED):
+    # none is made, so neither a plan's covers nor the free try is shown
+    # as left to use.
+    if not settings.ai_covers_enabled:
+        usage[Feature.AI_COVER] = {"allowance": 0, "used": 0, "left": 0}
     from api.domains.buy_agent.service import CAPPED_STATUSES
     from api.database import BuyAgentRequest
     watching = (await db.execute(select(func.count(BuyAgentRequest.id)).where(
