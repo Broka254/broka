@@ -21,7 +21,8 @@ export function StoreFooter({ view, categories = [] }: { view: StoreView; catego
   const paths = storePaths(store)
   const where = placeLine(store.subcounty, store.county)
   return (
-    <footer className={styles.footer}>
+    // data-store-footer: the product page's buy bar keeps off the footer (ProductStickyBar).
+    <footer className={styles.footer} data-store-footer>
       <div className={styles.footerGrid}>
         <div>
           <p className={styles.footerBrand}>{store.name}</p>

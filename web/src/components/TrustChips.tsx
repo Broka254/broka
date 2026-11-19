@@ -1,5 +1,6 @@
 import { formatDealTime, plural, yearOf } from '@/lib/format'
 
+import { Icon, type IconName } from './Icon'
 import styles from './store.module.css'
 
 /** The seller's real record: verified, completed deals, rating, deal time, since. */
@@ -22,29 +23,29 @@ export function TrustChips({
 }) {
   const since = yearOf(memberSince)
   const reviews = reviewCount ?? 0
-  const chips: Array<{ key: string; icon: string; text: string; tone?: string }> = []
-  if (verified) chips.push({ key: 'v', icon: '✓', text: 'Verified seller', tone: styles.good })
+  // Inline SVG, not emoji (🤝, 📅 drew differently on every phone and
+  // looked unfinished: STORES_UI_REVIEW.md L6).
+  const chips: Array<{ key: string; icon: IconName; text: string; tone?: string }> = []
+  if (verified) chips.push({ key: 'v', icon: 'verified', text: 'Verified seller', tone: styles.good })
   if (completedDeals > 0) {
-    chips.push({ key: 'd', icon: '🤝', text: `${plural(completedDeals, 'deal')} done` })
+    chips.push({ key: 'd', icon: 'handshake', text: `${plural(completedDeals, 'deal')} done` })
     if (dealTimeMinutes != null) {
-      chips.push({ key: 't', icon: '⏱', text: `Deals take ${formatDealTime(dealTimeMinutes)}` })
+      chips.push({ key: 't', icon: 'clock', text: `Deals take ${formatDealTime(dealTimeMinutes)}` })
     }
   }
   // Reviews, not deals, make an average: many deals with no reviews is no
   // rating, not a perfect one. The "/5" keeps it apart from the shop's
   // 0-10 composite on its pages.
   if (reviews > 0 && rating != null) {
-    chips.push({ key: 'r', icon: '★', text: `${rating.toFixed(1)}/5 (${reviews})`, tone: styles.star })
+    chips.push({ key: 'r', icon: 'star', text: `${rating.toFixed(1)}/5 (${reviews})`, tone: styles.star })
   }
-  if (since) chips.push({ key: 's', icon: '📅', text: `On BROKA since ${since}` })
+  if (since) chips.push({ key: 's', icon: 'calendar', text: `On BROKA since ${since}` })
   if (!chips.length) return null
   return (
     <ul className={styles.chips} aria-label="About this seller">
       {chips.map((c) => (
         <li key={c.key} className={styles.chip}>
-          <span className={c.tone} aria-hidden="true">
-            {c.icon}
-          </span>
+          <Icon name={c.icon} size={14} className={c.tone ?? styles.chipIcon} />
           {c.text}
         </li>
       ))}

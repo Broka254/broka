@@ -16,25 +16,29 @@
 }
 
 .word {
-  font-weight: 900;
-  letter-spacing: 3px;
-  font-size: 15px;
-  background: linear-gradient(90deg, var(--violet), var(--blue));
+  background: linear-gradient(90deg, #b9a8ff, #8fb2ff 55%, #7fdeee);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.2em;
 }
 
 .get {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-high);
-  padding: 8px 14px;
+  padding: 8px 16px;
+  border: 1px solid transparent;
   border-radius: 999px;
-  border: 1px solid var(--border);
-  background: rgb(17 29 53 / 0.6);
+  background:
+    linear-gradient(180deg, rgb(21 27 52 / 0.9), rgb(11 14 30 / 0.92)) padding-box,
+    var(--edge) border-box;
+  color: var(--text-high);
+  font-size: 13px;
+  font-weight: 650;
+  transition: box-shadow 0.25s ease;
 }
 
 .get:hover {
-  border-color: var(--violet);
+  box-shadow: 0 10px 26px -14px rgb(122 92 240 / 0.95);
 }

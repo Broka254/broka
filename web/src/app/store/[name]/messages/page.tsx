@@ -34,7 +34,7 @@ const ID = /^[A-Za-z0-9-]{1,64}$/
 // Android), the keyboard shrinks the page instead of covering it, so the
 // box being typed into stays above the keyboard with the newest messages.
 export const viewport: Viewport = {
-  themeColor: '#03040a',
+  themeColor: '#04050b',
   colorScheme: 'dark',
   width: 'device-width',
   initialScale: 1,
