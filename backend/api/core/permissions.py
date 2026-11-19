@@ -46,6 +46,11 @@ class Permission(str, enum.Enum):
     # Admin
     ADMIN_SUMMARY         = "can_admin_summary"
     MANAGE_USERS          = "can_manage_users"
+    # Suspending or reinstating an account changes whether a person can use
+    # BROKA at all, so it is its own capability rather than part of the flag
+    # action. Today only `is_admin` grants it; naming it separates the two
+    # powers if a narrower moderator role is added.
+    SUSPEND_USER          = "can_suspend_user"
     VERIFY_USER           = "can_verify_user"
     PROMOTE_ADMIN         = "can_promote_admin"
     VIEW_TRANSACTIONS     = "can_view_transactions"
@@ -101,6 +106,7 @@ _ADMIN_PERMISSIONS: set[Permission] = _USER_PERMISSIONS | {
     Permission.VIEW_ALL_DISPUTES,
     Permission.ADMIN_SUMMARY,
     Permission.MANAGE_USERS,
+    Permission.SUSPEND_USER,
     Permission.VERIFY_USER,
     Permission.PROMOTE_ADMIN,
     Permission.VIEW_TRANSACTIONS,

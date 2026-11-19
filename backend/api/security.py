@@ -134,6 +134,14 @@ def create_access_token(data: dict) -> str:
     payload          = data.copy()
     payload["exp"]   = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     payload["type"]  = "access"
+    # Issued-at, so a suspension (users.sessions_revoked_at) can invalidate a
+    # token that is otherwise still in date. Milliseconds, not whole seconds:
+    # a suspension and the reinstatement that follows it can happen inside
+    # one second, and a token minted after the reinstatement must not be
+    # mistaken for one minted before the suspension. Tokens minted before
+    # this claim existed simply have no iat and fall back to the 15-minute
+    # expiry.
+    payload["iat"]   = int(datetime.now(timezone.utc).timestamp() * 1000)
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 

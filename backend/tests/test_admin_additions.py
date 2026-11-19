@@ -128,6 +128,9 @@ async def test_timeseries_shape_and_bucketing(client):
     body = r.json()
     assert set(body["series"]) == {
         "signups",
+        # Distinct users with a session heartbeat per bucket - the series the
+        # user analytics page asked for and used to receive as nothing.
+        "active_users",
         "listings_created",
         "deals_agreed",
         "gmv_minor",

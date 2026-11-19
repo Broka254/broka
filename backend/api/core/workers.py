@@ -465,6 +465,17 @@ async def _periodic_sweep_pass() -> None:
     except Exception as exc:
         logger.error("[sweep] buy-agent watch expiry failed: %s", exc)
     try:
+        # Presence and usage duration both depend on a session that stops
+        # being "open" when the phone goes away. Without this, a killed app
+        # leaves a session open forever and every duration is wall-clock.
+        await task_close_stale_sessions()
+    except Exception as exc:
+        logger.error("[sweep] session close failed: %s", exc)
+    try:
+        await task_purge_activity_sessions()
+    except Exception as exc:
+        logger.error("[sweep] activity retention purge failed: %s", exc)
+    try:
         await task_sync_listing_stock()
     except Exception as exc:
         logger.error("[sweep] listing stock sync failed: %s", exc)
@@ -617,6 +628,39 @@ async def task_expire_buy_agent_watches(ctx: dict | None = None) -> None:
     on every instance at once: each watch is ended with a compare-and-swap."""
     from api.domains.buy_agent import service
     await service.expire_old_watches()
+
+
+async def task_close_stale_sessions(ctx: dict | None = None) -> None:
+    """Close sessions whose last heartbeat is older than the presence window.
+
+    A closed session ends where it was last seen (api/core/activity.py), so
+    the duration says how long the person was actually there, not how long
+    the row stayed open.
+    """
+    from api.core.activity import close_stale_sessions
+    from api.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        closed = await close_stale_sessions(db)
+        await db.commit()
+    if closed:
+        logger.info("[sweep] closed %d inactive user session(s)", closed)
+
+
+async def task_purge_activity_sessions(ctx: dict | None = None) -> None:
+    """Delete closed sessions past their retention window.
+
+    Retention is deliberate: detailed sessions are kept for 180 days, which
+    covers every engagement window the dashboard offers, and no longer.
+    """
+    from api.core.activity import purge_old_sessions
+    from api.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        purged = await purge_old_sessions(db)
+        await db.commit()
+    if purged:
+        logger.info("[sweep] purged %d expired activity session(s)", purged)
 
 
 async def start_periodic_sweep(interval_seconds: int = 300) -> None:

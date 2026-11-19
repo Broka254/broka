@@ -510,20 +510,76 @@ async def location_visibility(
     return {"ok": True}
 
 
+class HeartbeatIn(BaseModel):
+    # Optional so the current app build keeps working unchanged.
+    session_id: Optional[str] = Field(default=None, max_length=64)
+    device_id: Optional[str] = Field(default=None, max_length=128)
+    platform: Optional[Literal["android", "ios", "web"]] = None
+    foreground: StrictBool = True
+
+
+class LogoutIn(BaseModel):
+    session_id: Optional[str] = Field(default=None, max_length=64)
+    device_id: Optional[str] = Field(default=None, max_length=128)
+
+
 @router.patch("/heartbeat")
 async def heartbeat(
+    body: Optional[HeartbeatIn] = None,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    from api.database import User
-    from sqlalchemy import select
-    from datetime import datetime
-    r = await db.execute(select(User).where(User.id == current_user["id"]))
-    user = r.scalar_one_or_none()
-    if user:
-        user.last_seen = datetime.utcnow()
-        await db.commit()
-    return {"ok": True}
+    """Advance this device's session and return it.
+
+    The message the app sends is advisory: `foreground` decides whether the
+    beat adds usage time, and the server decides when a gap ends a session.
+    Everything is optional so an older build that sends no body keeps its
+    presence working exactly as before.
+    """
+    from api.core.activity import touch_session
+
+    payload = body or HeartbeatIn()
+    session = await touch_session(
+        db,
+        current_user["id"],
+        device_id=payload.device_id,
+        platform=payload.platform,
+        foreground=payload.foreground,
+        session_id=payload.session_id,
+    )
+    await db.commit()
+    return {
+        "ok": True,
+        "active": True,
+        "session_id": session["session_id"],
+        "started_at": session["started_at"],
+        "foreground_seconds": session["foreground_seconds"],
+    }
+
+
+@router.post("/logout")
+async def logout(
+    body: Optional[LogoutIn] = None,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Close this device's session at sign-out.
+
+    Best effort by design: the inactivity sweep closes the session anyway if
+    the app is killed before it can call this.
+    """
+    from api.core.activity import close_session
+
+    payload = body or LogoutIn()
+    closed = await close_session(
+        db,
+        current_user["id"],
+        session_id=payload.session_id,
+        device_id=payload.device_id,
+        reason="logout",
+    )
+    await db.commit()
+    return {"ok": True, "sessions_closed": closed}
 
 
 @router.patch("/fcm-token")

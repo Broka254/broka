@@ -703,6 +703,13 @@ class AuthService:
                 detail="Invalid phone number or password",
             )
 
+        # A correct password does not sign in a suspended account. Checked
+        # after the password so the refusal cannot be used to discover which
+        # numbers have suspended accounts without knowing the password.
+        from api.core.moderation import assert_can_sign_in
+
+        assert_can_sign_in(user)
+
         user.last_seen = datetime.utcnow()
         await self.db.commit()
 

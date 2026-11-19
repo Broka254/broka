@@ -646,6 +646,24 @@ class User(Base):
     trust_score        = Column(Integer, default=100, nullable=True)
     # NEW v3.0: flag set when fraud engine marks user high-risk
     is_flagged         = Column(Boolean, default=False, nullable=False)
+    # ── Account moderation (intelligence build, Phase One) ──────────────────
+    # `is_flagged` above is a risk marker and never blocks sign-in; this is
+    # the enforcement field. Values: "active" | "restricted" | "suspended" |
+    # "banned". A temporary suspension is `suspended` with `suspended_until`
+    # set; a permanent one is `suspended` with it NULL (or `banned`).
+    # api/core/moderation.py owns the transitions and api/core/account_guard.py
+    # enforces them on every authenticated request.
+    account_status     = Column(String, default="active", nullable=False)
+    suspended_until    = Column(DateTime, nullable=True)
+    suspension_reason  = Column(Text, nullable=True)
+    suspended_at       = Column(DateTime, nullable=True)
+    suspended_by       = Column(String, nullable=True)   # admin user id
+    reinstated_at      = Column(DateTime, nullable=True)
+    reinstated_by      = Column(String, nullable=True)   # admin user id
+    # Access tokens minted before this moment stop being accepted; refresh
+    # tokens are revoked separately (refresh_tokens.revoked_at). Set when an
+    # account is suspended and by "sign out everywhere".
+    sessions_revoked_at = Column(DateTime, nullable=True)
     created_at         = Column(DateTime, default=datetime.utcnow)
 
     # ── NEW v6.1: account type + seller business identity ────────────────────
@@ -2252,6 +2270,7 @@ async def _init_db_impl():
         ("api.models.legal", ("LegalAcceptance",)),
         ("api.models.feedback", ("UserFeedback",)),
         ("api.models.admin_report", ("AdminReport",)),
+        ("api.models.activity", ("UserSession", "UserModerationAction")),
         ("api.models.escrow_provider", ("EscrowProviderRow", "EscrowProviderRevision")),
         ("api.models.store_order", (
             "StoreOrder", "StoreOrderItem", "StoreOrderEvent", "StoreOrderPayment",
@@ -2333,6 +2352,18 @@ async def _init_db_impl():
             # Buy-Agent disclosure flag (0015)
             "ALTER TABLE negotiation_messages ADD COLUMN is_agent_initiated BOOLEAN",
             # OTP-optional signup (0016)
+            # Account moderation (intelligence build, Phase One). TIMESTAMP,
+            # not DATETIME: PostgreSQL has no DATETIME and a failed ALTER here
+            # is swallowed, which would leave every moderation query naming a
+            # column production does not have.
+            "ALTER TABLE users ADD COLUMN account_status VARCHAR DEFAULT 'active' NOT NULL",
+            "ALTER TABLE users ADD COLUMN suspended_until TIMESTAMP",
+            "ALTER TABLE users ADD COLUMN suspension_reason TEXT",
+            "ALTER TABLE users ADD COLUMN suspended_at TIMESTAMP",
+            "ALTER TABLE users ADD COLUMN suspended_by VARCHAR",
+            "ALTER TABLE users ADD COLUMN reinstated_at TIMESTAMP",
+            "ALTER TABLE users ADD COLUMN reinstated_by VARCHAR",
+            "ALTER TABLE users ADD COLUMN sessions_revoked_at TIMESTAMP",
             "ALTER TABLE users ADD COLUMN phone_verified BOOLEAN DEFAULT 0 NOT NULL",
             # Split-step signup: email is optional but can now be proven with
             # an emailed code, so a verified address is distinguishable from

@@ -125,6 +125,14 @@ async def refresh_access_token(body: RefreshRequest, db: AsyncSession = Depends(
     if _naive_utc(stored.expires_at) < now:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token expired")
 
+    # Suspension revokes every refresh token, but this check is the second
+    # line: a token that was never revoked (or a suspension written by an
+    # older code path) must still not mint an access token for a blocked
+    # account.
+    from api.core.moderation import enforce_account_row
+
+    await enforce_account_row(db, user_id)
+
     response = {
         "access_token":  create_access_token({"sub": user_id}),
         "token_type":    "bearer",

@@ -77,6 +77,13 @@ async def timeseries_report(
     ).all()
     disputes = [to_naive_utc(c) for (c,) in dispute_rows if c is not None]
 
+    # Distinct users whose last heartbeat falls in each bucket. This is the
+    # series the dashboard's user analytics page asks for by name; before it
+    # existed the chart was simply missing, which read as "no active users".
+    from api.core.activity import series as activity_series
+
+    active_users = await activity_series(db, buckets)
+
     from api.core.revenue import revenue_report
 
     revenue = await revenue_report(
@@ -122,6 +129,7 @@ async def timeseries_report(
         "bucket": bucket,
         "series": {
             "signups": _points(signups),
+            "active_users": active_users,
             "listings_created": _points(listings),
             "deals_agreed": _points(agreed),
             "gmv_minor": _money_points(gmv),

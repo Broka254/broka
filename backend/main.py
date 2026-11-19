@@ -212,6 +212,13 @@ app.add_middleware(
 # images under /media/ are left as they are. See api/core/compression.py.
 app.add_middleware(JsonCompressionMiddleware)
 
+# ── Suspended accounts ────────────────────────────────────────────────────────
+# Blocks an existing access token, not just the login form; see
+# api/core/account_guard.py. Added before the body-size limit below so that an
+# oversized body is still refused before the account lookup.
+from api.core.account_guard import AccountStatusMiddleware  # noqa: E402
+app.add_middleware(AccountStatusMiddleware)
+
 # ── Request body size ─────────────────────────────────────────────────────────
 # Added last, so it runs first: an oversized body is refused before any
 # other middleware or route reads it. See api/core/body_limit.py.
@@ -356,6 +363,9 @@ app.include_router(admin_additions_router, prefix="/admin", tags=["Admin v3"])
 # insights) and the daily/weekly/monthly report archive.
 from api.domains.admin.intelligence import router as admin_intelligence_router
 app.include_router(admin_intelligence_router, prefix="/admin", tags=["Admin - Intelligence"])
+# User activity intelligence and account moderation (suspend / reinstate).
+from api.domains.admin.activity import router as admin_activity_router
+app.include_router(admin_activity_router, prefix="/admin", tags=["Admin - Activity"])
 # Production cost tracking. Mounted at /admin/revenue/costs, a more specific
 # prefix than /admin/revenue, whose handler lives in alerts_revenue.py above.
 app.include_router(
