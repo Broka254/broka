@@ -1,0 +1,52 @@
+# TEMPORARY - scratch branch only, deleted with the storefront 4 PR.
+# The coding sandbox that builds the storefront redesign can reach GitHub
+# but not the npm registry. This installs web/'s locked dependencies on a
+# runner (npm ci, exactly package-lock.json) and hands them over as a
+# one-day artifact, so typecheck, lint, tests, the build and browser
+# checks can run in the sandbox. It also packs the OFL fonts the redesign
+# self-hosts (Space Grotesk, Space Mono) from Fontsource. Nothing is
+# deployed, released or written to the repository.
+name: scratch - storefront 4 dependencies
+on:
+  push:
+    branches: ['scratch/storefront-4-deps']
+
+permissions:
+  contents: read
+
+jobs:
+  deps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/package.json
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install (npm ci)
+        working-directory: web
+        run: npm ci --no-audit --no-fund
+
+      - name: Fonts (OFL, from Fontsource)
+        run: |
+          mkdir -p "$RUNNER_TEMP/out/fonts"
+          cd "$RUNNER_TEMP/out/fonts"
+          npm pack --silent @fontsource-variable/space-grotesk @fontsource/space-mono @fontsource-variable/sora @fontsource-variable/unbounded
+          ls -la
+
+      - name: Pack node_modules
+        run: |
+          tar -C web -cf - node_modules | gzip -6 > "$RUNNER_TEMP/out/web-node_modules.tar.gz"
+          node --version > "$RUNNER_TEMP/out/node-version.txt"
+          ls -la "$RUNNER_TEMP/out"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: storefront-4-deps
+          path: ${{ runner.temp }}/out
+          retention-days: 1
+          compression-level: 0
