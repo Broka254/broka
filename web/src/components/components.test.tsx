@@ -158,6 +158,13 @@ describe('StoreLanding', () => {
     expect(screen.getByRole('link', { name: 'Message this store' }).getAttribute('href')).toBe('/store/clanix/messages')
   })
 
+  it("says how fast the store answers in the details page's words, not the readout's figure", () => {
+    // The readout shows "<1 min"; as a sentence that read "about <1 min".
+    render(<StoreLanding view={storeView(shop({ response_minutes: 0.5 }))} storeId="s1" products={[]} categories={[]} />)
+    expect(screen.getByText('Usually replies straight away')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('about <1')
+  })
+
   it('uses real seller departments and a compact launch note when the shop has no products', () => {
     render(
       <StoreLanding

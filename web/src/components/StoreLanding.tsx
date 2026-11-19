@@ -20,7 +20,7 @@ import { type ProductCardData, filtersQuery } from '@/lib/catalogue'
 import { categoryArtPath } from '@/lib/category-art'
 import { plural } from '@/lib/format'
 import { storeDetailsPath, storeMessagesPath, storeShopPath } from '@/lib/links'
-import { buyerStars, reviewCountLabel, reviewDate } from '@/lib/ratings'
+import { buyerStars, replyTimeLabel, reviewCountLabel, reviewDate } from '@/lib/ratings'
 import { PERK_PAY_DIRECT, PERK_SEE_FIRST } from '@/lib/safety'
 import type { StoreCategory, StoreReviews } from '@/lib/types'
 import type { StoreView } from '@/lib/storefront'
@@ -94,6 +94,9 @@ export function StoreLanding({
   // already on the line under its name.)
   const status = !view.isVirtual && view.hours.length > 0 ? view.openLabel : null
   const reply = replyFigure(store.response_minutes)
+  // The same reply time as a sentence, in the store details page's words:
+  // the readout's "<1" figure read "about <1 min" there.
+  const replyLine = replyTimeLabel(store.response_minutes)
   const fallbackArt = categoryArtPath(store.category)
   // With store orders on, a question needs no app: the conversation is on
   // the website, so it is the hero's second action. Without them it opens
@@ -452,7 +455,7 @@ export function StoreLanding({
               <p className={styles.sectionEyebrow}>A note from the shop</p>
               <h2 id="about-store-title">About {store.name}</h2>
               {view.description && <p>{view.description}</p>}
-              {(view.place || view.delivery || reply) && (
+              {(view.place || view.delivery || replyLine) && (
                 <ul className={styles.aboutFacts}>
                   {!view.isVirtual && view.place && (
                     <li>
@@ -464,9 +467,9 @@ export function StoreLanding({
                       <Icon name="truck" size={15} /> {view.delivery}
                     </li>
                   )}
-                  {reply && (
+                  {replyLine && (
                     <li>
-                      <Icon name="chat" size={15} /> Usually replies in about {reply.value} {reply.unit}
+                      <Icon name="chat" size={15} /> {replyLine}
                     </li>
                   )}
                 </ul>
