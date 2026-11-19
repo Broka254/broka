@@ -364,19 +364,19 @@ Counts: admin 93, optional 7, public 72, token 6, user 220.
 | GET | `/premium/me` | user | `my_premium` (backend/api/domains/premium/router.py:29) |
 | GET | `/premium/payments/{payment_id}` | user | `premium_payment_status` (backend/api/domains/premium/router.py:72) |
 | POST | `/premium/subscribe` | user | `subscribe` (backend/api/domains/premium/router.py:54) |
-| GET | `/pricing/categories` | public | `pricing_categories` (backend/api/domains/pricing/router.py:214) |
-| GET | `/pricing/launch-offers` | user | `launch_offers` (backend/api/domains/pricing/router.py:68) |
-| POST | `/pricing/listing-fee/callback` | public | `listing_fee_callback` (backend/api/domains/pricing/router.py:171) |
-| POST | `/pricing/listing-fee/callback/{secret}` | public | `listing_fee_callback_secured` (backend/api/domains/pricing/router.py:181) |
-| GET | `/pricing/listing-fee/listings/{listing_id}/quote` | user | `listing_quote` (backend/api/domains/pricing/router.py:81) |
-| GET | `/pricing/listing-fee/mine` | user | `my_listings_needing_payment` (backend/api/domains/pricing/router.py:152) |
-| POST | `/pricing/listing-fee/pay` | user | `pay_listing_fee` (backend/api/domains/pricing/router.py:102) |
-| GET | `/pricing/listing-fee/payments/{payment_id}` | user | `listing_fee_payment_status` (backend/api/domains/pricing/router.py:124) |
+| GET | `/pricing/categories` | public | `pricing_categories` (backend/api/domains/pricing/router.py:221) |
+| GET | `/pricing/launch-offers` | user | `launch_offers` (backend/api/domains/pricing/router.py:75) |
+| POST | `/pricing/listing-fee/callback` | public | `listing_fee_callback` (backend/api/domains/pricing/router.py:178) |
+| POST | `/pricing/listing-fee/callback/{secret}` | public | `listing_fee_callback_secured` (backend/api/domains/pricing/router.py:188) |
+| GET | `/pricing/listing-fee/listings/{listing_id}/quote` | user | `listing_quote` (backend/api/domains/pricing/router.py:88) |
+| GET | `/pricing/listing-fee/mine` | user | `my_listings_needing_payment` (backend/api/domains/pricing/router.py:159) |
+| POST | `/pricing/listing-fee/pay` | user | `pay_listing_fee` (backend/api/domains/pricing/router.py:109) |
+| GET | `/pricing/listing-fee/payments/{payment_id}` | user | `listing_fee_payment_status` (backend/api/domains/pricing/router.py:131) |
 | GET | `/pricing/listing-fee/quote` | user | `listing_fee_quote` (backend/api/domains/pricing/router.py:39) |
-| POST | `/pricing/listing-fee/renew-free` | user | `renew_listing_free` (backend/api/domains/pricing/router.py:137) |
-| GET | `/pricing/plans` | public | `pricing_plans` (backend/api/domains/pricing/router.py:188) |
-| GET | `/pricing/safe-payment` | public | `safe_payment_info` (backend/api/domains/pricing/router.py:220) |
-| GET | `/pricing/store-plan` | public | `store_plan` (backend/api/domains/pricing/router.py:194) |
+| POST | `/pricing/listing-fee/renew-free` | user | `renew_listing_free` (backend/api/domains/pricing/router.py:144) |
+| GET | `/pricing/plans` | public | `pricing_plans` (backend/api/domains/pricing/router.py:195) |
+| GET | `/pricing/safe-payment` | public | `safe_payment_info` (backend/api/domains/pricing/router.py:227) |
+| GET | `/pricing/store-plan` | public | `store_plan` (backend/api/domains/pricing/router.py:201) |
 | GET | `/ready` | public | `ready` (backend/main.py:623) |
 | POST | `/reviews/` | user | `submit_review` (backend/api/domains/reviews/router.py:48) |
 | GET | `/reviews/my-deals` | user | `my_reviewable_deals` (backend/api/domains/reviews/router.py:82) |
@@ -547,6 +547,7 @@ Counts: admin 93, optional 7, public 72, token 6, user 220.
 
 ### `backend/api/domains/listings/`
 
+- `details_text.py` — What the seller filled in on the Details step, as lines of a description.
 - `handover.py` — How a buyer gets what a listing sells: delivered, or not movable at all.
 - `inventory.py` — The one count of a listing's units, for every way they are sold.
 - `location.py` — Where a listing sits on the map, and the county it is filed under.
@@ -952,12 +953,12 @@ of a change.
 - **negotiation** — nothing outside itself
 - **payments** — domains: premium, pricing, service_costs, stores; core: audit, client_ip, config, cost_ledger, idempotency, mpesa_stk, rate_limit, reconciliation, zetupay; database, security
 - **premium** — domains: buy_agent, payments, pricing; core: audit, config, idempotency, mpesa_stk, rate_limit, reconciliation, zetupay; database, security
-- **pricing** — domains: escrow_directory, listings, payments, trust, zeno_assistant; core: audit, config, events, idempotency, mpesa_stk, nudge_templates, rate_limit, reconciliation, sms, zetupay; database, security
+- **pricing** — domains: escrow_directory, listings, payments, stores, trust, zeno_assistant; core: audit, config, events, idempotency, mpesa_stk, nudge_templates, rate_limit, reconciliation, sms, zetupay; database, security
 - **reviews** — domains: stores; core: audit, events; database, security
 - **scam_reports** — core: admin_alerts, audit, client_ip, permissions, rate_limit; database, security
 - **service_communications** — core: audit, client_ip, config, idempotency, observability, permissions, push_devices, rate_limit, timeutil, workers; database, security
 - **service_costs** — core: audit, config, cost_ledger, permissions, timeutil; database
-- **showcase** — domains: media, premium; core: hf_image_client, image_processing, rate_limit; database, security
+- **showcase** — domains: media, premium; core: config, hf_image_client, image_processing, rate_limit; database, security
 - **store_orders** — domains: escrow_directory, listings, media, stores; core: client_ip, config, push_devices, rate_limit; database, security
 - **stores** — domains: auth, categories, listings, media, payments, pricing, reviews, store_orders, trust; core: audit, client_ip, config, cost_ledger, gemini, geo, idempotency, mpesa_stk, presence, rate_limit, reconciliation, text_search, zetupay; database, security
 - **traders** — domains: listings, media, reviews, trust; core: geo, text_search; database, security
@@ -1005,11 +1006,11 @@ of a change.
 Read by `backend/api/core/config.py`; documented in `.env.example` and
 `render.yaml`. The web storefront's are in `web/.env.example`.
 
-`ACCESS_TOKEN_EXPIRE_MINUTES`, `ADMIN_BOOTSTRAP_EMAIL`, `ADMIN_REPORTS_ENABLED`, `AI_DEEPSEEK_INPUT_PER_1M_USD`, `AI_DEEPSEEK_OUTPUT_PER_1M_USD`, `AI_FREE_PROVIDERS`, `AI_USD_TO_KES`, `ALLOWED_ORIGINS`, `AT_API_KEY`, `AT_SENDER_ID`, `AT_USERNAME`, `AUCTIONS_ENABLED`, `AUCTION_DEFAULT_DURATION_HOURS`, `AUCTION_DEFAULT_MIN_INCREMENT`, `AUCTION_ENDING_SOON_MINUTES`, `AUCTION_FUNDING_SETTLE_MINUTES`, `AUCTION_PAYMENT_DEADLINE_HOURS`, `BROKA_NATIVE`, `BUY_AGENT_MAX_ACTIVE`, `BUY_AGENT_WATCH_DAYS`, `CALL_RINGING_PRECONNECT`, `CALL_TOKEN_EXPIRE_MINUTES`, `CLIENT_IP_HEADER`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `CLOUDFLARE_TURN_KEY_ID`, `DATABASE_URL`, `DCR_ENABLED`, `DEBUG`, `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_TIMEOUT_SECONDS`, `ECONFIRM_API_KEY`, `ECONFIRM_BASE_URL`, `ECONFIRM_FALLBACK_EMAIL_DOMAIN`, `ECONFIRM_MAX_POLL_SECONDS`, `ECONFIRM_POLL_INTERVAL_SECONDS`, `ECONFIRM_TIMEOUT_SECONDS`, `ENV`, `ENVIRONMENT`, `ESCROW_GUIDANCE_ENABLED`, `ESCROW_PRICING_MAX_AGE_DAYS`, `ESCROW_PROVIDER_DOMAINS`, `ESCROW_RECORD_MAX_AGE_DAYS`, `EXPIRY_SMS_DAYS_BEFORE`, `EXPIRY_SMS_ENABLED`, `FOUNDING_DISCOUNT_DAYS`, `FOUNDING_SELLER_TIERS`, `FREE_LISTINGS_PER_SELLER`, `FREE_LISTING_OFFER_DAYS`, `FREE_LISTING_OFFER_LIMIT`, `FREE_STORE_OFFER_DAYS`, `FREE_STORE_OFFER_LIMIT`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GROQ_API_KEY`, `HF_SHOWCASE_MODEL`, `HF_TOKEN`, `IN_APP_PAYMENTS_ENABLED`, `LISTING_FEES_ENABLED`, `MAX_REQUEST_BODY_MB`, `MEDIA_PUBLIC_BASE_URL`, `MOBITECH_API_KEY`, `MOBITECH_BASE_URL`, `MOBITECH_SENDER_NAME`, `MOBITECH_SEND_ENDPOINT`, `MPESA_B2C_CREDENTIAL`, `MPESA_B2C_INITIATOR`, `MPESA_B2C_RESULT_URL`, `MPESA_B2C_TIMEOUT_URL`, `MPESA_CALLBACK_SECRET`, `MPESA_CALLBACK_URL`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_ENV`, `MPESA_FEATURED_CALLBACK_URL`, `MPESA_LISTING_FEE_CALLBACK_URL`, `MPESA_PASSKEY`, `MPESA_PREMIUM_CALLBACK_URL`, `MPESA_SHORTCODE`, `MPESA_STORE_CALLBACK_URL`, `MPESA_VERIFY_CALLBACK_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OTP_EXPIRY_SECONDS`, `OTP_LENGTH`, `OTP_MAX_ATTEMPTS`, `PHONE_VERIFY_TOKEN_EXPIRE_MINUTES`, `PLATFORM_FIXED_MONTHLY_COST_KES`, `PREMIUM_ENABLED`, `PUBLIC_API_BASE_URL`, `R2_ACCESS_KEY_ID`, `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_SECRET_ACCESS_KEY`, `REDIS_URL`, `REFRESH_TOKEN_EXPIRE_DAYS`, `RENDER`, `REPORT_TZ_OFFSET_HOURS`, `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_REPLY_TO`, `SECRET_KEY`, `SENTRY_DSN`, `SERVICE_COMMUNICATION_ANNOUNCEMENT_TTL_DAYS`, `SERVICE_COMMUNICATION_CLAIM_SECONDS`, `SERVICE_COMMUNICATION_COMMUNICATION_BATCH`, `SERVICE_COMMUNICATION_MAX_ATTEMPTS`, `SERVICE_COMMUNICATION_MAX_AUDIENCE`, `SERVICE_COMMUNICATION_MAX_EXPLICIT_RECIPIENTS`, `SERVICE_COMMUNICATION_PROVIDER_CONCURRENCY`, `SERVICE_COMMUNICATION_PROVIDER_TIMEOUT_SECONDS`, `SERVICE_COMMUNICATION_RECIPIENT_BATCH`, `SERVICE_COMMUNICATION_RETENTION_DAYS`, `SERVICE_COMMUNICATION_RETRY_BASE_SECONDS`, `SERVICE_COMMUNICATION_RETRY_MAX_SECONDS`, `SERVICE_COMMUNICATION_SWEEP_SECONDS`, `SERVICE_USAGE_ENABLED`, `SERVICE_USAGE_RETENTION_DAYS`, `SMS_COST_MINOR_AT`, `SMS_COST_MINOR_MOBITECH`, `SMS_COST_MINOR_TEXIN`, `STOREFRONT_API_KEY`, `STORE_BILLING_ENABLED`, `STORE_BILLING_GRACE_DAYS`, `STORE_LINK_BASE`, `STORE_ORDER_MAX_OPEN_PER_STORE`, `STORE_ORDER_RESERVATION_HOURS`, `STORE_ORDER_SELLER_RESPONSE_HOURS`, `TEXIN_API_KEY`, `TEXIN_BASE_URL`, `TEXIN_SENDER_ID`, `TEXIN_TIMEOUT_SECONDS`, `TEXIN_WEBHOOK_SECRET`, `THREAD_TOKEN_EXPIRE_HOURS`, `TRUSTED_PROXY_HOPS`, `VERIFIED_BADGE_ENABLED`, `ZAC_SECRET`, `ZENO_FREE_AGENT_SESSIONS_PER_DAY`, `ZENO_FREE_LISTING_SESSIONS_PER_DAY`, `ZETUPAY_BASE_URL`, `ZETUPAY_ENABLED`, `ZETUPAY_FEE_PCT`, `ZETUPAY_SECRET_KEY`, `ZETUPAY_TIMEOUT_SECONDS`
+`ACCESS_TOKEN_EXPIRE_MINUTES`, `ADMIN_BOOTSTRAP_EMAIL`, `ADMIN_REPORTS_ENABLED`, `AI_COVERS_ENABLED`, `AI_DEEPSEEK_INPUT_PER_1M_USD`, `AI_DEEPSEEK_OUTPUT_PER_1M_USD`, `AI_FREE_PROVIDERS`, `AI_USD_TO_KES`, `ALLOWED_ORIGINS`, `AT_API_KEY`, `AT_SENDER_ID`, `AT_USERNAME`, `AUCTIONS_ENABLED`, `AUCTION_DEFAULT_DURATION_HOURS`, `AUCTION_DEFAULT_MIN_INCREMENT`, `AUCTION_ENDING_SOON_MINUTES`, `AUCTION_FUNDING_SETTLE_MINUTES`, `AUCTION_PAYMENT_DEADLINE_HOURS`, `BROKA_NATIVE`, `BUY_AGENT_MAX_ACTIVE`, `BUY_AGENT_WATCH_DAYS`, `CALL_RINGING_PRECONNECT`, `CALL_TOKEN_EXPIRE_MINUTES`, `CLIENT_IP_HEADER`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `CLOUDFLARE_TURN_KEY_ID`, `DATABASE_URL`, `DCR_ENABLED`, `DEBUG`, `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_TIMEOUT_SECONDS`, `ECONFIRM_API_KEY`, `ECONFIRM_BASE_URL`, `ECONFIRM_FALLBACK_EMAIL_DOMAIN`, `ECONFIRM_MAX_POLL_SECONDS`, `ECONFIRM_POLL_INTERVAL_SECONDS`, `ECONFIRM_TIMEOUT_SECONDS`, `ENV`, `ENVIRONMENT`, `ESCROW_GUIDANCE_ENABLED`, `ESCROW_PRICING_MAX_AGE_DAYS`, `ESCROW_PROVIDER_DOMAINS`, `ESCROW_RECORD_MAX_AGE_DAYS`, `EXPIRY_SMS_DAYS_BEFORE`, `EXPIRY_SMS_ENABLED`, `FOUNDING_DISCOUNT_DAYS`, `FOUNDING_SELLER_TIERS`, `FREE_LISTINGS_PER_SELLER`, `FREE_LISTING_OFFER_DAYS`, `FREE_LISTING_OFFER_LIMIT`, `FREE_STORE_OFFER_DAYS`, `FREE_STORE_OFFER_LIMIT`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GROQ_API_KEY`, `HF_SHOWCASE_MODEL`, `HF_TOKEN`, `IN_APP_PAYMENTS_ENABLED`, `LISTING_FEES_ENABLED`, `MAX_REQUEST_BODY_MB`, `MEDIA_PUBLIC_BASE_URL`, `MOBITECH_API_KEY`, `MOBITECH_BASE_URL`, `MOBITECH_SENDER_NAME`, `MOBITECH_SEND_ENDPOINT`, `MPESA_B2C_CREDENTIAL`, `MPESA_B2C_INITIATOR`, `MPESA_B2C_RESULT_URL`, `MPESA_B2C_TIMEOUT_URL`, `MPESA_CALLBACK_SECRET`, `MPESA_CALLBACK_URL`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_ENV`, `MPESA_FEATURED_CALLBACK_URL`, `MPESA_LISTING_FEE_CALLBACK_URL`, `MPESA_PASSKEY`, `MPESA_PREMIUM_CALLBACK_URL`, `MPESA_SHORTCODE`, `MPESA_STORE_CALLBACK_URL`, `MPESA_VERIFY_CALLBACK_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OTP_EXPIRY_SECONDS`, `OTP_LENGTH`, `OTP_MAX_ATTEMPTS`, `PHONE_VERIFY_TOKEN_EXPIRE_MINUTES`, `PLATFORM_FIXED_MONTHLY_COST_KES`, `PREMIUM_ENABLED`, `PUBLIC_API_BASE_URL`, `R2_ACCESS_KEY_ID`, `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_SECRET_ACCESS_KEY`, `REDIS_URL`, `REFRESH_TOKEN_EXPIRE_DAYS`, `RENDER`, `REPORT_TZ_OFFSET_HOURS`, `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_REPLY_TO`, `SECRET_KEY`, `SENTRY_DSN`, `SERVICE_COMMUNICATION_ANNOUNCEMENT_TTL_DAYS`, `SERVICE_COMMUNICATION_CLAIM_SECONDS`, `SERVICE_COMMUNICATION_COMMUNICATION_BATCH`, `SERVICE_COMMUNICATION_MAX_ATTEMPTS`, `SERVICE_COMMUNICATION_MAX_AUDIENCE`, `SERVICE_COMMUNICATION_MAX_EXPLICIT_RECIPIENTS`, `SERVICE_COMMUNICATION_PROVIDER_CONCURRENCY`, `SERVICE_COMMUNICATION_PROVIDER_TIMEOUT_SECONDS`, `SERVICE_COMMUNICATION_RECIPIENT_BATCH`, `SERVICE_COMMUNICATION_RETENTION_DAYS`, `SERVICE_COMMUNICATION_RETRY_BASE_SECONDS`, `SERVICE_COMMUNICATION_RETRY_MAX_SECONDS`, `SERVICE_COMMUNICATION_SWEEP_SECONDS`, `SERVICE_USAGE_ENABLED`, `SERVICE_USAGE_RETENTION_DAYS`, `SMS_COST_MINOR_AT`, `SMS_COST_MINOR_MOBITECH`, `SMS_COST_MINOR_TEXIN`, `STOREFRONT_API_KEY`, `STORE_BILLING_ENABLED`, `STORE_BILLING_GRACE_DAYS`, `STORE_LINK_BASE`, `STORE_ORDER_MAX_OPEN_PER_STORE`, `STORE_ORDER_RESERVATION_HOURS`, `STORE_ORDER_SELLER_RESPONSE_HOURS`, `TEXIN_API_KEY`, `TEXIN_BASE_URL`, `TEXIN_SENDER_ID`, `TEXIN_TIMEOUT_SECONDS`, `TEXIN_WEBHOOK_SECRET`, `THREAD_TOKEN_EXPIRE_HOURS`, `TRUSTED_PROXY_HOPS`, `VERIFIED_BADGE_ENABLED`, `ZAC_SECRET`, `ZENO_FREE_AGENT_SESSIONS_PER_DAY`, `ZENO_FREE_LISTING_SESSIONS_PER_DAY`, `ZETUPAY_BASE_URL`, `ZETUPAY_ENABLED`, `ZETUPAY_FEE_PCT`, `ZETUPAY_SECRET_KEY`, `ZETUPAY_TIMEOUT_SECONDS`
 
 ## Backend tests
 
-176 files in `backend/tests/`.
+180 files in `backend/tests/`.
 
 - `test_admin_additions.py` — Admin additions: SMS cost hook, timeseries, detail reads, users search.
 - `test_admin_alerts.py` — Admin alerts: event-driven creation, dedup, transitions, SSE smoke.
@@ -1023,6 +1024,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_ai_connection_release.py` — No database connection is held while Zeno waits on a model.
 - `test_ai_cost.py` — Tests for the AI cost controls (api/core/ai_cost.py).
 - `test_ai_costs.py` — AI cost capture: pricing math, provider hooks, derived fees.
+- `test_ai_covers_off.py` — AI covers switched off (AI_COVERS_ENABLED - off in production for now).
 - `test_announcement_lifecycle_feedback.py` — Announcement 30-day lifecycle, per-user delete, and feedback/complaints.
 - `test_answered_call_not_lost.py` — An answered call is never lost, never "missed", never keeps anyone busy (2026-10-09).
 - `test_assemblyai_token.py` — BROKA - /stt/assemblyai-token tests Run: pytest backend/tests/test_assemblyai_token.py -v
@@ -1084,6 +1086,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_feedback_admin_triage.py` — Complaint triage for the admin dashboard.
 - `test_founding_sellers.py` — The founding-seller offer (PRICING.md §2; pricing/service.founding_discount).
 - `test_fraud.py` — BROKA - Fraud Engine Unit Tests (v3.0) Tests trust score computation and trust band classification.
+- `test_free_offers_once.py` — One free listing and one free store per person, however they post.
 - `test_idempotency.py` — Tests for the idempotency key guard.
 - `test_inbox_batched.py` — The inbox with its figures batched (api/core/inbox_threads.py).
 - `test_inbox_query_budget.py` — The inbox's database work must not grow with the number of conversations.
@@ -1093,6 +1096,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_launch_offers.py` — Launch offers, time-left and expiry SMS.
 - `test_legal_acceptance.py` — Registration is refused unless the caller makes the three declarations.
 - `test_legal_documents.py` — The app and the backend must be talking about the same legal documents.
+- `test_listing_details_text.py` — A listing's details in its description (listings/details_text.py).
 - `test_listing_fee_payment.py` — Paying the listing fee (PRICING.md; api/domains/pricing/payments.py).
 - `test_listing_likes.py` — Likes, apart from saves (2026-10-09).
 - `test_listing_overhaul.py` — The 2026-09-25 listing overhaul (LISTING_OVERHAUL.md): the category taxonomy, what a listing must and may now say about itself, the seller'…
@@ -1158,6 +1162,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_store_billing.py` — Online store plans (PRICING.md §5; api/domains/stores/billing.py).
 - `test_store_calls.py` — Store-general calls use the same session, card and history path as chats.
 - `test_store_conversations.py` — Store-general conversations land in the Inbox (regression).
+- `test_store_listing_categories.py` — What an online store may hold (stores/categories.may_hold).
 - `test_store_order_rules.py` — The store-order rules on their own: the state machine, the payment-report rules, the money arithmetic and the notification wording.
 - `test_store_orders.py` — Store orders, end to end through the API: a buyer with no app signs in with an SMS code, sends a store an order request, the store confirms…
 - `test_store_orders_migration.py` — The store-orders schema change on a database that predates it.
@@ -1492,6 +1497,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 ### `flutter_app/lib/services/`
 
 - `active_call.dart` — BROKA - the call this phone is on, and the calls it is done with.
+- `ai_covers_enabled.dart` — Whether this build makes AI covers (2026-11-19: off for now).
 - `api_service.dart` — BROKA - API Service
 - `assemblyai_stt_service.dart` — lib/services/assemblyai_stt_service.dart
 - `broka_tts.dart` — BROKA TTS Service
@@ -1549,6 +1555,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `backend_time.dart` — FIX (2026-08-18, reported as "'3h ago' shown for something posted under 15 minutes ago"): the backend stores every timestamp as naive UTC (…
 - `handover.dart` — Whether what a listing sells can be delivered at all.
 - `land_size.dart` — A Land listing's size: how the sell wizard asks for it and how cards and the product screen print it.
+- `listing_details_text.dart` — The seller's details as lines of the listing's description.
 - `phone_format.dart` — A seller's phone number, as a buyer reads and dials it.
 - `price_format.dart` — BROKA — one place that turns a KES amount into the string a user reads.
 - `price_unit.dart` — "KES 3,500 per bag": what one unit of a listing's price is, and how many of them the seller has.
@@ -1697,6 +1704,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `screen_cache_test.dart` — ScreenCache, DataChanges and the network instrumentation (data-saving pass): the shared cache-first layer Home, the Menu, the store section…
 - `sell_listing_with_zeno_test.dart` — Listing with Zeno, and the sell wizard's way out (2026-10-08).
 - `sell_premium_strip_test.dart` — The sell wizard's premium offers as strips (2026-11-08).
+- `sell_store_rules_and_details_test.dart` — What a store may hold, and the seller's details in the description.
 - `sell_wizard_overhaul_test.dart` — The sell wizard after the 2026-09-25 listing overhaul (LISTING_OVERHAUL.md).
 - `sell_zeno_premium_test.dart` — Zeno's premium help in the sell wizard (2026-10-05), and the case the wizard makes for a plan while a seller is posting.
 - `seller_dashboard_shell_test.dart` — The Seller Dashboard on Home's visual system (2026-09-26): the constellation, the shared header language, and a pill switcher for its three…
