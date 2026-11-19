@@ -2,6 +2,7 @@
 // departments, help with buying, and how paying works (the store directly,
 // while BROKA holds no payments: lib/safety.ts) - then "powered by BROKA".
 import Link from 'next/link'
+import type { CSSProperties } from 'react'
 
 import { filtersQuery } from '@/lib/catalogue'
 import { placeLine } from '@/lib/format'
@@ -90,6 +91,11 @@ export function StoreFooter({ view, categories = [] }: { view: StoreView; catego
       </div>
       <p className={styles.footerBase}>
         © {store.name} · Powered by <HomeLink>BROKA</HomeLink>, Kenya&apos;s AI-brokered marketplace
+      </p>
+      {/* The store's name across the foot, as a sign: decoration, sized
+          from its length (shop.module.css .footerMark). */}
+      <p className={styles.footerMark} aria-hidden="true" style={{ '--len': Array.from(store.name).length } as CSSProperties}>
+        {store.name}
       </p>
     </footer>
   )

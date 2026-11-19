@@ -42,36 +42,51 @@
   color: #fbbf24;
 }
 
+/* Sharing a product: quiet capsules, never louder than buying. WhatsApp
+   carries its green as a lit dot, not as a fill - a big green button on a
+   shop's page reads as "chat with the seller" (STORES_UI_REVIEW.md H4). */
 .share {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 
 .shareButton {
   display: inline-flex;
   align-items: center;
+  gap: 8px;
   min-height: 44px;
   padding: 0 18px;
   border: 1px solid transparent;
-  border-radius: 13px;
+  border-radius: var(--radius-pill);
   background:
-    linear-gradient(180deg, rgb(21 27 52 / 0.9), rgb(11 14 30 / 0.92)) padding-box,
+    linear-gradient(180deg, rgb(22 28 54 / 0.92), rgb(10 13 28 / 0.94)) padding-box,
     var(--edge) border-box;
-  font-size: 14px;
+  color: var(--text-high);
+  font-size: 13.5px;
   font-weight: 650;
   cursor: pointer;
-  transition: box-shadow 0.25s var(--ease);
+  transition:
+    box-shadow 0.25s var(--ease),
+    background 0.25s ease;
 }
 
 .shareButton:hover {
-  box-shadow: 0 12px 28px -18px rgb(122 92 240 / 0.95);
+  background:
+    linear-gradient(180deg, rgb(28 34 66 / 0.95), rgb(12 15 32 / 0.96)) padding-box,
+    var(--edge-strong) border-box;
+  box-shadow: 0 12px 28px -18px rgb(122 92 240 / 1);
 }
 
-.whatsapp {
-  border: 0;
-  background: linear-gradient(135deg, #25d366, #128c7e);
-  box-shadow: 0 10px 24px -14px rgb(37 211 102 / 0.9);
-  color: #fff;
+.whatsapp::before {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: #25d366;
+  box-shadow: 0 0 10px rgb(37 211 102 / 0.9);
+  content: '';
 }
 
 /* ── Page titles: the catalogue's and the store details' ───────────────── */
@@ -79,15 +94,28 @@
 .detailsTitle {
   margin: 0 0 18px;
   padding-bottom: 0.06em;
-  background: var(--aurora-text);
+  background: var(--holo-text);
+  background-size: 220% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
   font-family: var(--font-display);
-  font-size: clamp(30px, 4.4vw, 52px);
+  font-size: clamp(38px, 5.6vw, 76px);
   font-weight: 700;
-  letter-spacing: -0.045em;
-  line-height: 1.05;
+  letter-spacing: -0.055em;
+  line-height: 0.98;
+  text-wrap: balance;
+  filter: drop-shadow(0 0 34px rgb(139 117 255 / 0.3));
+  animation: titleHolo 14s ease-in-out infinite alternate;
+}
+
+@keyframes titleHolo {
+  from {
+    background-position: 0% 50%;
+  }
+  to {
+    background-position: 100% 50%;
+  }
 }
 
 /* ── Store details page ─────────────────────────────────────────────────── */
@@ -240,27 +268,34 @@
   }
 }
 
-/* A section's label: small capitals behind an aurora tick. */
+/* A section's label: an instrument label behind a lit tick. */
 .detailsLabel {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin: 0 0 10px 2px;
-  color: var(--text-low);
-  font-family: var(--font-sans);
+  gap: 12px;
+  margin: 0 0 12px 2px;
+  color: var(--cyan-text);
+  font-family: var(--font-mono);
   font-size: 11px;
-  font-weight: 750;
-  letter-spacing: 0.16em;
+  font-weight: 400;
+  letter-spacing: 0.22em;
   text-transform: uppercase;
 }
 
 .detailsLabel::before {
-  width: 16px;
+  width: 22px;
   height: 2px;
   flex: none;
   border-radius: 2px;
   background: linear-gradient(90deg, #a48bff, #54d7e9);
-  box-shadow: 0 0 10px rgb(139 117 255 / 0.8);
+  box-shadow: 0 0 12px rgb(139 117 255 / 0.9);
+  content: '';
+}
+
+.detailsLabel::after {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, rgb(196 204 232 / 0.16), transparent);
   content: '';
 }
 
@@ -359,13 +394,24 @@
 }
 
 /* One star row, five outlines with an exact fractional overlay. */
+/* Five drawn stars (Stars.tsx): a dim row, and the lit row over it cut to
+   the fraction filled. */
 .stars {
   position: relative;
-  display: inline-block;
-  color: rgb(255 255 255 / 0.2);
-  letter-spacing: 2px;
-  line-height: 1;
+  display: inline-flex;
+  width: fit-content;
+  line-height: 0;
   white-space: nowrap;
+}
+
+.starsBase,
+.starsFill {
+  display: inline-flex;
+  gap: 0.18em;
+}
+
+.starsBase {
+  color: rgb(255 255 255 / 0.16);
 }
 
 .starsFill {
@@ -373,8 +419,12 @@
   inset: 0 auto 0 0;
   overflow: hidden;
   color: #fbbf24;
-  text-shadow: 0 0 12px rgb(251 191 36 / 0.45);
-  white-space: nowrap;
+  filter: drop-shadow(0 0 6px rgb(251 191 36 / 0.55));
+}
+
+.starsBase svg,
+.starsFill svg {
+  flex: none;
 }
 
 /* The buyer-review summary: average on the left, 5-to-1 bars beside it. */
@@ -584,10 +634,38 @@
 }
 
 .factIcon {
-  font-family: var(--font-sans);
-  font-size: 18px;
-  font-weight: 400;
-  line-height: 1;
+  flex: none;
+  color: var(--cyan-text);
+  filter: drop-shadow(0 0 6px rgb(84 215 233 / 0.5));
+}
+
+.factIcon.star {
+  color: #fbbf24;
+  filter: drop-shadow(0 0 6px rgb(251 191 36 / 0.55));
+}
+
+/* A line that starts with an icon: the icon on the text's first line. */
+.iconLine {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.iconLine svg {
+  flex: none;
+  margin-top: 0.2em;
+  color: var(--cyan-text);
+}
+
+/* The verified badge keeps the line's green. */
+.good.iconLine {
+  align-items: center;
+}
+
+.good.iconLine svg {
+  margin-top: 0;
+  color: inherit;
+  filter: drop-shadow(0 0 6px rgb(52 211 153 / 0.5));
 }
 
 .mutedLine {
@@ -722,11 +800,11 @@
   position: relative;
   isolation: isolate;
   display: block;
-  flex: 0 0 112px;
-  height: 112px;
+  flex: 0 0 120px;
+  height: 128px;
   overflow: hidden;
   border: 1px solid transparent;
-  border-radius: 20px;
+  border-radius: 22px;
   background:
     linear-gradient(#10182b, #10182b) padding-box,
     var(--edge) border-box;
@@ -806,10 +884,12 @@
 }
 
 .categoryTileCopy small {
-  color: rgb(231 234 248 / 0.9);
-  font-size: 10.5px;
-  font-weight: 600;
-  line-height: 1.1;
+  color: rgb(231 234 248 / 0.92);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  line-height: 1.2;
+  text-transform: uppercase;
 }
 
 .categoryTileFallback {
@@ -838,33 +918,42 @@
   }
 
   .categoryTile {
-    flex-basis: 140px;
-    height: 132px;
+    flex-basis: 168px;
+    height: 156px;
+  }
+
+  .categoryTileCopy {
+    right: 14px;
+    bottom: 13px;
+    left: 14px;
   }
 
   .categoryTileCopy strong {
-    font-size: 13.5px;
+    font-size: 15px;
   }
 }
 
-/* ── Product page ───────────────────────────────────────────────────────── */
+/* ── Product page ───────────────────────────────────────────────────────────
+   Storefront 4.0: the photo on a lit stage in a frame of corner marks,
+   held in view while the details scroll beside it; the name and the price
+   large; the facts and the stock as instrument tags. */
 
 .productLayout {
   display: grid;
-  gap: 26px;
+  gap: 28px;
 }
 
 @media (min-width: 900px) {
   .productLayout {
-    grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
     align-items: start;
-    gap: clamp(32px, 4vw, 60px);
+    gap: clamp(36px, 4.4vw, 72px);
   }
 
   /* The photos stay in view while the details scroll beside them. */
   .galleryColumn {
     position: sticky;
-    top: 136px;
+    top: 112px;
   }
 }
 
@@ -875,10 +964,11 @@
 .gallery {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
-/* The stage: the photo over a blurred, glowing copy of itself. */
+/* The stage: the photo over a blurred, glowing copy of itself, a pool of
+   light under it, and corner marks at its frame. */
 .galleryMain {
   position: relative;
   isolation: isolate;
@@ -887,14 +977,51 @@
   place-items: center;
   overflow: hidden;
   border: 1px solid transparent;
-  border-radius: 30px;
+  border-radius: 34px;
   background:
-    radial-gradient(circle at 50% 35%, #1c2346, #0a0d1b 72%) padding-box,
-    var(--edge) border-box;
-  box-shadow: var(--shadow-raised);
+    radial-gradient(60% 50% at 50% 38%, #29326a, #0a0d1c 74%) padding-box,
+    var(--edge-strong) border-box;
+  box-shadow:
+    var(--shadow-raised),
+    0 0 90px -40px rgb(122 92 240 / 0.9);
   /* Sideways drags come to the swipe (Gallery.tsx); scrolling the page and
      pinching to zoom stay the browser's. */
   touch-action: pan-y pinch-zoom;
+}
+
+/* The corner marks, inset from the frame. */
+.galleryMain::before {
+  --mark: rgb(196 182 255 / 0.7);
+  position: absolute;
+  inset: 18px;
+  z-index: 1;
+  background:
+    linear-gradient(var(--mark), var(--mark)) top left / 26px 1.5px no-repeat,
+    linear-gradient(var(--mark), var(--mark)) top left / 1.5px 26px no-repeat,
+    linear-gradient(var(--mark), var(--mark)) top right / 26px 1.5px no-repeat,
+    linear-gradient(var(--mark), var(--mark)) top right / 1.5px 26px no-repeat,
+    linear-gradient(var(--mark), var(--mark)) bottom left / 26px 1.5px no-repeat,
+    linear-gradient(var(--mark), var(--mark)) bottom left / 1.5px 26px no-repeat,
+    linear-gradient(var(--mark), var(--mark)) bottom right / 26px 1.5px no-repeat,
+    linear-gradient(var(--mark), var(--mark)) bottom right / 1.5px 26px no-repeat;
+  content: '';
+  filter: drop-shadow(0 0 6px rgb(139 117 255 / 0.85));
+  pointer-events: none;
+}
+
+/* The floor: a line of light where the product stands. */
+.galleryMain::after {
+  position: absolute;
+  right: 18%;
+  bottom: 9%;
+  left: 18%;
+  z-index: 0;
+  height: 18%;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgb(139 117 255 / 0.36), transparent);
+  content: '';
+  filter: blur(8px);
+  pointer-events: none;
 }
 
 .galleryGlow {
@@ -904,19 +1031,44 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-  filter: blur(42px) saturate(1.4);
-  opacity: 0.5;
-  transform: scale(1.25);
+  filter: blur(34px) saturate(1.4) brightness(0.85);
+  opacity: 0.85;
+  transform: scale(1.2);
 }
 
 .galleryImage {
+  position: relative;
+  z-index: 1;
   width: 100%;
   height: 100%;
   object-fit: contain;
-  filter: drop-shadow(0 30px 40px rgb(0 0 0 / 0.45));
+  filter: drop-shadow(0 34px 44px rgb(0 0 0 / 0.5));
   user-select: none;
   -webkit-user-drag: none;
-  animation: galleryIn 0.5s var(--ease-out);
+  animation: galleryIn 0.6s var(--ease-out);
+}
+
+/* Once loaded, the photo is sized to itself (Gallery.tsx marks its shape)
+   and its two edges inside the frame fade into the glow, so it doesn't end
+   in a hard line across the stage. */
+.galleryImage[data-shape] {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+}
+
+.galleryImage[data-shape='wide'] {
+  height: auto;
+  max-height: 100%;
+  -webkit-mask-image: linear-gradient(transparent, #000 9%, #000 91%, transparent);
+  mask-image: linear-gradient(transparent, #000 9%, #000 91%, transparent);
+}
+
+.galleryImage[data-shape='tall'] {
+  width: auto;
+  max-width: 100%;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 9%, #000 91%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 9%, #000 91%, transparent);
 }
 
 .galleryNav {
@@ -924,21 +1076,22 @@
   top: 50%;
   z-index: 2;
   display: grid;
-  width: 46px;
-  height: 46px;
+  width: 50px;
+  height: 50px;
   place-items: center;
-  border: 1px solid rgb(255 255 255 / 0.18);
+  border: 1px solid rgb(255 255 255 / 0.2);
   border-radius: 50%;
-  background: rgb(5 7 16 / 0.62);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
+  background: rgb(5 7 16 / 0.6);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
   color: #fff;
   cursor: pointer;
   opacity: 0;
   transform: translateY(-50%);
   transition:
     opacity 0.3s ease,
-    background 0.25s ease;
+    background 0.25s ease,
+    box-shadow 0.25s ease;
 }
 
 .galleryMain:hover .galleryNav,
@@ -947,7 +1100,8 @@
 }
 
 .galleryNav:hover {
-  background: rgb(122 92 240 / 0.75);
+  background: var(--cta);
+  box-shadow: 0 12px 28px -10px rgb(122 92 240 / 1);
 }
 
 /* No hover on a touch screen: the arrows are always there. */
@@ -958,28 +1112,30 @@
 }
 
 .galleryPrev {
-  left: 14px;
+  left: 20px;
 }
 
 .galleryNext {
-  right: 14px;
+  right: 20px;
 }
 
 .galleryCount {
   position: absolute;
-  right: 16px;
-  bottom: 16px;
+  bottom: 26px;
+  left: 50%;
   z-index: 2;
-  padding: 4px 11px;
-  border: 1px solid rgb(255 255 255 / 0.16);
+  padding: 5px 13px;
+  border: 1px solid rgb(255 255 255 / 0.18);
   border-radius: var(--radius-pill);
   background: rgb(5 7 16 / 0.62);
   -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
   color: #e9e7f5;
-  font-size: 12px;
-  font-weight: 650;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
   font-variant-numeric: tabular-nums;
+  transform: translateX(-50%);
 }
 
 .thumbs {
@@ -995,25 +1151,28 @@
 }
 
 .thumb {
+  position: relative;
   flex: none;
-  width: 72px;
-  height: 72px;
+  width: 78px;
+  height: 78px;
   padding: 0;
   overflow: hidden;
   border: 2px solid transparent;
-  border-radius: 16px;
+  border-radius: 18px;
   background:
     linear-gradient(var(--bg-mid), var(--bg-mid)) padding-box,
     var(--edge) border-box;
   cursor: pointer;
-  opacity: 0.62;
+  opacity: 0.56;
   transition:
     opacity 0.25s ease,
-    box-shadow 0.25s ease;
+    box-shadow 0.25s ease,
+    transform 0.25s var(--ease-out);
 }
 
 .thumb:hover {
   opacity: 0.9;
+  transform: translateY(-2px);
 }
 
 .thumb img {
@@ -1025,23 +1184,26 @@
 .thumbSelected {
   background:
     linear-gradient(var(--bg-mid), var(--bg-mid)) padding-box,
-    linear-gradient(140deg, #c4b5ff, #7a5cf0 50%, #54d7e9) border-box;
-  box-shadow: 0 10px 24px -12px rgb(122 92 240 / 1);
+    linear-gradient(140deg, #d8ceff, #7a5cf0 50%, #54d7e9) border-box;
+  box-shadow:
+    0 12px 26px -12px rgb(122 92 240 / 1),
+    0 0 20px -6px rgb(84 215 233 / 0.6);
   opacity: 1;
 }
 
 .details {
   min-width: 0;
+  padding-top: 6px;
 }
 
 .details h1 {
   margin: 0;
   color: var(--text-high);
   font-family: var(--font-display);
-  font-size: clamp(28px, 3.4vw, 44px);
+  font-size: clamp(30px, 3.8vw, 54px);
   font-weight: 700;
-  letter-spacing: -0.035em;
-  line-height: 1.1;
+  letter-spacing: -0.045em;
+  line-height: 1.04;
   overflow-wrap: anywhere;
   text-wrap: balance;
 }
@@ -1052,7 +1214,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  margin: 14px 0 0;
+  margin: 16px 0 0;
   padding: 0;
   list-style: none;
 }
@@ -1061,9 +1223,9 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 30px;
-  padding: 0 12px;
-  border: 1px solid rgb(255 255 255 / 0.1);
+  min-height: 32px;
+  padding: 0 13px;
+  border: 1px solid rgb(255 255 255 / 0.12);
   border-radius: var(--radius-pill);
   background: rgb(255 255 255 / 0.035);
   color: var(--text-high);
@@ -1077,13 +1239,14 @@
 }
 
 .proofLine .proofVerified {
-  border-color: rgb(52 211 153 / 0.36);
-  background: rgb(16 185 129 / 0.09);
-  color: #b4f5d8;
+  border-color: rgb(62 230 181 / 0.4);
+  background: rgb(16 185 129 / 0.1);
+  color: #b8f7e1;
 }
 
 .proofLine .proofVerified svg {
-  color: #34d399;
+  color: var(--mint);
+  filter: drop-shadow(0 0 6px rgb(62 230 181 / 0.7));
 }
 
 .proofLine .proofStar {
@@ -1095,40 +1258,64 @@
   font-weight: 500;
 }
 
+/* The price on a lit plate, the stock beside it. */
 .priceRow {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px 16px;
-  margin-top: 20px;
+  gap: 10px 18px;
+  margin-top: 24px;
+  padding-top: 22px;
+  border-top: 1px solid var(--border);
+}
+
+.priceRow::before {
+  position: absolute;
+  top: -1px;
+  left: 0;
+  width: 120px;
+  height: 1px;
+  background: var(--line-aurora);
+  content: '';
 }
 
 .bigPrice {
   margin: 0;
-  color: #fff;
+  background: var(--aurora-text);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
   font-family: var(--font-display);
-  font-size: clamp(32px, 3.6vw, 44px);
+  font-size: clamp(38px, 4.4vw, 60px);
   font-weight: 700;
-  letter-spacing: -0.035em;
-  line-height: 1.05;
+  letter-spacing: -0.05em;
+  line-height: 1;
+  filter: drop-shadow(0 0 26px rgb(139 117 255 / 0.3));
 }
 
 .bigPrice > span > span:first-child {
-  color: var(--violet-text);
-  opacity: 1;
+  color: var(--cyan-text);
+  -webkit-text-fill-color: var(--cyan-text);
+  font-family: var(--font-mono);
+  font-weight: 400;
+  letter-spacing: 0.08em;
 }
 
 .stockPill {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 5px 12px;
-  border: 1px solid rgb(52 211 153 / 0.4);
+  gap: 8px;
+  padding: 6px 13px;
+  border: 1px solid rgb(62 230 181 / 0.42);
   border-radius: var(--radius-pill);
   background: rgb(16 185 129 / 0.1);
-  color: #5ee0ad;
-  font-size: 12.5px;
-  font-weight: 700;
+  box-shadow: 0 0 22px -10px rgb(62 230 181 / 0.9);
+  color: #6ff0c4;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .stockPill::before {
@@ -1142,35 +1329,42 @@
 }
 
 .stockLow {
-  border-color: rgb(245 158 11 / 0.45);
+  border-color: rgb(245 158 11 / 0.5);
   background: rgb(245 158 11 / 0.1);
+  box-shadow: 0 0 22px -10px rgb(245 158 11 / 0.9);
   color: #f6c46a;
+}
+
+.stockLow::before {
+  animation: low 1.6s ease-out infinite;
 }
 
 .facts {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin: 16px 0 0;
+  margin: 18px 0 0;
   padding: 0;
   list-style: none;
 }
 
 .fact {
-  padding: 5px 13px;
-  border: 1px solid var(--border);
+  padding: 6px 13px;
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-pill);
   background: rgb(255 255 255 / 0.03);
   color: var(--text-mid);
-  font-size: 13px;
-  font-weight: 550;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
 .unavailable {
-  margin-top: 18px;
-  padding: 14px 16px;
-  border: 1px solid rgb(239 68 68 / 0.42);
-  border-radius: 16px;
+  margin-top: 20px;
+  padding: 15px 17px;
+  border: 1px solid rgb(239 68 68 / 0.45);
+  border-radius: 18px;
   background: rgb(239 68 68 / 0.09);
   font-size: 14px;
   line-height: 1.55;
@@ -1182,16 +1376,21 @@
 }
 
 .productText {
-  margin: 12px 0 0;
+  margin: 14px 0 0;
   color: var(--text-mid);
-  font-size: 15px;
-  line-height: 1.75;
+  font-size: 15.5px;
+  line-height: 1.8;
   white-space: pre-line;
 }
 
 .sellerCard {
-  margin-top: 20px;
-  padding: 18px 20px;
+  margin-top: 22px;
+  padding: 20px 22px;
+  border-radius: var(--radius-xl);
+  background:
+    radial-gradient(80% 90% at 0% 0%, rgb(139 117 255 / 0.14), transparent 70%) padding-box,
+    var(--glass) padding-box,
+    var(--edge) border-box;
 }
 
 .sellerCard h2 {
@@ -1208,18 +1407,22 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  margin-top: 24px;
+  margin-top: 26px;
 }
 
 @media (max-width: 899px) {
   .galleryMain {
-    border-radius: 26px;
+    border-radius: 28px;
   }
 }
 
 @media (max-width: 600px) {
   .galleryMain {
-    border-radius: 22px;
+    border-radius: 24px;
+  }
+
+  .galleryMain::before {
+    inset: 12px;
   }
 
   /* A phone moves between photos with a swipe or the arrows, and the count
@@ -1247,20 +1450,25 @@
   }
 
   .priceRow {
-    margin-top: 16px;
+    margin-top: 18px;
+    padding-top: 18px;
   }
 
   .galleryNav {
-    width: 40px;
-    height: 40px;
+    width: 42px;
+    height: 42px;
   }
 
   .galleryPrev {
-    left: 10px;
+    left: 12px;
   }
 
   .galleryNext {
-    right: 10px;
+    right: 12px;
+  }
+
+  .galleryCount {
+    bottom: 18px;
   }
 
   .thumb {
@@ -1301,6 +1509,15 @@
 @keyframes galleryIn {
   from {
     opacity: 0;
-    transform: scale(0.97);
+    transform: scale(0.96);
+  }
+}
+
+@keyframes low {
+  from {
+    box-shadow: 0 0 0 0 rgb(246 196 106 / 0.75);
+  }
+  to {
+    box-shadow: 0 0 0 7px rgb(246 196 106 / 0);
   }
 }

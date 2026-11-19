@@ -2,12 +2,12 @@
    and its product cards, the cart drawer, the cart page, the product page's
    buy box, the escrow box, the perks strip and the footer.
 
-   Storefront 3.0 rewrote this file in one pass. It had grown through five
-   override layers (aurora, website parity, clean hero, premium, 2.0), so
-   one rule said what the next one undid. Every class a component uses is
-   still here; the hero, perks and card language now come from the tokens
-   in globals.css (--glass, --edge, --cta, --font-display). Colours for text
-   keep 4.5:1 or better on the surfaces they sit on. */
+   Storefront 4.0: the same classes, drawn as instruments - capsules and
+   glass with a lit hairline edge, figures in Sora, small labels in Space
+   Mono, and light that answers the pointer (a product card's edge runs
+   with light, its face follows the pointer through --mx/--my, set by
+   Spotlight.tsx). Colours for text keep 4.5:1 or better on the surfaces
+   they sit on; every animation stops under reduced motion (globals.css). */
 
 /* ── Header controls: icon buttons and the cart (StoreHeader.tsx; the header
    itself is in store-nav.module.css) ───────────────────────────────────── */
@@ -17,78 +17,87 @@
   display: grid;
   place-items: center;
   flex: none;
-  width: 42px;
-  height: 42px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 13px;
+  border-radius: 50%;
   background:
-    linear-gradient(180deg, rgb(22 28 54 / 0.92), rgb(11 14 30 / 0.94)) padding-box,
+    linear-gradient(180deg, rgb(24 30 58 / 0.94), rgb(10 13 28 / 0.96)) padding-box,
     var(--edge) border-box;
+  box-shadow: inset 0 1px rgb(255 255 255 / 0.06);
   color: var(--text-high);
   cursor: pointer;
   transition:
-    box-shadow 0.25s var(--ease),
-    transform 0.25s var(--ease);
+    box-shadow 0.3s var(--ease),
+    transform 0.3s var(--ease);
 }
 
 .iconButton:hover {
   background:
-    linear-gradient(180deg, rgb(26 32 62 / 0.95), rgb(13 16 34 / 0.96)) padding-box,
+    linear-gradient(180deg, rgb(30 36 70 / 0.96), rgb(13 16 34 / 0.97)) padding-box,
     var(--edge-strong) border-box;
-  box-shadow: 0 10px 26px -14px rgb(122 92 240 / 0.95);
+  box-shadow:
+    0 12px 28px -14px rgb(122 92 240 / 1),
+    0 0 22px -8px rgb(84 215 233 / 0.55);
 }
 
 .iconButton:active {
-  transform: scale(0.96);
+  transform: scale(0.94);
 }
 
 .copiedTip {
   position: absolute;
-  top: calc(100% + 8px);
+  top: calc(100% + 10px);
   right: 0;
-  padding: 5px 10px;
+  padding: 6px 11px;
   border: 1px solid var(--border-accent);
-  border-radius: 9px;
+  border-radius: 10px;
   background: var(--surface-solid);
   box-shadow: var(--shadow-raised);
-  font-size: 12px;
-  font-weight: 600;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
   white-space: nowrap;
   animation: fadeDown 0.2s ease;
 }
 
 .cartButton {
   position: relative;
+  isolation: isolate;
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  height: 42px;
-  padding: 0 16px 0 13px;
+  gap: 14px;
+  height: 46px;
+  padding: 0 20px 0 15px;
+  overflow: visible;
   border: 0;
-  border-radius: 13px;
+  border-radius: var(--radius-pill);
   background: var(--cta);
   color: #fff;
   font-family: var(--font-display);
-  font-size: 14px;
+  font-size: 14.5px;
   font-weight: 700;
   letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
   cursor: pointer;
   box-shadow:
-    0 12px 28px -12px rgb(122 92 240 / 0.9),
-    inset 0 1px rgb(255 255 255 / 0.22);
+    0 14px 30px -12px rgb(122 92 240 / 0.95),
+    0 0 0 1px rgb(205 192 255 / 0.28),
+    inset 0 1px rgb(255 255 255 / 0.3);
   transition:
-    transform 0.25s var(--ease),
-    box-shadow 0.25s var(--ease);
+    transform 0.3s var(--ease-out),
+    box-shadow 0.3s var(--ease-out);
 }
 
 .cartButton:hover {
   transform: translateY(-1px);
   box-shadow:
-    0 16px 34px -12px rgb(122 92 240 / 1),
-    0 0 0 1px rgb(185 168 255 / 0.3),
-    inset 0 1px rgb(255 255 255 / 0.24);
+    0 18px 38px -12px rgb(122 92 240 / 1),
+    0 0 30px -6px rgb(122 92 240 / 0.75),
+    0 0 0 1px rgb(205 192 255 / 0.45),
+    inset 0 1px rgb(255 255 255 / 0.3);
 }
 
 .cartIcon {
@@ -97,30 +106,31 @@
   place-items: center;
 }
 
+/* Above the basket, clear of the total beside it. */
 .cartBadge {
   position: absolute;
-  top: -9px;
-  right: -11px;
-  min-width: 19px;
-  height: 19px;
+  top: -14px;
+  right: -10px;
+  min-width: 20px;
+  height: 20px;
   padding: 0 5px;
   border-radius: 10px;
   background: linear-gradient(135deg, #f472b6, #c056f0);
   color: #fff;
-  font-family: var(--font-sans);
+  font-family: var(--font-display);
   font-size: 11px;
-  font-weight: 800;
-  line-height: 19px;
+  font-weight: 700;
+  line-height: 20px;
   text-align: center;
   box-shadow:
-    0 0 0 2px #05070f,
-    0 4px 12px -2px rgb(244 114 182 / 0.75);
-  animation: bump 0.4s var(--ease-out);
+    0 0 0 2px #0a0d1d,
+    0 4px 14px -2px rgb(244 114 182 / 0.85);
+  animation: bump 0.45s var(--ease-spring);
 }
 
 @media (max-width: 560px) {
   .cartButton {
-    padding: 0 12px;
+    padding: 0 13px;
   }
 
   .cartButtonText {
@@ -128,7 +138,7 @@
   }
 }
 
-/* ── Search pill and filters (the app's Home) ──────────────────────────── */
+/* ── Search: a command bar, and the filter panel ───────────────────────── */
 
 .controls {
   display: flex;
@@ -141,24 +151,27 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  height: 48px;
-  padding: 0 5px 0 16px;
+  height: 46px;
+  padding: 0 4px 0 16px;
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
   background:
-    linear-gradient(180deg, rgb(15 19 39 / 0.96), rgb(8 11 24 / 0.97)) padding-box,
+    linear-gradient(180deg, rgb(13 17 36 / 0.98), rgb(6 9 20 / 0.98)) padding-box,
     var(--edge) border-box;
-  box-shadow: inset 0 1px rgb(255 255 255 / 0.04);
-  transition: box-shadow 0.25s var(--ease);
+  box-shadow:
+    inset 0 1px rgb(255 255 255 / 0.04),
+    inset 0 -10px 20px -18px rgb(139 117 255 / 0.6);
+  transition: box-shadow 0.3s var(--ease);
 }
 
 .searchPill:focus-within {
   background:
-    linear-gradient(180deg, rgb(17 21 44 / 0.98), rgb(9 12 26 / 0.98)) padding-box,
+    linear-gradient(180deg, rgb(16 20 42 / 0.99), rgb(8 11 24 / 0.99)) padding-box,
     var(--edge-strong) border-box;
   box-shadow:
-    0 0 0 4px rgb(139 117 255 / 0.14),
-    0 14px 40px -20px rgb(122 92 240 / 0.95);
+    0 0 0 4px rgb(139 117 255 / 0.16),
+    0 16px 44px -20px rgb(122 92 240 / 1),
+    0 0 32px -14px rgb(84 215 233 / 0.6);
 }
 
 .searchLabel {
@@ -171,7 +184,8 @@
 
 .searchIcon {
   flex: none;
-  color: var(--violet-text);
+  color: var(--cyan-text);
+  filter: drop-shadow(0 0 6px rgb(84 215 233 / 0.45));
 }
 
 .searchLabel input {
@@ -183,65 +197,53 @@
   background: transparent;
   color: var(--text-high);
   font-family: var(--font-sans);
-  font-size: 16px;
+  font-size: 15.5px;
 }
 
 .searchLabel input::placeholder {
   color: var(--text-low);
 }
 
+.searchLabel input::-webkit-search-cancel-button {
+  filter: invert(0.8);
+}
+
+/* The way to submit it: a lit round button with an arrow (the word is the
+   button's label for screen readers, CatalogueControls.tsx). */
 .searchGo {
   flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
   height: 38px;
-  padding: 0 20px;
+  padding: 0;
   border: 0;
-  border-radius: var(--radius-pill);
+  border-radius: 50%;
   background: var(--cta);
   color: #fff;
-  font-size: 13.5px;
-  font-weight: 700;
   cursor: pointer;
   box-shadow:
-    0 8px 20px -10px rgb(122 92 240 / 0.9),
-    inset 0 1px rgb(255 255 255 / 0.2);
-  transition: box-shadow 0.25s var(--ease);
+    0 8px 20px -8px rgb(122 92 240 / 1),
+    inset 0 1px rgb(255 255 255 / 0.28);
+  transition:
+    box-shadow 0.25s var(--ease),
+    transform 0.25s var(--ease);
 }
 
 .searchGo:hover {
+  transform: translateX(1px);
   box-shadow:
-    0 10px 26px -10px rgb(122 92 240 / 1),
-    0 0 0 1px rgb(185 168 255 / 0.3),
-    inset 0 1px rgb(255 255 255 / 0.2);
+    0 10px 26px -8px rgb(122 92 240 / 1),
+    0 0 20px -4px rgb(139 117 255 / 0.8),
+    inset 0 1px rgb(255 255 255 / 0.28);
 }
 
-.searchGoIcon {
+.searchGoText {
   display: none;
 }
 
-@media (max-width: 560px) {
-  /* A round button, not no button: with the word hidden and nothing in
-     its place, a phone user saw a search field with no way to submit it
-     but the keyboard's own key. */
-  .searchGo {
-    width: 38px;
-    padding: 0;
-  }
-
-  .searchGoText {
-    display: none;
-  }
-
-  .searchGoIcon {
-    display: inline-flex;
-  }
-
-  .searchPill {
-    height: 46px;
-    padding-right: 4px;
-  }
+.searchGoIcon {
+  display: inline-flex;
 }
 
 .filters {
@@ -263,13 +265,13 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  height: 48px;
-  min-width: 48px;
+  height: 46px;
+  min-width: 46px;
   padding: 0 16px;
   border: 1px solid transparent;
-  border-radius: 15px;
+  border-radius: var(--radius-pill);
   background:
-    linear-gradient(180deg, rgb(19 24 47 / 0.95), rgb(9 12 26 / 0.96)) padding-box,
+    linear-gradient(180deg, rgb(20 25 50 / 0.96), rgb(9 12 26 / 0.97)) padding-box,
     var(--edge) border-box;
   color: var(--text-mid);
   font-size: 14px;
@@ -283,7 +285,7 @@
 
 .filterButton:hover {
   color: var(--text-high);
-  box-shadow: 0 10px 26px -16px rgb(122 92 240 / 0.95);
+  box-shadow: 0 12px 28px -16px rgb(122 92 240 / 1);
 }
 
 .filterButtonActive,
@@ -293,62 +295,63 @@
 
 .filters[open] > .filterButton {
   background:
-    linear-gradient(180deg, rgb(43 34 92 / 0.9), rgb(20 18 50 / 0.94)) padding-box,
+    linear-gradient(180deg, rgb(46 36 98 / 0.94), rgb(20 18 50 / 0.96)) padding-box,
     var(--edge-strong) border-box;
 }
 
 .filterDot {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: 9px;
+  right: 9px;
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--violet);
-  box-shadow: 0 0 10px var(--violet);
+  background: var(--cyan);
+  box-shadow: 0 0 10px var(--cyan);
 }
 
-@media (max-width: 560px) {
-  .filterButton {
-    height: 46px;
-    min-width: 46px;
-    padding: 0;
-  }
+/* On the header's console the search is narrow: the filter button is a
+   round icon (its name is "Filters", CatalogueControls.tsx), and the panel
+   it opens is titled. */
+.filterButton {
+  width: 46px;
+  padding: 0;
+}
 
-  .filterLabel {
-    display: none;
-  }
+.filterLabel {
+  display: none;
 }
 
 .filterPanel {
   position: absolute;
-  top: calc(100% + 10px);
+  top: calc(100% + 12px);
   right: 0;
   z-index: 40;
-  width: min(440px, calc(100vw - 32px));
-  padding: 18px;
+  width: min(460px, calc(100vw - 32px));
+  padding: 20px;
   border: 1px solid transparent;
-  border-radius: 22px;
+  border-radius: 24px;
   background:
-    linear-gradient(180deg, #11152c, #090c19) padding-box,
+    radial-gradient(80% 50% at 100% 0%, rgb(139 117 255 / 0.16), transparent 70%) padding-box,
+    linear-gradient(180deg, #11152e, #080b18) padding-box,
     var(--edge-strong) border-box;
   box-shadow:
-    0 30px 70px -20px rgb(0 0 0 / 0.9),
-    0 0 60px -30px rgb(139 117 255 / 0.6);
-  animation: fadeDown 0.22s var(--ease-out);
+    0 34px 80px -20px rgb(0 0 0 / 0.95),
+    0 0 70px -30px rgb(139 117 255 / 0.7);
+  animation: fadeDown 0.25s var(--ease-out);
 }
 
 .filterTitle {
-  margin: 0 0 9px;
-  color: var(--text-low);
-  font-size: 11px;
-  font-weight: 750;
-  letter-spacing: 0.14em;
+  margin: 0 0 10px;
+  color: var(--cyan-text);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.2em;
   text-transform: uppercase;
 }
 
 .filterTitle:not(:first-child) {
-  margin-top: 16px;
+  margin-top: 18px;
 }
 
 .chips {
@@ -358,7 +361,7 @@
 }
 
 .chip {
-  padding: 7px 13px;
+  padding: 8px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   background: rgb(255 255 255 / 0.025);
@@ -377,16 +380,18 @@
 }
 
 .chipOn {
-  border-color: rgb(185 168 255 / 0.7);
-  background: linear-gradient(120deg, rgb(122 92 240 / 0.32), rgb(74 104 224 / 0.22));
-  box-shadow: 0 6px 18px -10px rgb(122 92 240 / 0.95);
+  border-color: rgb(196 182 255 / 0.75);
+  background: linear-gradient(120deg, rgb(122 92 240 / 0.36), rgb(74 104 224 / 0.24));
+  box-shadow:
+    0 8px 20px -10px rgb(122 92 240 / 1),
+    inset 0 1px rgb(255 255 255 / 0.12);
   color: #fff;
   font-weight: 700;
 }
 
 .resetFilters {
   display: block;
-  margin-top: 16px;
+  margin-top: 18px;
   color: var(--violet-text);
   font-size: 13px;
   font-weight: 700;
@@ -405,17 +410,22 @@
   font-family: var(--font-sans);
 }
 
-/* Light from above the fold: a violet and a cyan glow behind the header
-   and the first screen, on every store page. */
+/* Light from above the fold: a violet and a cyan bloom behind the header
+   and the first screen, on every store page, over a fine instrument grid
+   that fades out as the page goes on. */
 .storefront::before {
   position: absolute;
   inset: 0 0 auto;
   z-index: -1;
-  height: 820px;
+  height: 1100px;
   background:
-    radial-gradient(55% 65% at 12% 0%, rgb(139 117 255 / 0.16), transparent 70%),
-    radial-gradient(42% 55% at 92% 6%, rgb(84 215 233 / 0.09), transparent 70%);
+    radial-gradient(50% 55% at 10% 0%, rgb(139 117 255 / 0.2), transparent 70%),
+    radial-gradient(40% 50% at 94% 4%, rgb(84 215 233 / 0.12), transparent 70%),
+    linear-gradient(var(--grid-line) 1px, transparent 1px) 0 0 / 64px 64px,
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px) 0 0 / 64px 64px;
   content: '';
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, rgb(0 0 0 / 0.6) 40%, transparent 100%);
+  mask-image: linear-gradient(180deg, #000 0%, rgb(0 0 0 / 0.6) 40%, transparent 100%);
   pointer-events: none;
 }
 
@@ -427,22 +437,26 @@
 }
 
 .storefront .storePage {
-  padding-top: 22px;
+  padding-top: 28px;
 }
 
+/* The path back through the store, set as an instrument readout. */
 .crumbs {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  margin: 0 0 14px;
+  gap: 8px;
+  margin: 0 0 16px;
   color: var(--text-low);
-  font-size: 13px;
-  font-weight: 500;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .crumbs svg {
-  opacity: 0.6;
+  color: var(--violet-text);
+  opacity: 0.7;
 }
 
 .crumbs a {
@@ -450,7 +464,7 @@
 }
 
 .crumbs a:hover {
-  color: var(--violet-text);
+  color: var(--cyan-text);
 }
 
 .crumbs span[aria-current] {
@@ -461,38 +475,140 @@
   white-space: nowrap;
 }
 
-/* ── The catalogue (/shop) ─────────────────────────────────────────────── */
+/* A phone: one line, the page's own name shortened to fit. */
+@media (max-width: 600px) {
+  .crumbs {
+    flex-wrap: nowrap;
+    gap: 6px;
+    margin-bottom: 14px;
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+  }
 
-/* The page's title block: the breadcrumb, "Shop <store>" and its count. */
-.catalogueHead {
-  position: relative;
-  padding: 4px 0 6px;
+  .crumbs a {
+    flex: none;
+    max-width: 34vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .crumbs svg {
+    flex: none;
+  }
+
+  .crumbs span[aria-current] {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
 }
 
+/* ── The catalogue (/shop) ─────────────────────────────────────────────── */
+
+/* The page's title band: the path, "Shop <store>" in the hologram, and its
+   count, departments and area as a readout. */
+.catalogueHead {
+  position: relative;
+  isolation: isolate;
+  margin-bottom: 8px;
+  padding: clamp(24px, 3vw, 36px) clamp(20px, 4vw, 44px);
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: var(--radius-2xl);
+  background:
+    radial-gradient(60% 120% at 0% 0%, rgb(139 117 255 / 0.22), transparent 65%) padding-box,
+    radial-gradient(50% 120% at 100% 100%, rgb(84 215 233 / 0.14), transparent 65%) padding-box,
+    linear-gradient(180deg, rgb(15 19 40 / 0.94), rgb(6 9 19 / 0.96)) padding-box,
+    var(--edge) border-box;
+  box-shadow: var(--shadow-raised);
+}
+
+.catalogueHead::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    linear-gradient(var(--grid-line) 1px, transparent 1px) 0 0 / 44px 44px,
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px) 0 0 / 44px 44px;
+  content: '';
+  -webkit-mask-image: radial-gradient(80% 100% at 85% 50%, #000, transparent 75%);
+  mask-image: radial-gradient(80% 100% at 85% 50%, #000, transparent 75%);
+}
+
+.catalogueHead::after {
+  position: absolute;
+  right: 8%;
+  bottom: 0;
+  left: 8%;
+  height: 1px;
+  background: var(--line-aurora);
+  content: '';
+}
+
+/* The band is a title, not a hero: smaller than the store details' so the
+   first row of products reaches the first screen. */
+.catalogueHead h1 {
+  margin-bottom: 0;
+  font-size: clamp(36px, 4.6vw, 62px);
+}
+
+.catalogueCover {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: -2;
+  width: min(62%, 820px);
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.7;
+  -webkit-mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / 0.5) 35%, #000 75%);
+  mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / 0.5) 35%, #000 75%);
+  pointer-events: none;
+}
+
+@media (max-width: 860px) {
+  .catalogueCover {
+    width: 78%;
+    opacity: 0.4;
+  }
+}
+
+/* A dot in the gap before every part. The one before a part that starts a
+   line falls outside the box and is clipped, so a line that wraps on a
+   phone doesn't open with a dot. */
 .catalogueLead {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 10px;
-  margin: 8px 0 0;
+  gap: 8px 28px;
+  margin: 12px 0 0;
   color: var(--text-mid);
-  font-size: 14.5px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  clip-path: inset(-14px -14px -14px 0);
 }
 
-.catalogueLead span + span::before {
-  display: inline-block;
-  width: 4px;
-  height: 4px;
-  margin-right: 10px;
+.catalogueLead span {
+  position: relative;
+}
+
+.catalogueLead span::before {
+  position: absolute;
+  top: 50%;
+  left: -16.5px;
+  width: 5px;
+  height: 5px;
+  margin-top: -3px;
   border-radius: 50%;
   background: var(--cyan);
-  box-shadow: 0 0 8px var(--cyan);
+  box-shadow: 0 0 10px var(--cyan);
   content: '';
-  vertical-align: 3px;
 }
 
 .catalogue {
-  margin-top: 18px;
+  margin-top: 26px;
 }
 
 .homeSection {
@@ -504,33 +620,40 @@
   align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
-  margin: 0 0 14px;
+  margin: 0 0 16px;
 }
 
 .sectionHead h2 {
   margin: 0;
   color: var(--text-high);
   font-family: var(--font-display);
-  font-size: clamp(18px, 2vw, 22px);
+  font-size: clamp(19px, 2vw, 24px);
   font-weight: 700;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.03em;
 }
 
 .seeAll {
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
   color: var(--violet-text);
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 650;
   transition:
     color 0.2s ease,
-    gap 0.25s var(--ease);
+    border-color 0.2s ease,
+    background 0.2s ease,
+    gap 0.3s var(--ease);
 }
 
 .seeAll:hover {
-  gap: 7px;
+  gap: 8px;
+  border-color: var(--border-accent);
+  background: rgb(139 117 255 / 0.1);
   color: #fff;
 }
 
@@ -540,7 +663,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px 14px;
-  margin: 30px 0 4px;
+  margin: 36px 0 4px;
 }
 
 .toolbar h2 {
@@ -549,23 +672,23 @@
   margin: 0;
   color: var(--text-high);
   font-family: var(--font-display);
-  font-size: clamp(19px, 2.2vw, 24px);
+  font-size: clamp(21px, 2.4vw, 28px);
   font-weight: 700;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.035em;
 }
 
 .countTag {
-  margin-left: 10px;
-  padding: 2px 10px;
-  border: 1px solid rgb(185 168 255 / 0.3);
+  margin-left: 12px;
+  padding: 3px 10px;
+  border: 1px solid rgb(84 215 233 / 0.35);
   border-radius: var(--radius-pill);
-  background: rgb(139 117 255 / 0.14);
-  color: #e3dcff;
-  font-family: var(--font-sans);
-  font-size: 12.5px;
-  font-weight: 700;
+  background: rgb(84 215 233 / 0.08);
+  box-shadow: 0 0 18px -8px rgb(84 215 233 / 0.8);
+  color: var(--cyan-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0;
 }
 
 .applied {
@@ -580,9 +703,9 @@
 .applied a {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border: 1px solid rgb(185 168 255 / 0.45);
+  gap: 7px;
+  padding: 7px 13px;
+  border: 1px solid rgb(196 182 255 / 0.45);
   border-radius: var(--radius-pill);
   background: rgb(139 117 255 / 0.14);
   font-size: 12.5px;
@@ -601,20 +724,20 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
-  margin-top: 16px;
+  margin-top: 18px;
 }
 
 @media (min-width: 640px) {
   .grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 16px;
+    gap: 18px;
   }
 }
 
 @media (min-width: 1000px) {
   .grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 20px;
+    gap: 22px;
   }
 }
 
@@ -623,60 +746,117 @@
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  margin-top: 32px;
+  margin-top: 38px;
 }
 
 .catalogueEmpty {
-  margin-top: 22px;
+  margin-top: 24px;
 }
 
-/* ── Product card ───────────────────────────────────────────────────────────
-   The photo first and square, framed inside the card; the name in at most
-   two lines (every card's text block is the same height, so prices and
-   buttons line up along a row); the price; the stock; then the one action.
-   One look on the store's home, the catalogue and "More from" alike. */
+/* ── Product card: a holo card ─────────────────────────────────────────────
+   The photo first and square, on a lit stage inside the card; the name in
+   at most two lines (every card's text block is the same height, so prices
+   and buttons line up along a row); the price as a tag; the stock; then
+   the one action. Under the pointer a light runs around the card's edge
+   and its face is lit where the pointer is. One look on the store's home,
+   the catalogue and "More from" alike. */
 
 .product {
   position: relative;
+  isolation: isolate;
   display: flex;
   flex-direction: column;
   min-width: 0;
   border: 1px solid transparent;
-  border-radius: 22px;
+  border-radius: 26px;
   background:
-    linear-gradient(180deg, #10152b, #090c19) padding-box,
+    radial-gradient(130% 70% at 50% -12%, rgb(139 117 255 / 0.16), transparent 62%) padding-box,
+    linear-gradient(180deg, #0f1430, #070a17) padding-box,
     var(--edge) border-box;
   box-shadow: var(--shadow-card);
   transition:
-    transform 0.4s var(--ease-out),
-    box-shadow 0.4s var(--ease-out);
+    transform 0.55s var(--ease-out),
+    box-shadow 0.55s var(--ease-out);
+}
+
+/* The light that runs around the edge. */
+.product::before {
+  position: absolute;
+  inset: -1px;
+  z-index: 3;
+  padding: 1.5px;
+  border-radius: inherit;
+  background: conic-gradient(
+    from var(--spin),
+    transparent 0deg,
+    transparent 230deg,
+    rgb(196 182 255 / 0.95) 290deg,
+    rgb(84 215 233 / 1) 325deg,
+    transparent 360deg
+  );
+  content: '';
+  opacity: 0;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  transition: opacity 0.45s ease;
+}
+
+/* The pointer's light on the card's face (Spotlight.tsx sets --mx/--my). */
+.product::after {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border-radius: inherit;
+  background: radial-gradient(320px circle at var(--mx, 50%) var(--my, -30%), rgb(160 140 255 / 0.17), transparent 62%);
+  content: '';
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.4s ease;
 }
 
 .product:hover,
 .product:focus-within {
   background:
-    linear-gradient(180deg, #121832, #0a0d1c) padding-box,
+    radial-gradient(130% 70% at 50% -12%, rgb(139 117 255 / 0.24), transparent 62%) padding-box,
+    linear-gradient(180deg, #11173a, #080b1a) padding-box,
     var(--edge-strong) border-box;
 }
 
+.product:hover::before,
+.product:focus-within::before {
+  opacity: 1;
+  animation: edge-run 3.6s linear infinite;
+}
+
+.product:hover::after {
+  opacity: 1;
+}
+
 .product:hover {
-  transform: translateY(-5px);
+  transform: translateY(-7px);
   box-shadow:
-    0 34px 60px -34px rgb(0 0 0 / 0.95),
-    0 24px 54px -30px rgb(122 92 240 / 0.7);
+    0 44px 80px -40px rgb(0 0 0 / 0.98),
+    0 28px 64px -34px rgb(122 92 240 / 0.85),
+    0 0 40px -24px rgb(84 215 233 / 0.6);
 }
 
 .productLink {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex: 1;
   flex-direction: column;
-  border-radius: 22px 22px 0 0;
+  border-radius: 26px 26px 0 0;
 }
 
-/* The keyboard's ring follows the card's corners (the global ring's 6px
-   would square them off). */
+/* The keyboard's ring follows the card's corners (the global ring's would
+   square them off). */
 .productLink:focus-visible {
-  border-radius: 22px 22px 0 0;
+  border-radius: 26px 26px 0 0;
   outline-offset: -2px;
 }
 
@@ -685,20 +865,22 @@
   display: grid;
   place-items: center;
   aspect-ratio: 1;
-  margin: 6px 6px 0;
+  margin: 7px 7px 0;
   overflow: hidden;
-  border-radius: 17px;
+  border-radius: 20px;
   background:
-    radial-gradient(circle at 50% 30%, #1c2346, #0b0e1d 72%);
+    radial-gradient(70% 60% at 50% 32%, #262f60, #0b0e1f 76%);
   isolation: isolate;
 }
 
-/* A thin inner line, so a dark photo still has an edge against the card. */
+/* A thin inner line, so a dark photo still has an edge against the card,
+   and a shade along the foot for the stage's floor. */
 .productImage::after {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.06);
+  background: linear-gradient(180deg, transparent 62%, rgb(4 6 14 / 0.38));
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.07);
   content: '';
   pointer-events: none;
 }
@@ -707,40 +889,40 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transition: transform 0.8s var(--ease-out);
+  transition: transform 1.1s var(--ease-out);
 }
 
 .product:hover .productImage img {
-  transform: scale(1.07);
+  transform: scale(1.08);
 }
 
 .productEmoji {
-  font-size: 46px;
-  filter: drop-shadow(0 10px 18px rgb(0 0 0 / 0.5));
+  font-size: 50px;
+  filter: drop-shadow(0 14px 22px rgb(0 0 0 / 0.55));
 }
 
 .badges {
   position: absolute;
-  top: 9px;
-  left: 9px;
+  top: 10px;
+  left: 10px;
   z-index: 1;
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
-  max-width: calc(100% - 18px);
+  max-width: calc(100% - 20px);
 }
 
 .badge {
-  padding: 3px 9px;
-  border: 1px solid rgb(255 255 255 / 0.16);
+  padding: 4px 9px 3px;
+  border: 1px solid rgb(255 255 255 / 0.18);
   border-radius: var(--radius-pill);
-  background: rgb(5 7 16 / 0.74);
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
-  color: #ece8ff;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  background: rgb(5 7 16 / 0.72);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  color: #efeaff;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
   line-height: 1.5;
   text-transform: uppercase;
 }
@@ -758,8 +940,8 @@
 .productBody {
   display: grid;
   align-content: start;
-  gap: 5px;
-  padding: 12px 14px 4px;
+  gap: 6px;
+  padding: 14px 16px 4px;
 }
 
 .productName {
@@ -768,7 +950,7 @@
   margin: 0;
   overflow: hidden;
   color: var(--text-high);
-  font-size: 14px;
+  font-size: 14.5px;
   font-weight: 600;
   line-height: 1.3;
   -webkit-box-orient: vertical;
@@ -779,27 +961,28 @@
   margin: 2px 0 0;
   color: #fff;
   font-family: var(--font-display);
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1.2;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
 }
 
 .productPrice > span > span:first-child {
-  color: var(--violet-text);
-  opacity: 1;
+  color: var(--cyan-text);
 }
 
-/* Stock, with a dot of its colour: amber for the last few, green for
-   plenty. */
+/* Stock, with a lit dot of its colour: amber for the last few (which
+   pulses), green for plenty. */
 .stockLine {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   margin: 0;
   color: #f6c46a;
-  font-size: 11.5px;
-  font-weight: 650;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .stockLine::before {
@@ -808,16 +991,23 @@
   flex: none;
   border-radius: 50%;
   background: currentColor;
-  box-shadow: 0 0 8px currentColor;
+  box-shadow: 0 0 10px currentColor;
   content: '';
+  animation: live-amber 1.6s ease-out infinite;
 }
 
 .stockLineIn {
-  color: #5ee0ad;
+  color: #6ff0c4;
+}
+
+.stockLineIn::before {
+  animation: none;
 }
 
 .productAction {
-  padding: 10px 14px 14px;
+  position: relative;
+  z-index: 1;
+  padding: 10px 16px 16px;
 }
 
 .addToCart,
@@ -829,16 +1019,16 @@
   justify-content: center;
   gap: 8px;
   width: 100%;
-  min-height: 42px;
+  min-height: 44px;
   overflow: hidden;
-  border-radius: 13px;
+  border-radius: var(--radius-pill);
   font-size: 13.5px;
   font-weight: 700;
   cursor: pointer;
   text-decoration: none;
   transition:
-    box-shadow 0.25s var(--ease),
-    transform 0.25s var(--ease);
+    box-shadow 0.3s var(--ease),
+    transform 0.3s var(--ease);
 }
 
 .addToCart {
@@ -846,8 +1036,9 @@
   background: var(--cta);
   color: #fff;
   box-shadow:
-    0 10px 24px -14px rgb(122 92 240 / 0.95),
-    inset 0 1px rgb(255 255 255 / 0.2);
+    0 12px 26px -14px rgb(122 92 240 / 1),
+    0 0 0 1px rgb(205 192 255 / 0.22),
+    inset 0 1px rgb(255 255 255 / 0.26);
 }
 
 /* The light that crosses the button on hover (globals.css .button). */
@@ -855,21 +1046,23 @@
   position: absolute;
   inset: 0;
   z-index: -1;
-  background: linear-gradient(105deg, transparent 32%, rgb(255 255 255 / 0.22) 50%, transparent 68%);
+  background: linear-gradient(105deg, transparent 30%, rgb(255 255 255 / 0.26) 50%, transparent 70%);
   content: '';
-  transform: translateX(-120%);
-  transition: transform 0.7s var(--ease-out);
+  transform: translateX(-130%);
+  transition: transform 0.8s var(--ease-out);
 }
 
 .addToCart:hover {
   box-shadow:
-    0 14px 30px -14px rgb(122 92 240 / 1),
-    0 0 0 1px rgb(185 168 255 / 0.3),
-    inset 0 1px rgb(255 255 255 / 0.22);
+    0 16px 34px -14px rgb(122 92 240 / 1),
+    0 0 26px -8px rgb(122 92 240 / 0.8),
+    0 0 0 1px rgb(205 192 255 / 0.4),
+    inset 0 1px rgb(255 255 255 / 0.28);
 }
 
-.addToCart:hover::after {
-  transform: translateX(120%);
+.addToCart:hover::after,
+.product:hover .addToCart::after {
+  transform: translateX(130%);
 }
 
 .addToCart:active {
@@ -886,26 +1079,29 @@
 
 .viewButton:hover {
   border-color: var(--border-accent);
-  background: rgb(139 117 255 / 0.08);
+  background: rgb(139 117 255 / 0.1);
 }
 
 .addToCart:focus-visible,
 .viewButton:focus-visible {
-  outline: 3px solid #b8adff;
+  outline: 3px solid #c2b5ff;
   outline-offset: 2px;
+  border-radius: var(--radius-pill);
 }
 
 /* − n + */
 .stepper {
   display: inline-flex;
   align-items: center;
-  height: 42px;
+  height: 44px;
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
   background:
-    linear-gradient(180deg, rgb(28 26 66 / 0.95), rgb(14 14 36 / 0.96)) padding-box,
+    linear-gradient(180deg, rgb(30 27 72 / 0.96), rgb(13 13 34 / 0.97)) padding-box,
     var(--edge-strong) border-box;
-  box-shadow: 0 10px 24px -16px rgb(122 92 240 / 0.95);
+  box-shadow:
+    0 12px 26px -16px rgb(122 92 240 / 1),
+    inset 0 1px rgb(255 255 255 / 0.08);
 }
 
 .productAction .stepper {
@@ -919,13 +1115,13 @@
 }
 
 .productAction .stepperCompact {
-  height: 42px;
+  height: 44px;
 }
 
 .stepperButton {
   display: grid;
   place-items: center;
-  width: 42px;
+  width: 44px;
   height: 100%;
   padding: 0;
   border: 0;
@@ -937,7 +1133,7 @@
 }
 
 .stepperButton:hover:not(:disabled) {
-  background: rgb(255 255 255 / 0.06);
+  background: rgb(255 255 255 / 0.07);
 }
 
 .stepperButton:disabled {
@@ -948,7 +1144,7 @@
 .stepperQty {
   min-width: 28px;
   font-family: var(--font-display);
-  font-size: 15px;
+  font-size: 15.5px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   text-align: center;
@@ -956,20 +1152,22 @@
 
 @media (max-width: 600px) {
   .product {
-    border-radius: 19px;
+    border-radius: 21px;
   }
 
-  .productLink {
-    border-radius: 19px 19px 0 0;
+  .productLink,
+  .productLink:focus-visible {
+    border-radius: 21px 21px 0 0;
   }
 
   .productImage {
     margin: 5px 5px 0;
-    border-radius: 15px;
+    border-radius: 16px;
   }
 
   .productBody {
-    padding: 10px 11px 3px;
+    gap: 5px;
+    padding: 11px 12px 3px;
   }
 
   .productName {
@@ -977,16 +1175,23 @@
   }
 
   .productPrice {
-    font-size: 16.5px;
+    font-size: 17px;
   }
 
   .productAction {
     padding: 8px 10px 11px;
   }
 
+  .addToCart,
+  .viewButton {
+    min-height: 42px;
+    font-size: 13px;
+  }
+
   .badge {
-    padding: 2px 7px;
-    font-size: 9.5px;
+    padding: 3px 7px 2px;
+    font-size: 8.5px;
+    letter-spacing: 0.1em;
   }
 }
 
@@ -1001,7 +1206,7 @@
       animation-fill-mode: both;
       animation-timing-function: linear;
       animation-timeline: view();
-      animation-range: entry 0% entry 40%;
+      animation-range: entry 0% entry 45%;
     }
   }
 }
@@ -1018,28 +1223,28 @@
   gap: 10px;
   width: max-content;
   max-width: calc(100vw - 24px);
-  padding: 9px 10px 9px 10px;
+  padding: 9px 9px 9px 10px;
   border: 1px solid transparent;
-  border-radius: 16px;
+  border-radius: 18px;
   background:
-    linear-gradient(180deg, #121830, #0a0d1b) padding-box,
-    linear-gradient(140deg, rgb(52 211 153 / 0.7), rgb(84 215 233 / 0.35) 60%, rgb(139 117 255 / 0.4)) border-box;
+    linear-gradient(180deg, #121830, #090c1a) padding-box,
+    linear-gradient(140deg, rgb(62 230 181 / 0.8), rgb(84 215 233 / 0.4) 60%, rgb(139 117 255 / 0.5)) border-box;
   box-shadow:
-    0 24px 50px -18px rgb(0 0 0 / 0.95),
-    0 0 40px -16px rgb(52 211 153 / 0.45);
+    0 28px 60px -18px rgb(0 0 0 / 0.95),
+    0 0 46px -14px rgb(62 230 181 / 0.55);
   font-size: 14px;
   transform: translateX(-50%);
-  animation: noteIn 0.35s var(--ease-out);
+  animation: noteIn 0.45s var(--ease-spring);
 }
 
 .addedNote > svg {
   flex: none;
   box-sizing: content-box;
-  padding: 5px;
+  padding: 6px;
   border-radius: 50%;
-  background: rgb(16 185 129 / 0.18);
-  box-shadow: 0 0 14px rgb(16 185 129 / 0.45);
-  color: #34d399;
+  background: rgb(62 230 181 / 0.18);
+  box-shadow: 0 0 16px rgb(62 230 181 / 0.55);
+  color: var(--mint);
 }
 
 .addedName {
@@ -1052,26 +1257,27 @@
 
 .addedNote button {
   flex: none;
-  min-height: 34px;
-  padding: 0 12px;
-  border: 1px solid rgb(185 168 255 / 0.45);
-  border-radius: 10px;
-  background: rgb(139 117 255 / 0.16);
+  min-height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--cta);
+  box-shadow: 0 8px 20px -10px rgb(122 92 240 / 1);
   color: #fff;
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
-  transition: background 0.2s ease;
+  transition: box-shadow 0.2s ease;
 }
 
 .addedNote button:hover {
-  background: rgb(139 117 255 / 0.3);
+  box-shadow: 0 10px 26px -8px rgb(122 92 240 / 1);
 }
 
 @media (min-width: 861px) {
   .addedNote {
-    top: 128px;
-    right: 24px;
+    top: 100px;
+    right: max(24px, calc((100vw - var(--shell)) / 2));
     left: auto;
     transform: none;
   }
@@ -1081,50 +1287,70 @@
   position: fixed;
   inset: 0;
   z-index: 60;
-  background: rgb(2 3 8 / 0.66);
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
-  animation: fadeIn 0.25s ease;
+  background: rgb(2 3 8 / 0.7);
+  -webkit-backdrop-filter: blur(8px) saturate(1.2);
+  backdrop-filter: blur(8px) saturate(1.2);
+  animation: fadeIn 0.3s ease;
 }
 
 .drawer {
   position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
+  top: 10px;
+  right: 10px;
+  bottom: 10px;
   display: flex;
   flex-direction: column;
-  width: min(440px, 100%);
+  width: min(450px, calc(100% - 20px));
   overflow: hidden;
-  border-left: 1px solid rgb(185 168 255 / 0.22);
+  border: 1px solid transparent;
+  border-radius: 28px;
   background:
-    radial-gradient(90% 40% at 100% 0%, rgb(139 117 255 / 0.16), transparent 70%),
-    linear-gradient(180deg, #0c1022, #070914);
-  box-shadow: -30px 0 80px rgb(0 0 0 / 0.6);
-  animation: slideIn 0.4s var(--ease-out);
+    radial-gradient(90% 40% at 100% 0%, rgb(139 117 255 / 0.2), transparent 70%) padding-box,
+    radial-gradient(70% 30% at 0% 100%, rgb(84 215 233 / 0.1), transparent 70%) padding-box,
+    linear-gradient(180deg, #0d1124, #060812) padding-box,
+    var(--edge-strong) border-box;
+  box-shadow:
+    -30px 0 90px rgb(0 0 0 / 0.65),
+    0 0 80px -40px rgb(139 117 255 / 0.8);
+  animation: slideIn 0.5s var(--ease-out);
 }
 
 .drawerHead {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 18px 20px;
+  padding: 20px 20px 18px 22px;
   border-bottom: 1px solid var(--border);
+}
+
+.drawerHead::after {
+  position: absolute;
+  right: 22px;
+  bottom: -1px;
+  left: 22px;
+  height: 1px;
+  background: var(--line-aurora);
+  content: '';
+  opacity: 0.7;
 }
 
 .drawerHead h2 {
   margin: 0;
   font-family: var(--font-display);
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
 }
 
 .drawerHead p {
-  margin: 2px 0 0;
+  margin: 3px 0 0;
   color: var(--text-low);
-  font-size: 13px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
 }
 
 .drawerLines {
@@ -1133,7 +1359,7 @@
   flex-direction: column;
   gap: 10px;
   margin: 0;
-  padding: 16px 20px;
+  padding: 16px 18px;
   overflow-y: auto;
   list-style: none;
 }
@@ -1144,21 +1370,23 @@
   gap: 14px;
   padding: 10px;
   border: 1px solid transparent;
-  border-radius: 18px;
+  border-radius: 20px;
   background:
-    linear-gradient(180deg, rgb(20 25 49 / 0.9), rgb(10 13 27 / 0.94)) padding-box,
+    linear-gradient(180deg, rgb(20 25 50 / 0.92), rgb(9 12 25 / 0.95)) padding-box,
     var(--edge) border-box;
+  box-shadow: 0 16px 32px -26px rgb(0 0 0 / 0.95);
 }
 
 .lineThumb {
   display: grid;
   place-items: center;
   flex: none;
-  width: 76px;
-  height: 76px;
+  width: 78px;
+  height: 78px;
   overflow: hidden;
-  border-radius: 13px;
-  background: radial-gradient(circle at 50% 30%, #1c2346, #0b0e1d 72%);
+  border-radius: 15px;
+  background: radial-gradient(70% 60% at 50% 32%, #262f60, #0b0e1f 76%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.07);
   font-size: 30px;
 }
 
@@ -1200,7 +1428,9 @@
 .lineUnit {
   margin: 0;
   color: var(--text-low);
-  font-size: 13px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1221,19 +1451,19 @@
   white-space: nowrap;
   color: #fff;
   font-family: var(--font-display);
-  font-size: 16px;
+  font-size: 16.5px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
 }
 
 .drawerFoot {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 16px 20px calc(20px + env(safe-area-inset-bottom));
+  padding: 18px 20px calc(20px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--border);
-  background: linear-gradient(180deg, #0a0d1c, #06080f);
+  background: linear-gradient(180deg, rgb(10 13 28 / 0.6), rgb(5 7 15 / 0.9));
 }
 
 .drawerTotal {
@@ -1241,27 +1471,31 @@
   align-items: baseline;
   justify-content: space-between;
   margin: 0;
-  color: var(--text-mid);
-  font-size: 15px;
+  color: var(--text-low);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
 }
 
 .drawerTotal strong {
   color: #fff;
   font-family: var(--font-display);
-  font-size: 24px;
+  font-size: 28px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
+  text-transform: none;
 }
 
 .drawerNote {
   display: flex;
   gap: 8px;
   margin: 0;
-  padding: 10px 12px;
-  border: 1px solid rgb(16 185 129 / 0.28);
-  border-radius: 12px;
-  background: rgb(16 185 129 / 0.07);
+  padding: 11px 13px;
+  border: 1px solid rgb(62 230 181 / 0.28);
+  border-radius: 14px;
+  background: rgb(62 230 181 / 0.07);
   color: var(--text-mid);
   font-size: 12.5px;
   line-height: 1.45;
@@ -1270,12 +1504,12 @@
 .drawerNote svg {
   flex: none;
   margin-top: 1px;
-  color: #34d399;
+  color: var(--mint);
 }
 
 .drawerCheckout {
   width: 100%;
-  min-height: 52px;
+  min-height: 56px;
   font-size: 16px;
 }
 
@@ -1299,36 +1533,37 @@
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  padding: 56px 24px;
+  padding: 60px 24px;
   text-align: center;
 }
 
 .drawerEmpty h3,
 .checkoutEmpty h1 {
-  margin: 10px 0 0;
+  margin: 12px 0 0;
   font-family: var(--font-display);
-  font-size: 21px;
+  font-size: 23px;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
 }
 
 .drawerEmpty p,
 .checkoutEmpty p {
-  margin: 0 0 12px;
+  margin: 0 0 14px;
   color: var(--text-mid);
 }
 
 .emptyCartIcon {
   display: inline-grid;
   place-items: center;
-  width: 88px;
-  height: 88px;
+  width: 96px;
+  height: 96px;
   border: 1px solid var(--border-accent);
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 25%, rgb(185 168 255 / 0.3), rgb(96 140 255 / 0.08) 70%);
+  background: radial-gradient(circle at 35% 25%, rgb(196 182 255 / 0.32), rgb(96 140 255 / 0.08) 70%);
   box-shadow:
-    0 0 0 10px rgb(139 117 255 / 0.06),
-    0 0 50px -6px rgb(139 117 255 / 0.55);
+    0 0 0 12px rgb(139 117 255 / 0.06),
+    0 0 0 24px rgb(139 117 255 / 0.03),
+    0 0 60px -6px rgb(139 117 255 / 0.6);
   color: var(--violet-text);
 }
 
@@ -1336,14 +1571,14 @@
 
 .checkout {
   display: grid;
-  gap: 22px;
+  gap: 24px;
 }
 
 @media (min-width: 940px) {
   .checkout {
-    grid-template-columns: minmax(0, 1fr) 410px;
+    grid-template-columns: minmax(0, 1fr) 430px;
     align-items: start;
-    gap: 28px;
+    gap: 32px;
   }
 }
 
@@ -1356,14 +1591,19 @@
 
 .checkoutHead h1 {
   margin: 0;
+  background: var(--holo-text);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
   font-family: var(--font-display);
-  font-size: clamp(26px, 4.4vw, 38px);
+  font-size: clamp(30px, 5vw, 48px);
   font-weight: 700;
-  letter-spacing: -0.035em;
+  letter-spacing: -0.045em;
 }
 
 .checkoutHead h1 span {
   color: var(--text-low);
+  -webkit-text-fill-color: var(--text-low);
   font-weight: 500;
 }
 
@@ -1371,20 +1611,20 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  margin: 16px 0 0;
+  margin: 18px 0 0;
   padding: 0;
   list-style: none;
 }
 
 .checkoutLine {
   padding: 12px;
-  border-radius: 20px;
+  border-radius: 22px;
 }
 
 .checkoutLine .lineThumb {
-  width: 104px;
-  height: 104px;
-  border-radius: 15px;
+  width: 108px;
+  height: 108px;
+  border-radius: 16px;
 }
 
 @media (max-width: 600px) {
@@ -1398,25 +1638,38 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  margin-top: 18px;
+  margin-top: 20px;
+  padding: 9px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
   color: var(--violet-text);
   font-weight: 650;
-  transition: gap 0.25s var(--ease);
+  transition:
+    gap 0.3s var(--ease),
+    border-color 0.2s ease,
+    background 0.2s ease;
 }
 
 .keepShopping:hover {
   gap: 11px;
+  border-color: var(--border-accent);
+  background: rgb(139 117 255 / 0.1);
   color: #fff;
 }
 
+/* The order console: a lit edge along its top, the figures in Sora. */
 .summary {
   position: relative;
   overflow: hidden;
-  padding: 22px;
+  padding: 24px;
   border-radius: var(--radius-xl);
+  background:
+    radial-gradient(90% 50% at 100% 0%, rgb(139 117 255 / 0.16), transparent 70%) padding-box,
+    var(--glass) padding-box,
+    var(--edge-strong) border-box;
+  box-shadow: var(--shadow-raised), 0 0 70px -40px rgb(139 117 255 / 0.7);
 }
 
-/* The aurora along the summary's top edge. */
 .summary::before {
   position: absolute;
   top: 0;
@@ -1430,16 +1683,16 @@
 @media (min-width: 940px) {
   .summary {
     position: sticky;
-    top: 136px;
+    top: 112px;
   }
 }
 
 .summary h2 {
   margin: 0 0 10px;
   font-family: var(--font-display);
-  font-size: 19px;
+  font-size: 20px;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.025em;
 }
 
 .summary dl {
@@ -1450,7 +1703,7 @@
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 0;
+  padding: 11px 0;
   border-bottom: 1px solid var(--border);
 }
 
@@ -1466,7 +1719,7 @@
 
 .summary .summaryTotal {
   align-items: baseline;
-  padding-top: 14px;
+  padding-top: 16px;
   border-bottom: 0;
 }
 
@@ -1476,16 +1729,20 @@
 }
 
 .summaryTotal dd {
+  background: var(--aurora-text);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
   font-family: var(--font-display);
-  font-size: 26px;
+  font-size: 30px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.035em;
 }
 
 .checkoutButton {
   width: 100%;
-  min-height: 52px;
+  min-height: 54px;
   margin-top: 14px;
 }
 
@@ -1508,7 +1765,7 @@
 .steps {
   display: grid;
   gap: 12px;
-  margin: 20px 0 0;
+  margin: 22px 0 0;
   padding: 0;
   color: var(--text-mid);
   counter-reset: step;
@@ -1519,34 +1776,35 @@
 
 .steps li {
   position: relative;
-  padding-left: 36px;
+  padding-left: 38px;
   counter-increment: step;
 }
 
 .steps li::before {
   position: absolute;
-  top: -1px;
+  top: -2px;
   left: 0;
   display: grid;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   place-items: center;
   border: 1px solid var(--border-accent);
   border-radius: 50%;
   background: rgb(139 117 255 / 0.14);
+  box-shadow: 0 0 14px -4px rgb(139 117 255 / 0.8);
   color: var(--violet-text);
-  content: counter(step);
-  font-size: 12px;
-  font-weight: 800;
+  content: counter(step, decimal-leading-zero);
+  font-family: var(--font-mono);
+  font-size: 10px;
 }
 
 .steps li:not(:last-child)::after {
   position: absolute;
-  top: 26px;
+  top: 27px;
   bottom: -12px;
-  left: 11.5px;
+  left: 12.5px;
   width: 1px;
-  background: linear-gradient(180deg, rgb(139 117 255 / 0.5), rgb(139 117 255 / 0.05));
+  background: linear-gradient(180deg, rgb(139 117 255 / 0.55), rgb(84 215 233 / 0.05));
   content: '';
 }
 
@@ -1571,7 +1829,15 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
-  margin-top: 22px;
+  margin-top: 24px;
+  padding: 18px;
+  border: 1px solid transparent;
+  border-radius: 26px;
+  background:
+    radial-gradient(90% 80% at 0% 0%, rgb(139 117 255 / 0.16), transparent 70%) padding-box,
+    linear-gradient(180deg, rgb(17 22 45 / 0.92), rgb(8 11 23 / 0.95)) padding-box,
+    var(--edge) border-box;
+  box-shadow: var(--shadow-card);
 }
 
 .buyQty {
@@ -1582,9 +1848,11 @@
 }
 
 .buyQty span {
-  color: var(--text-mid);
-  font-size: 14px;
-  font-weight: 550;
+  color: var(--text-low);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
 }
 
 .buyQty small {
@@ -1599,19 +1867,34 @@
 }
 
 .buyButtons > * {
-  min-height: 54px;
-  border-radius: 16px;
+  min-height: 58px;
+  padding-inline: 16px;
   font-size: 15.5px;
+  white-space: nowrap;
+}
+
+@media (max-width: 420px) {
+  .buyBox {
+    padding: 14px;
+    border-radius: 22px;
+  }
+
+  .buyButtons > * {
+    min-height: 54px;
+    padding-inline: 10px;
+    font-size: 14.5px;
+  }
 }
 
 .buyAdd {
   background:
-    linear-gradient(180deg, rgb(30 27 70 / 0.95), rgb(15 15 38 / 0.96)) padding-box,
+    linear-gradient(180deg, rgb(31 28 74 / 0.96), rgb(14 14 37 / 0.97)) padding-box,
     var(--edge-strong) border-box;
 }
 
 .buyNow {
   font-size: 16px;
+  letter-spacing: 0.01em;
 }
 
 .inCartNote {
@@ -1619,7 +1902,7 @@
   align-items: center;
   gap: 6px;
   margin: 0;
-  color: #5ee0ad;
+  color: #6ff0c4;
   font-size: 14px;
 }
 
@@ -1633,22 +1916,23 @@
 .payNote {
   display: flex;
   gap: 12px;
-  margin-top: 18px;
-  padding: 14px 16px;
+  margin-top: 16px;
+  padding: 15px 17px;
   border: 1px solid transparent;
-  border-radius: 18px;
+  border-radius: 20px;
   background:
-    linear-gradient(135deg, rgb(16 185 129 / 0.12), rgb(10 13 27 / 0.92) 60%) padding-box,
-    linear-gradient(140deg, rgb(52 211 153 / 0.6), rgb(52 211 153 / 0.1) 60%, rgb(84 215 233 / 0.3)) border-box;
+    linear-gradient(135deg, rgb(16 185 129 / 0.13), rgb(9 12 25 / 0.94) 62%) padding-box,
+    linear-gradient(140deg, rgb(62 230 181 / 0.65), rgb(62 230 181 / 0.1) 60%, rgb(84 215 233 / 0.32)) border-box;
 }
 
 .payNote svg {
   flex: none;
   box-sizing: content-box;
-  padding: 6px;
+  padding: 7px;
   border-radius: 50%;
-  background: rgb(16 185 129 / 0.16);
-  color: #34d399;
+  background: rgb(62 230 181 / 0.16);
+  box-shadow: 0 0 18px -4px rgb(62 230 181 / 0.7);
+  color: var(--mint);
 }
 
 .payNote p {
@@ -1663,15 +1947,28 @@
 }
 
 .descr {
-  margin-top: 26px;
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
 }
 
 .descr h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin: 0;
   font-family: var(--font-display);
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.025em;
+}
+
+.descr h2::before {
+  width: 22px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--line-aurora);
+  content: '';
 }
 
 .offerLink {
@@ -1684,7 +1981,7 @@
    for a buyer with a question, so it is a button, not a line of text. */
 .askButton {
   width: 100%;
-  min-height: 50px;
+  min-height: 52px;
 }
 
 /* "Sold by": the store's sign and name, and the way into its shop. */
@@ -1704,10 +2001,10 @@
 
 .sellerHead h2 small {
   color: var(--text-low);
-  font-family: var(--font-sans);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
 }
 
@@ -1715,9 +2012,9 @@
   overflow: hidden;
   color: var(--text-high);
   font-family: var(--font-display);
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.025em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1728,26 +2025,29 @@
   flex: none;
   align-items: center;
   gap: 2px;
-  padding: 7px 12px;
+  padding: 8px 14px;
   border: 1px solid var(--border-accent);
   border-radius: var(--radius-pill);
-  background: rgb(139 117 255 / 0.1);
+  background: rgb(139 117 255 / 0.12);
   color: #fff;
   font-size: 13px;
   font-weight: 650;
-  transition: background 0.2s ease;
+  transition:
+    background 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .sellerHead .sellerShop:hover {
-  background: rgb(139 117 255 / 0.22);
+  background: rgb(139 117 255 / 0.24);
+  box-shadow: 0 10px 24px -12px rgb(122 92 240 / 1);
 }
 
 .moreFrom {
-  margin-top: clamp(48px, 7vw, 80px);
+  margin-top: clamp(56px, 8vw, 96px);
 }
 
 /* On a phone, once the buy box has scrolled away: the product, its price
-   and Buy now, in a bar above the store's own (ProductStickyBar). */
+   and Buy now, in a lit bar above the store's dock (ProductStickyBar). */
 .stickyBuy {
   display: none;
 }
@@ -1756,7 +2056,7 @@
   .stickyBuy {
     position: fixed;
     right: 10px;
-    bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom));
+    bottom: calc(var(--bottom-nav-h) + 6px + env(safe-area-inset-bottom));
     left: 10px;
     z-index: 34;
     display: flex;
@@ -1764,26 +2064,27 @@
     gap: 10px;
     padding: 7px 7px 7px 8px;
     border: 1px solid transparent;
-    border-radius: 20px;
+    border-radius: 22px;
     background:
-      linear-gradient(180deg, #151a36, #0b0e1e) padding-box,
+      radial-gradient(80% 120% at 0% 0%, rgb(139 117 255 / 0.2), transparent 70%) padding-box,
+      linear-gradient(180deg, #151a38, #0a0d1d) padding-box,
       var(--edge-strong) border-box;
     box-shadow:
-      0 20px 40px -14px rgb(0 0 0 / 0.95),
-      0 0 40px -18px rgb(139 117 255 / 0.7);
-    animation: stickyIn 0.35s var(--ease-out);
+      0 22px 44px -14px rgb(0 0 0 / 0.98),
+      0 0 46px -18px rgb(139 117 255 / 0.85);
+    animation: stickyIn 0.45s var(--ease-out);
   }
 }
 
 .stickyThumb {
   display: grid;
   flex: none;
-  width: 44px;
-  height: 44px;
+  width: 46px;
+  height: 46px;
   overflow: hidden;
   place-items: center;
-  border-radius: 12px;
-  background: radial-gradient(circle at 50% 30%, #1c2346, #0b0e1d 72%);
+  border-radius: 14px;
+  background: radial-gradient(70% 60% at 50% 32%, #262f60, #0b0e1f 76%);
   font-size: 22px;
 }
 
@@ -1811,15 +2112,15 @@
 .stickyText > span {
   color: #fff;
   font-family: var(--font-display);
-  font-size: 15.5px;
+  font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.02em;
 }
 
 .stickyButton {
   flex: none;
-  min-height: 44px;
-  padding: 0 18px;
+  min-height: 46px;
+  padding: 0 20px;
   font-size: 14.5px;
 }
 
@@ -1830,14 +2131,14 @@
 .escrowBox {
   position: relative;
   margin-top: 18px;
-  padding: 18px;
+  padding: 20px;
   border: 1px solid transparent;
-  border-radius: 20px;
+  border-radius: 22px;
   background:
-    radial-gradient(80% 60% at 0% 0%, rgb(16 185 129 / 0.16), transparent 70%) padding-box,
-    linear-gradient(180deg, rgb(12 20 30 / 0.95), rgb(8 12 22 / 0.96)) padding-box,
-    linear-gradient(150deg, rgb(52 211 153 / 0.85), rgb(16 185 129 / 0.25) 45%, rgb(84 215 233 / 0.45)) border-box;
-  box-shadow: 0 0 40px -18px rgb(16 185 129 / 0.55);
+    radial-gradient(80% 60% at 0% 0%, rgb(16 185 129 / 0.18), transparent 70%) padding-box,
+    linear-gradient(180deg, rgb(11 20 30 / 0.96), rgb(7 11 21 / 0.97)) padding-box,
+    linear-gradient(150deg, rgb(62 230 181 / 0.9), rgb(16 185 129 / 0.25) 45%, rgb(84 215 233 / 0.5)) border-box;
+  box-shadow: 0 0 48px -20px rgb(16 185 129 / 0.6);
 }
 
 .escrowTitle {
@@ -1845,27 +2146,27 @@
   align-items: center;
   gap: 10px;
   margin: 0;
-  color: #5ee0ad;
+  color: #6ff0c4;
   font-family: var(--font-display);
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 700;
-  letter-spacing: -0.015em;
+  letter-spacing: -0.02em;
 }
 
 .escrowTitle svg {
   flex: none;
   box-sizing: content-box;
-  padding: 6px;
-  border-radius: 10px;
-  background: rgb(16 185 129 / 0.16);
-  box-shadow: 0 0 16px -2px rgb(16 185 129 / 0.5);
+  padding: 7px;
+  border-radius: 12px;
+  background: rgb(62 230 181 / 0.16);
+  box-shadow: 0 0 20px -2px rgb(62 230 181 / 0.55);
 }
 
 .escrowLead {
   margin: 10px 0 0;
   color: var(--text-high);
   font-size: 13.5px;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .escrowList {
@@ -1880,10 +2181,10 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
-  padding: 10px 12px;
-  border: 1px solid rgb(52 211 153 / 0.2);
-  border-radius: 12px;
-  background: rgb(255 255 255 / 0.02);
+  padding: 11px 13px;
+  border: 1px solid rgb(62 230 181 / 0.22);
+  border-radius: 14px;
+  background: rgb(255 255 255 / 0.025);
 }
 
 .escrowList a {
@@ -1898,8 +2199,10 @@
 }
 
 .escrowList a span {
-  color: var(--cyan);
-  font-size: 12.5px;
+  color: var(--cyan-text);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
 }
 
 .escrowList small {
@@ -1913,9 +2216,9 @@
   gap: 8px;
   align-items: flex-start;
   margin: 12px 0 0;
-  padding: 10px 12px;
+  padding: 11px 13px;
   border: 1px solid rgb(239 68 68 / 0.42);
-  border-radius: 12px;
+  border-radius: 14px;
   background: rgb(239 68 68 / 0.08);
   color: var(--text-high);
   font-size: 13px;
@@ -1942,42 +2245,42 @@
   line-height: 1.45;
 }
 
-/* ── Perks strip: what buying from a store on BROKA means (Perks.tsx) ──── */
+/* ── Perks: what buying from a store on BROKA means (Perks.tsx) ───────────
+   Four lit tiles - an icon in a glowing plate, a title and its line. */
 
-/* One column per perk, however many there are (three, or four with
-   "Verified seller"). */
 .perks {
   display: grid;
   grid-auto-columns: minmax(0, 1fr);
   grid-auto-flow: column;
+  gap: 12px;
   margin: 0;
   padding: 0;
-  overflow: hidden;
-  border: 1px solid transparent;
-  border-radius: var(--radius-xl);
-  background:
-    linear-gradient(180deg, rgb(17 22 44 / 0.9), rgb(9 12 25 / 0.94)) padding-box,
-    var(--edge) border-box;
-  box-shadow: var(--shadow-card);
   list-style: none;
 }
 
 .perks li {
   position: relative;
+  isolation: isolate;
   display: flex;
   align-items: center;
   gap: 14px;
   min-width: 0;
-  padding: 18px 20px;
+  padding: 18px 18px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgb(17 22 45 / 0.92), rgb(8 11 23 / 0.95)) padding-box,
+    var(--edge) border-box;
+  box-shadow: var(--shadow-card);
 }
 
-.perks li + li::before {
+/* The tile's own glow, in its icon's colour, from the corner. */
+.perks li::before {
   position: absolute;
-  top: 22%;
-  bottom: 22%;
-  left: 0;
-  width: 1px;
-  background: linear-gradient(180deg, transparent, rgb(196 204 232 / 0.18), transparent);
+  inset: 0;
+  z-index: -1;
+  background: radial-gradient(80% 120% at 0% 0%, var(--perk-glow, rgb(139 117 255 / 0.18)), transparent 65%);
   content: '';
 }
 
@@ -1985,9 +2288,9 @@
   display: block;
   color: var(--text-high);
   font-family: var(--font-display);
-  font-size: 14.5px;
+  font-size: 15px;
   font-weight: 650;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
 }
 
 .perks small {
@@ -2002,30 +2305,46 @@
   display: grid;
   place-items: center;
   flex: none;
-  width: 42px;
-  height: 42px;
-  border: 1px solid rgb(185 168 255 / 0.28);
-  border-radius: 13px;
-  background: radial-gradient(circle at 30% 20%, rgb(185 168 255 / 0.3), rgb(96 140 255 / 0.08) 70%);
-  box-shadow: 0 8px 20px -12px rgb(122 92 240 / 0.9);
+  width: 46px;
+  height: 46px;
+  border: 1px solid rgb(196 182 255 / 0.32);
+  border-radius: 15px;
+  background: radial-gradient(circle at 30% 20%, rgb(196 182 255 / 0.34), rgb(96 140 255 / 0.08) 70%);
+  box-shadow:
+    0 10px 24px -12px rgb(122 92 240 / 1),
+    0 0 20px -8px rgb(139 117 255 / 0.8);
   color: var(--violet-text);
 }
 
+.perks li:nth-child(2) {
+  --perk-glow: rgb(62 230 181 / 0.16);
+}
+
 .perks li:nth-child(2) .perkIcon {
-  border-color: rgb(52 211 153 / 0.32);
-  background: radial-gradient(circle at 30% 20%, rgb(52 211 153 / 0.3), rgb(16 185 129 / 0.06) 70%);
-  color: #5ee0ad;
+  border-color: rgb(62 230 181 / 0.36);
+  background: radial-gradient(circle at 30% 20%, rgb(62 230 181 / 0.32), rgb(16 185 129 / 0.06) 70%);
+  box-shadow: 0 0 20px -8px rgb(62 230 181 / 0.9);
+  color: #6ff0c4;
+}
+
+.perks li:nth-child(3) {
+  --perk-glow: rgb(84 215 233 / 0.16);
 }
 
 .perks li:nth-child(3) .perkIcon {
-  border-color: rgb(84 215 233 / 0.32);
-  background: radial-gradient(circle at 30% 20%, rgb(84 215 233 / 0.3), rgb(96 140 255 / 0.06) 70%);
-  color: #7fe3f2;
+  border-color: rgb(84 215 233 / 0.36);
+  background: radial-gradient(circle at 30% 20%, rgb(84 215 233 / 0.32), rgb(96 140 255 / 0.06) 70%);
+  box-shadow: 0 0 20px -8px rgb(84 215 233 / 0.9);
+  color: var(--cyan-text);
+}
+
+.perks li:nth-child(4) {
+  --perk-glow: rgb(62 230 181 / 0.14);
 }
 
 .perks li:nth-child(4) .perkIcon {
-  border-color: rgb(52 211 153 / 0.32);
-  color: #34d399;
+  border-color: rgb(62 230 181 / 0.36);
+  color: var(--mint);
 }
 
 /* Tablets: two by two, so each perk keeps room for its line. */
@@ -2034,27 +2353,20 @@
     grid-auto-flow: row;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-
-  .perks li:nth-child(odd)::before {
-    display: none;
-  }
-
-  .perks li:nth-child(n + 3) {
-    border-top: 1px solid var(--border);
-  }
 }
 
 /* Phones: three across, icon over a short title; the hero already says
    "Verified". */
 @media (max-width: 700px) {
   .perks {
-    border-radius: 20px;
+    gap: 8px;
   }
 
   .perks li {
     flex-direction: column;
     gap: 8px;
-    padding: 14px 6px;
+    padding: 14px 6px 13px;
+    border-radius: 18px;
     text-align: center;
   }
 
@@ -2068,9 +2380,9 @@
   }
 
   .perkIcon {
-    width: 36px;
-    height: 36px;
-    border-radius: 11px;
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
   }
 
   .perkVerified {
@@ -2078,21 +2390,24 @@
   }
 }
 
-/* ── Footer ─────────────────────────────────────────────────────────────── */
+/* ── Footer ───────────────────────────────────────────────────────────────
+   The store's columns over a horizon of light, and its name across the
+   whole width at the foot, cut by the edge of the screen. */
 
 .footer {
   position: relative;
   z-index: 1;
-  margin-top: 88px;
-  padding: 64px var(--gutter) 30px;
+  isolation: isolate;
+  margin-top: clamp(64px, 9vw, 120px);
+  padding: 72px var(--gutter) 0;
   overflow: hidden;
   background:
-    radial-gradient(50% 120% at 12% 0%, rgb(139 117 255 / 0.12), transparent 70%),
-    radial-gradient(40% 100% at 95% 100%, rgb(84 215 233 / 0.06), transparent 70%),
-    linear-gradient(180deg, rgb(6 8 17 / 0.94), #04050b);
+    radial-gradient(50% 90% at 50% 0%, rgb(139 117 255 / 0.16), transparent 70%),
+    radial-gradient(40% 100% at 95% 100%, rgb(84 215 233 / 0.08), transparent 70%),
+    linear-gradient(180deg, rgb(5 7 15 / 0.96), #020308);
 }
 
-/* The aurora along the footer's top. */
+/* The horizon: a line of light along the top, with its glow. */
 .footer::before {
   position: absolute;
   top: 0;
@@ -2100,37 +2415,52 @@
   left: 0;
   height: 1px;
   background: var(--line-aurora);
+  box-shadow: 0 0 30px 2px rgb(139 117 255 / 0.45);
   content: '';
-  opacity: 0.7;
+}
+
+/* The instrument grid, rising from the foot. */
+.footer::after {
+  position: absolute;
+  inset: auto 0 0;
+  z-index: -1;
+  height: 70%;
+  background:
+    linear-gradient(var(--grid-line) 1px, transparent 1px) 0 0 / 56px 56px,
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px) 0 0 / 56px 56px;
+  content: '';
+  -webkit-mask-image: linear-gradient(0deg, #000, transparent);
+  mask-image: linear-gradient(0deg, #000, transparent);
+  pointer-events: none;
 }
 
 .footerGrid {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr));
-  gap: 40px;
+  gap: 44px;
   max-width: var(--shell);
   margin: 0 auto;
 }
 
 .footerBrand {
   margin: 0 0 10px;
-  background: var(--aurora-text);
+  background: var(--holo-text);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
   font-family: var(--font-display);
-  font-size: clamp(24px, 2.6vw, 30px);
+  font-size: clamp(26px, 2.8vw, 34px);
   font-weight: 700;
-  letter-spacing: -0.035em;
+  letter-spacing: -0.04em;
   line-height: 1.1;
 }
 
 .footerTitle {
-  margin: 0 0 14px;
-  color: var(--text-low);
-  font-size: 11px;
-  font-weight: 750;
-  letter-spacing: 0.16em;
+  margin: 0 0 16px;
+  color: var(--cyan-text);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.22em;
   text-transform: uppercase;
 }
 
@@ -2141,7 +2471,7 @@
 }
 
 .footer li + li {
-  margin-top: 9px;
+  margin-top: 10px;
 }
 
 .footer li a {
@@ -2173,9 +2503,9 @@
 
 .mpesa {
   padding: 5px 11px;
-  border-radius: 8px;
+  border-radius: 9px;
   background: linear-gradient(135deg, #22c55e, #15803d);
-  box-shadow: 0 6px 16px -8px rgb(34 197 94 / 0.8);
+  box-shadow: 0 8px 20px -8px rgb(34 197 94 / 0.85);
   color: #fff;
   font-size: 12px;
   font-weight: 900;
@@ -2187,18 +2517,20 @@
   align-items: center;
   gap: 5px;
   padding: 4px 10px;
-  border: 1px solid rgb(52 211 153 / 0.45);
-  border-radius: 8px;
-  background: rgb(16 185 129 / 0.08);
-  color: #5ee0ad;
+  border: 1px solid rgb(62 230 181 / 0.45);
+  border-radius: 9px;
+  background: rgb(62 230 181 / 0.08);
+  color: #6ff0c4;
   font-size: 12px;
   font-weight: 700;
 }
 
 .footerBase {
+  position: relative;
+  z-index: 1;
   max-width: var(--shell);
-  margin: 44px auto 0;
-  padding-top: 20px;
+  margin: 56px auto 0;
+  padding-top: 22px;
   border-top: 1px solid var(--border);
   color: var(--text-low);
   font-size: 12.5px;
@@ -2206,18 +2538,44 @@
 }
 
 .footerBase a {
-  background: linear-gradient(90deg, #b9a8ff, #8fb2ff 60%, #7fdeee);
+  background: var(--aurora-text);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
   font-weight: 800;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
+}
+
+/* The name across the foot: hollow letters with a lit outline and a
+   hologram fading down into them, sized to the name so a short one fills
+   the width and a long one still fits. Decoration only (aria-hidden): the
+   name is said above. */
+.footerMark {
+  position: relative;
+  z-index: 0;
+  max-width: calc(var(--shell) + 2 * var(--gutter));
+  margin: 18px auto -0.2em;
+  overflow: hidden;
+  background: linear-gradient(180deg, rgb(214 204 255 / 0.32), rgb(143 230 242 / 0.08) 55%, transparent 85%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-family: var(--font-display);
+  font-size: clamp(54px, calc(150vw / max(var(--len, 8), 6)), 240px);
+  font-weight: 700;
+  letter-spacing: -0.06em;
+  line-height: 1;
+  text-align: center;
+  text-wrap: balance;
+  -webkit-text-stroke: 1px rgb(196 182 255 / 0.28);
+  user-select: none;
+  pointer-events: none;
 }
 
 @media (max-width: 900px) {
   .footerGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 32px 24px;
+    gap: 34px 24px;
   }
 
   .footerGrid > :first-child {
@@ -2227,8 +2585,8 @@
 
 @media (max-width: 560px) {
   .footer {
-    margin-top: 64px;
-    padding-top: 48px;
+    margin-top: 76px;
+    padding-top: 52px;
   }
 
   .footerGrid {
@@ -2237,10 +2595,14 @@
 }
 
 @media (max-width: 860px) {
-  /* Room under the footer's last line for the bar along the bottom of a
+  /* Room under the footer's last line for the dock along the bottom of a
      phone (StoreBottomNav), which would otherwise sit on it. */
   .storefront .footer {
     padding-bottom: calc(var(--bottom-nav-h) + 28px + env(safe-area-inset-bottom));
+  }
+
+  .footerMark {
+    margin-bottom: 0;
   }
 }
 
@@ -2443,7 +2805,7 @@
   gap: 7px;
   min-height: 44px;
   padding: 0 12px;
-  border-radius: 13px;
+  border-radius: var(--radius-pill);
   font-size: 13px;
   font-weight: 700;
 }
@@ -2500,10 +2862,25 @@
 
 /* ── Motion ─────────────────────────────────────────────────────────────── */
 
+@keyframes edge-run {
+  to {
+    --spin: 360deg;
+  }
+}
+
+@keyframes holo {
+  from {
+    background-position: 0% 50%;
+  }
+  to {
+    background-position: 100% 50%;
+  }
+}
+
 @keyframes cardIn {
   from {
     opacity: 0;
-    translate: 0 26px;
+    translate: 0 34px;
   }
   to {
     opacity: 1;
@@ -2520,12 +2897,18 @@
   }
 }
 
+@keyframes live-amber {
+  from {
+    box-shadow: 0 0 0 0 rgb(246 196 106 / 0.75);
+  }
+  to {
+    box-shadow: 0 0 0 7px rgb(246 196 106 / 0);
+  }
+}
+
 @keyframes bump {
   0% {
     transform: scale(0.5);
-  }
-  60% {
-    transform: scale(1.25);
   }
   100% {
     transform: scale(1);
@@ -2547,20 +2930,22 @@
 
 @keyframes slideIn {
   from {
-    transform: translateX(100%);
+    opacity: 0.4;
+    transform: translateX(105%);
   }
 }
 
 @keyframes noteIn {
   from {
     opacity: 0;
-    translate: 0 -14px;
+    translate: 0 -16px;
+    scale: 0.96;
   }
 }
 
 @keyframes stickyIn {
   from {
     opacity: 0;
-    transform: translateY(16px);
+    transform: translateY(18px);
   }
 }

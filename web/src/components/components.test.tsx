@@ -158,6 +158,13 @@ describe('StoreLanding', () => {
     expect(screen.getByRole('link', { name: 'Message this store' }).getAttribute('href')).toBe('/store/clanix/messages')
   })
 
+  it("says how fast the store answers in the details page's words, not the readout's figure", () => {
+    // The readout shows "<1 min"; as a sentence that read "about <1 min".
+    render(<StoreLanding view={storeView(shop({ response_minutes: 0.5 }))} storeId="s1" products={[]} categories={[]} />)
+    expect(screen.getByText('Usually replies straight away')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('about <1')
+  })
+
   it('uses real seller departments and a compact launch note when the shop has no products', () => {
     render(
       <StoreLanding
@@ -281,7 +288,10 @@ describe('StoreDetails', () => {
     expect(screen.getByText('Open')).toBeTruthy()
     expect(screen.getByText('Genuine phones and accessories.')).toBeTruthy()
     expect(screen.getByText('Jane Wanjiru')).toBeTruthy()
-    expect(screen.getByText('✓ Verified seller')).toBeTruthy()
+    // The badge drawn, not the ✓ character (a box in a font without it).
+    const verified = screen.getByText('Verified seller')
+    expect(verified.querySelector('svg')).not.toBeNull()
+    expect(verified.textContent).not.toContain('✓')
     // Deals done, the buyer rating (with its review count) and the year
     // joined, each in its own tile.
     for (const [label, value] of [
@@ -291,7 +301,10 @@ describe('StoreDetails', () => {
     ] as const) {
       expect(within(screen.getByText(label).parentElement!).getByText(value)).toBeTruthy()
     }
-    expect(screen.getByText('📍 Starehe, Nairobi')).toBeTruthy()
+    // The area under a drawn pin, not the 📍 emoji (STORES_UI_REVIEW.md L6).
+    const area = screen.getByText('Starehe, Nairobi')
+    expect(area.querySelector('svg')).not.toBeNull()
+    expect(area.textContent).not.toContain('📍')
     expect(screen.getByText('Moi Avenue, Bazaar Plaza')).toBeTruthy()
     expect(screen.getByText('Find it on the map').getAttribute('href')).toBe(
       'https://www.google.com/maps/search/?api=1&query=Moi%20Avenue%2C%20Bazaar%20Plaza%2C%20Starehe%2C%20Nairobi%2C%20Kenya',

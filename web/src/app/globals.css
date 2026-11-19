@@ -1,47 +1,47 @@
 /* BROKA connected-commerce tokens, aligned with broka-website.
 
-   Storefront 3.0: the same names as before (every CSS module reads them),
-   tuned for a darker, quieter canvas, with a few additions for the premium
-   layer - glass surfaces with a gradient hairline edge (--glass, --edge),
-   the aurora used for lines and the store's name (--aurora-text,
-   --line-aurora), and one width and gutter for every store page (--shell,
-   --gutter), so the header, the hero and the catalogue line up. */
+   Storefront 4.0 keeps every name the CSS modules read and turns the
+   canvas into an instrument panel at night: deeper ink, glass with a lit
+   hairline edge (--glass, --edge), a holographic gradient for display type
+   (--holo-text), a perspective grid and film grain behind the hero
+   (--grid-line, --grain), mono labels for figures and tags (--font-mono),
+   and one shell width and gutter for every store page (--shell, --gutter)
+   so the header, the hero and the catalogue line up. */
 :root {
-  --bg: #04050b;
-  --bg-mid: #070915;
-  --bg-card: #0b0f1f;
+  --bg: #03040a;
+  --bg-mid: #060812;
+  --bg-card: #0a0e1d;
   --violet: #8b75ff;
   --blue: #608cff;
   --cyan: #54d7e9;
+  --mint: #3ee6b5;
   --pink: #f472b6;
   --green: #10b981;
-  --amber: #dbb75d;
+  --amber: #f2c14e;
   --warning: #f59e0b;
   --danger: #ef4444;
-  --text-high: #f5f6fd;
-  --text-mid: #c4c9db;
-  --text-low: #9aa3bc;
-  --border: rgb(196 204 232 / 0.12);
+  --text-high: #f6f7ff;
+  --text-mid: #c6cbde;
+  --text-low: #9ea6bf;
+  --border: rgb(196 204 232 / 0.11);
   --border-strong: rgb(196 204 232 / 0.22);
   /* Deep enough that the white label on every call to action reads at 4.5:1
      or better at both ends (it was #8b75ff to #608cff: about 3.2:1). Hover
      states add glow and lift, never a lighter fill, for the same reason. */
-  --cta: linear-gradient(120deg, #7a5cf0, #4a68e0);
-  --radius: 18px;
+  --cta: linear-gradient(120deg, #7a5cf0 0%, #5d61ea 52%, #4a68e0 100%);
+  --radius: 20px;
   --page-width: 1120px;
 
-  /* One set of surfaces, radii, type and motion for every store and
-     account page, so a card on the cart page and a card in the messages
-     look like the same product. */
   /* Violet for text and icons on the dark canvas: 7:1, where --violet is not. */
-  --violet-text: #b9a8ff;
+  --violet-text: #bcadff;
+  --cyan-text: #8fe7f2;
   --border-accent: rgb(139 117 255 / 0.55);
   /* Cards over the background video, a raised layer (menus, the composer),
      and the solid colour behind images and avatars. */
-  --surface-1: rgb(12 16 33 / 0.82);
-  --surface-2: rgb(16 21 42 / 0.95);
-  --surface-solid: #0a0d1b;
-  --surface-input: rgb(4 6 14 / 0.76);
+  --surface-1: rgb(11 15 31 / 0.84);
+  --surface-2: rgb(15 20 40 / 0.96);
+  --surface-solid: #090c19;
+  --surface-input: rgb(3 5 12 / 0.8);
   /* Solid: anything translucent over a scrolling page let the text under a
      sticky bar show through it (the store header, the bar along the
      bottom of a phone, the chat header), blurred or not. */
@@ -51,56 +51,82 @@
      (background: var(--glass) padding-box, var(--edge) border-box; with a
      transparent 1px border). --edge-strong is the lit edge on hover and
      focus. */
-  --glass: linear-gradient(180deg, rgb(19 24 47 / 0.9), rgb(9 12 25 / 0.95));
+  --glass: linear-gradient(180deg, rgb(18 23 46 / 0.92), rgb(7 10 21 / 0.96));
+  --glass-lit: radial-gradient(120% 90% at 50% -10%, rgb(139 117 255 / 0.16), transparent 58%),
+    linear-gradient(180deg, rgb(18 23 46 / 0.94), rgb(7 10 21 / 0.97));
   --edge: linear-gradient(
     160deg,
-    rgb(255 255 255 / 0.17) 0%,
-    rgb(255 255 255 / 0.05) 34%,
-    rgb(139 117 255 / 0.22) 70%,
-    rgb(84 215 233 / 0.2) 100%
+    rgb(255 255 255 / 0.2) 0%,
+    rgb(255 255 255 / 0.05) 32%,
+    rgb(139 117 255 / 0.24) 70%,
+    rgb(84 215 233 / 0.24) 100%
   );
-  --edge-strong: linear-gradient(160deg, rgb(205 192 255 / 0.9) 0%, rgb(122 92 240 / 0.62) 46%, rgb(84 215 233 / 0.75) 100%);
-  /* The aurora: never behind white text (it is too light for that), only
-     as lines, glows and the gradient of a heading. */
-  --aurora-text: linear-gradient(100deg, #ffffff 0%, #e6dfff 42%, #b3c6ff 72%, #94e8f3 100%);
+  --edge-strong: linear-gradient(160deg, rgb(214 204 255 / 0.95) 0%, rgb(122 92 240 / 0.7) 46%, rgb(84 215 233 / 0.85) 100%);
+  /* The aurora and the hologram: never behind white text (they are too
+     light for that) - only as lines, glows and the fill of display type. */
+  --aurora-text: linear-gradient(100deg, #ffffff 0%, #e9e3ff 40%, #b6c8ff 70%, #98ecf6 100%);
+  --holo-text: linear-gradient(
+    100deg,
+    #ffffff 0%,
+    #efeaff 18%,
+    #c3b6ff 36%,
+    #9ec4ff 52%,
+    #8ff0ff 64%,
+    #ffffff 80%,
+    #f3e9ff 100%
+  );
   --line-aurora: linear-gradient(
     90deg,
     rgb(139 117 255 / 0) 0%,
-    rgb(139 117 255 / 0.8) 24%,
-    rgb(96 140 255 / 0.8) 54%,
-    rgb(84 215 233 / 0.75) 80%,
+    rgb(139 117 255 / 0.85) 24%,
+    rgb(96 140 255 / 0.85) 54%,
+    rgb(84 215 233 / 0.8) 80%,
     rgb(84 215 233 / 0) 100%
   );
+  --grid-line: rgb(150 160 255 / 0.075);
+  /* Film grain: one 140px tile of noise, drawn once by the browser. */
+  --grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .55 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
 
   --radius-sm: 10px;
   --radius-md: 14px;
-  --radius-lg: 18px;
-  --radius-xl: 24px;
-  --radius-2xl: 30px;
+  --radius-lg: 20px;
+  --radius-xl: 26px;
+  --radius-2xl: 34px;
   --radius-pill: 999px;
-  --shadow-card: 0 20px 44px -30px rgb(0 0 0 / 0.95), 0 2px 8px -4px rgb(0 0 0 / 0.6);
-  --shadow-raised: 0 34px 80px -36px rgb(0 0 0 / 0.95), 0 8px 24px -16px rgb(0 0 0 / 0.7);
-  --glow-accent: 0 12px 30px -14px rgb(122 92 240 / 0.85);
-  --glow-strong: 0 18px 44px -18px rgb(122 92 240 / 0.95), 0 0 0 1px rgb(185 168 255 / 0.18);
+  --shadow-card: 0 24px 50px -32px rgb(0 0 0 / 0.95), 0 2px 10px -4px rgb(0 0 0 / 0.6);
+  --shadow-raised: 0 40px 90px -40px rgb(0 0 0 / 0.98), 0 10px 30px -18px rgb(0 0 0 / 0.75);
+  --glow-accent: 0 14px 34px -14px rgb(122 92 240 / 0.9);
+  --glow-strong: 0 22px 54px -18px rgb(122 92 240 / 0.95), 0 0 0 1px rgb(185 168 255 / 0.2);
+  --glow-cyan: 0 0 0 1px rgb(84 215 233 / 0.35), 0 18px 48px -20px rgb(84 215 233 / 0.6);
   --focus-ring: 0 0 0 3px rgb(185 168 255 / 0.55);
   /* Inter for reading and the controls, Sora for display: the store's
-     name, headings and prices (both self-hosted, app/layout.tsx). The rest
-     of each list is the system's own sans for the moment before they load,
-     or a script they don't cover. */
+     name, headings and prices, Space Mono for instrument labels (all three
+     self-hosted, app/layout.tsx). The rest of each list is the system's
+     own face for the moment before they load, or a script they don't cover. */
   --font-sans: var(--font-inter, Inter), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
     sans-serif;
   --font-display: var(--font-sora, Sora), var(--font-inter, Inter), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
     'Helvetica Neue', Arial, sans-serif;
+  --font-mono: var(--font-space-mono, 'Space Mono'), ui-monospace, 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace;
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   /* The content width of every store page, and the space beside it. */
-  --shell: 1280px;
-  --gutter: clamp(16px, 4vw, 48px);
+  --shell: 1320px;
+  --gutter: clamp(16px, 4vw, 52px);
   /* The bar along the bottom of a phone (StoreBottomNav) - a dock that
-     floats 8px above the screen's edge - for the space the page leaves
-     under its last line. */
-  --bottom-nav-h: 76px;
+     floats above the screen's edge - for the space the page leaves under
+     its last line. */
+  --bottom-nav-h: 80px;
   color-scheme: dark;
+}
+
+/* The light that runs around a lit edge (a product card under the
+   pointer, the primary call to action): an angle the browser can animate. */
+@property --spin {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
 }
 
 *,
@@ -129,7 +155,7 @@ body {
 }
 
 ::selection {
-  background: rgb(139 117 255 / 0.42);
+  background: rgb(139 117 255 / 0.45);
   color: #fff;
 }
 
@@ -137,7 +163,7 @@ h1,
 h2,
 h3 {
   font-family: var(--font-display);
-  letter-spacing: -0.02em;
+  letter-spacing: -0.025em;
 }
 
 a {
@@ -166,8 +192,8 @@ textarea {
 
 :focus-visible {
   outline: 2px solid var(--violet-text);
-  outline-offset: 2px;
-  border-radius: 6px;
+  outline-offset: 3px;
+  border-radius: 8px;
 }
 
 .page {
@@ -199,7 +225,7 @@ textarea {
   left: 10px;
   z-index: 100;
   padding: 10px 16px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   background: var(--surface-solid);
   border: 1px solid var(--border-accent);
   color: var(--text-high);
@@ -212,20 +238,21 @@ textarea {
   transform: none;
 }
 
-/* The call to action. A light sweeps across it on hover (::after), over a
-   fill that never gets lighter: the white label keeps its contrast. */
+/* The call to action: a lit capsule. A light sweeps across it on hover
+   (::after) over a fill that never gets lighter, so the white label keeps
+   its contrast; the glow under it is the only thing that brightens. */
 .button {
   position: relative;
   isolation: isolate;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  min-height: 48px;
-  padding: 0 22px;
+  gap: 9px;
+  min-height: 50px;
+  padding: 0 26px;
   overflow: hidden;
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-pill);
   background: var(--cta);
   color: #fff;
   font-family: var(--font-sans);
@@ -234,39 +261,41 @@ textarea {
   letter-spacing: 0.005em;
   cursor: pointer;
   box-shadow:
-    0 12px 30px -12px rgb(122 92 240 / 0.8),
-    inset 0 1px rgb(255 255 255 / 0.2),
-    inset 0 -1px rgb(0 0 0 / 0.2);
+    0 14px 34px -14px rgb(122 92 240 / 0.9),
+    0 0 0 1px rgb(185 168 255 / 0.22),
+    inset 0 1px rgb(255 255 255 / 0.28),
+    inset 0 -8px 16px -10px rgb(10 6 40 / 0.55);
   transition:
-    transform 0.25s var(--ease),
-    box-shadow 0.25s var(--ease);
+    transform 0.3s var(--ease-out),
+    box-shadow 0.3s var(--ease-out);
 }
 
 .button::after {
   position: absolute;
   inset: 0;
   z-index: -1;
-  background: linear-gradient(105deg, transparent 32%, rgb(255 255 255 / 0.2) 50%, transparent 68%);
+  background: linear-gradient(105deg, transparent 30%, rgb(255 255 255 / 0.26) 50%, transparent 70%);
   content: '';
-  transform: translateX(-120%);
-  transition: transform 0.7s var(--ease-out);
+  transform: translateX(-130%);
+  transition: transform 0.8s var(--ease-out);
   pointer-events: none;
 }
 
 .button:hover {
-  transform: translateY(-1px);
+  transform: translateY(-2px);
   box-shadow:
-    0 18px 40px -14px rgb(122 92 240 / 0.95),
-    0 0 0 1px rgb(185 168 255 / 0.25),
-    inset 0 1px rgb(255 255 255 / 0.22);
+    0 22px 48px -16px rgb(122 92 240 / 1),
+    0 0 34px -8px rgb(122 92 240 / 0.7),
+    0 0 0 1px rgb(205 192 255 / 0.4),
+    inset 0 1px rgb(255 255 255 / 0.3);
 }
 
 .button:hover::after {
-  transform: translateX(120%);
+  transform: translateX(130%);
 }
 
 .button:active {
-  transform: translateY(0) scale(0.99);
+  transform: translateY(0) scale(0.985);
 }
 
 .button:disabled {
@@ -278,21 +307,21 @@ textarea {
 .button--ghost {
   border: 1px solid transparent;
   background:
-    linear-gradient(180deg, rgb(21 27 52 / 0.9), rgb(11 14 30 / 0.92)) padding-box,
+    linear-gradient(180deg, rgb(22 28 54 / 0.92), rgb(10 13 28 / 0.94)) padding-box,
     var(--edge) border-box;
-  box-shadow: inset 0 1px rgb(255 255 255 / 0.05);
+  box-shadow: inset 0 1px rgb(255 255 255 / 0.06), 0 12px 30px -24px rgb(0 0 0 / 0.9);
   color: var(--text-high);
 }
 
 .button--ghost::after {
-  background: linear-gradient(105deg, transparent 32%, rgb(185 168 255 / 0.14) 50%, transparent 68%);
+  background: linear-gradient(105deg, transparent 30%, rgb(185 168 255 / 0.16) 50%, transparent 70%);
 }
 
 .button--ghost:hover {
   background:
-    linear-gradient(180deg, rgb(25 31 60 / 0.94), rgb(13 16 34 / 0.95)) padding-box,
+    linear-gradient(180deg, rgb(27 33 64 / 0.95), rgb(13 16 34 / 0.96)) padding-box,
     var(--edge-strong) border-box;
-  box-shadow: 0 14px 34px -20px rgb(122 92 240 / 0.8);
+  box-shadow: 0 16px 38px -20px rgb(122 92 240 / 0.85), 0 0 26px -12px rgb(84 215 233 / 0.5);
 }
 
 .card {
@@ -327,6 +356,30 @@ textarea {
   }
 }
 
+/* A section rises into place as it scrolls into view - only where the
+   browser ties animation to scrolling (a scroll-driven timeline) and the
+   visitor hasn't asked for less motion. Elsewhere it is simply there. */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .reveal {
+      animation: reveal-rise linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 70%;
+    }
+  }
+}
+
+@keyframes reveal-rise {
+  from {
+    opacity: 0;
+    transform: translateY(42px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -344,7 +397,7 @@ textarea {
   z-index: 0;
   overflow: hidden;
   pointer-events: none;
-  background: #030518;
+  background: #02030a;
 }
 .brand-background-video,
 .brand-background-poster,
@@ -357,7 +410,7 @@ textarea {
 }
 .brand-background-video,
 .brand-background-poster img { object-fit: cover; object-position: center; }
-.brand-background-video { z-index: 0; opacity: .7; }
+.brand-background-video { z-index: 0; opacity: .62; }
 .brand-background-particles {
   position: absolute;
   inset: 0;
@@ -366,28 +419,41 @@ textarea {
   width: 100%;
   height: 100%;
   pointer-events: none;
-  opacity: .5;
+  opacity: .46;
 }
 .brand-background-poster { z-index: 2; }
-/* A dark wash over the sky, deepest at the edges and the foot: the brand's
-   space stays behind the page, but calmer where people read prices and
+/* A dark wash over the sky, deepest at the edges and the foot, with two
+   faint auroras at the top and a fine grain over all of it: the brand's
+   space stays behind the page, calmer where people read prices and
    descriptions (STORES_UI_REVIEW.md M4). */
-.brand-background::after {
+.brand-background::before {
   position: absolute;
   inset: 0;
   z-index: 3;
   background:
-    radial-gradient(120% 75% at 50% 0%, rgb(4 5 11 / 0) 35%, rgb(4 5 11 / 0.62) 100%),
-    linear-gradient(180deg, rgb(4 5 11 / 0.08) 0%, rgb(4 5 11 / 0.5) 100%);
+    radial-gradient(60% 45% at 12% -8%, rgb(122 92 240 / 0.22), transparent 70%),
+    radial-gradient(55% 40% at 92% -6%, rgb(84 215 233 / 0.14), transparent 70%),
+    radial-gradient(120% 75% at 50% 0%, rgb(3 4 10 / 0) 35%, rgb(3 4 10 / 0.7) 100%),
+    linear-gradient(180deg, rgb(3 4 10 / 0.05) 0%, rgb(3 4 10 / 0.55) 100%);
   content: '';
+}
+.brand-background::after {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  background-image: var(--grain);
+  background-size: 140px 140px;
+  content: '';
+  mix-blend-mode: overlay;
+  opacity: 0.08;
 }
 /* Task pages - messages, the cart, orders - keep the still picture: a
    moving background behind a conversation or a form is something to read
    past, and costs a phone's battery while the buyer types. */
-.brand-background[data-calm='true'] .brand-background-video { opacity: .45; }
+.brand-background[data-calm='true'] .brand-background-video { opacity: .4; }
 @media (max-width: 700px) {
-  .brand-background-video { opacity: .66; }
-  .brand-background-particles { opacity: .36; }
+  .brand-background-video { opacity: .58; }
+  .brand-background-particles { opacity: .34; }
 }
 @media (prefers-reduced-motion: reduce) {
   .brand-background-video { display: none; }
