@@ -173,7 +173,10 @@ void main() {
       await tester.tap(find.byKey(const Key('escrow-pill')));
       await _settle(tester);
       expect(find.byType(EscrowCallout), findsOneWidget);
-      expect(find.text('Pay with escrow'), findsOneWidget);
+      // The callout's own title: the quick actions under the chat carry a
+      // "Pay with escrow" chip of their own.
+      expect(find.descendant(of: find.byType(EscrowCallout),
+          matching: find.text('Pay with escrow')), findsOneWidget);
       expect(find.text('Ask Zeno'), findsOneWidget);
     });
 
@@ -184,7 +187,8 @@ void main() {
       await _settle(tester);
       final strip = find.byKey(const Key('negotiate-info-strip'));
       expect(strip, findsOneWidget);
-      expect(tester.getSize(strip).height, lessThan(64));
+      // Margins included: the card was about 110 tall.
+      expect(tester.getSize(strip).height, lessThan(72));
       expect(find.descendant(of: strip, matching: find.text('Xavier Bravin')), findsOneWidget);
       expect(find.textContaining('3 deals'), findsNothing, reason: 'folded into the sheet');
       expect(find.text('Where'), findsNothing);
