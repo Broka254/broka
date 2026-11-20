@@ -339,3 +339,11 @@ store_enquiry_limiter = _make_limiter(
     "store_enquiry", limit=1000 if _settings.is_test else 12, window_seconds=600)
 store_enquiry_ip_limiter = _make_limiter(
     "store_enquiry_ip", limit=1000 if _settings.is_test else 60, window_seconds=600)
+
+# Individual emails from the admin dashboard (POST /admin/email/send), keyed
+# by the signed-in administrator. They leave under BROKA's own domain and
+# cannot be recalled, and they share the Resend account - and its daily
+# quota - with the verification codes: one runaway session must not spend
+# what sign-up needs. 30 an hour is far past a person answering mail.
+admin_email_send_limiter = _make_limiter(
+    "admin_email_send", limit=1000 if _settings.is_test else 30, window_seconds=3600)

@@ -64,6 +64,11 @@ class Permission(str, enum.Enum):
     # suspending one. It decides which websites the app sends people to
     # pay, so it is its own capability, not part of MANAGE_USERS.
     MANAGE_ESCROW_PROVIDERS = "can_manage_escrow_providers"
+    # Email Reply (api/domains/admin_email): a message to any address, sent
+    # from BROKA's own domain, which cannot be recalled. A distinct
+    # capability so it can be narrowed without touching MANAGE_COMMUNICATIONS
+    # (in-app and push announcements).
+    SEND_ADMIN_EMAIL      = "can_send_admin_email"
 
     # AI
     USE_AI_BROKER         = "can_use_ai_broker"
@@ -111,6 +116,7 @@ _ADMIN_PERMISSIONS: set[Permission] = _USER_PERMISSIONS | {
     Permission.MANAGE_FEEDBACK,
     Permission.MANAGE_COSTS,
     Permission.MANAGE_ESCROW_PROVIDERS,
+    Permission.SEND_ADMIN_EMAIL,
 }
 
 # Permissions blocked for suspended/fraud-flagged users
