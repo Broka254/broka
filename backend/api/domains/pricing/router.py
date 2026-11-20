@@ -2,7 +2,7 @@
 
   GET  /pricing/listing-fee/quote                    price a listing before it exists
   GET  /pricing/listing-fee/listings/{id}/quote      price one of your listings (pay or renew)
-  POST /pricing/listing-fee/renew-free               extend one window, free (fees off only)
+  POST /pricing/listing-fee/renew-free               extend one window, free (fees off, or onto a store plan)
   POST /pricing/listing-fee/pay                      send the M-Pesa prompt
   GET  /pricing/listing-fee/payments/{id}            how that payment stands
   GET  /pricing/listing-fee/mine                     your listings waiting for payment
@@ -146,11 +146,13 @@ async def renew_listing_free(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Extend one owned listing's live window by one launch window, free.
+    """Extend one owned listing's live window, free.
 
-    Only while listing fees are off - the way back for a launch window
-    that ran out before billing started. With fees on, renewals go
-    through POST /pricing/listing-fee/pay.
+    While listing fees are off, by one launch window - the way back for a
+    launch window that ran out before billing started. While they are on,
+    only onto a place the seller's store plan has free (the quote's
+    `store_plan`); every other renewal goes through POST
+    /pricing/listing-fee/pay.
     """
     return await payments.renew_free(db, current_user["id"], body.listing_id)
 

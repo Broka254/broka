@@ -85,19 +85,24 @@ class TestRiskCoefficient:
 # ── C: the list price ────────────────────────────────────────────────────────
 
 class TestListPrice:
-    def test_the_fee_is_charged_on_price_times_quantity(self):
-        """The founder's case: 200 iPhones are not 3 iPhones.
+    def test_more_than_one_unit_pays_a_fifth_more_however_many(self):
+        """The founder's case (2026-11-20): a KES 10,000 phone pays 150,
+        two of them 180, and ten still 180.
 
-        Regression: the fee used to be the square root of ONE unit's price,
-        capped per category, grown only by the log of the quantity. Now the
-        fee is on the listing's whole value, up to the monthly ceiling.
+        Regression: the fee was charged on price x units, so every unit
+        added to it - ten of those phones paid 370, two hundred iPhones the
+        KES 2,000 ceiling - and sellers with stock found it unreasonably high.
         """
+        def fee(quantity):
+            return engine.round_kes(engine.list_price(ELECTRONICS, 10_000, quantity))
+
+        assert (fee(1), fee(2), fee(10), fee(1_000)) == (150, 180, 180, 180)
         one = engine.list_price(ELECTRONICS, 180_000, 1)
-        three = engine.list_price(ELECTRONICS, 180_000, 3)
-        two_hundred = engine.list_price(ELECTRONICS, 180_000, 200)
-        assert one < three < two_hundred == engine.MAX_MONTHLY_FEE
-        # Only the value counts: ten KES 20k phones are one KES 200k item.
-        assert engine.list_price(ELECTRONICS, 20_000, 10) == engine.list_price(ELECTRONICS, 200_000, 1)
+        assert engine.list_price(ELECTRONICS, 180_000, 3) == pytest.approx(one * 1.2)
+        assert (engine.list_price(ELECTRONICS, 180_000, 200)
+                == engine.list_price(ELECTRONICS, 180_000, 3) < engine.MAX_MONTHLY_FEE)
+        # Ten KES 20k phones no longer pay what one KES 200k item does.
+        assert engine.list_price(ELECTRONICS, 20_000, 10) < engine.list_price(ELECTRONICS, 200_000, 1)
 
     @pytest.mark.parametrize("x, f", [
         # The founder's own test values (2026-10-09), from their reference
@@ -117,10 +122,13 @@ class TestListPrice:
 
     @pytest.mark.parametrize("price, quantity, fee", [
         (1_500, 1, 60),             # a dress (10 on the old value bands)
+        (10_000, 1, 150),           # a phone
+        (10_000, 2, 180),           # two of them (200 on price x units)
+        (10_000, 10, 180),          # ten (370 on price x units)
         (20_000, 1, 200),           # a phone (100)
         (180_000, 1, 460),          # an iPhone (420)
-        (180_000, 3, 685),          # three of them (835)
-        (180_000, 200, 2_000),      # two hundred (12,640)
+        (180_000, 3, 555),          # three of them (685 on price x units)
+        (180_000, 200, 555),        # two hundred (2,000 on price x units)
         (800_000, 1, 785),          # a car (1,120)
         (1_500_000, 1, 980),        # a plot (1,890)
     ])
@@ -140,10 +148,14 @@ class TestListPrice:
         for c in CATEGORIES.values():
             assert engine.list_price(c, 10**9, 100) == engine.MAX_MONTHLY_FEE == 2_000
 
-    def test_quantity_is_not_capped_for_the_fee(self):
-        """QUANTITY_CAP limits only the duration advice; 5,000 units are priced as 5,000."""
-        assert engine.quote(ELECTRONICS, 1_000, 5_000, NEW, 0)["quantity"] == 5_000
-        assert engine.list_price(ELECTRONICS, 1_000, 5_000) > engine.list_price(ELECTRONICS, 1_000, 1_000)
+    def test_the_count_past_one_never_moves_the_fee(self):
+        """QUANTITY_CAP limits only the duration advice, and the fee asks
+        only whether there is more than one unit: 5,000 pay what 2 do."""
+        many = engine.quote(ELECTRONICS, 1_000, 5_000, NEW, 0)
+        assert many["quantity"] == 5_000 and many["multi_unit_percent"] == 20
+        assert many["priced_on"] == 1_000 and many["listing_value"] == 5_000_000
+        assert engine.list_price(ELECTRONICS, 1_000, 5_000) == engine.list_price(ELECTRONICS, 1_000, 2)
+        assert engine.quote(ELECTRONICS, 1_000, 1, NEW, 0)["multi_unit_percent"] == 0
 
     def test_cheap_items_pay_ten_shillings_or_the_cost_of_serving_them(self):
         """KES 10 is the least f gives; where serving the listing for its

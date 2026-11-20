@@ -22,6 +22,7 @@ from api.security import _oauth2_scheme_optional, get_current_user
 from api.core.config import settings
 from api.database import ListingStatus, ListingType
 from api.domains.pricing import service as pricing_service
+from api.domains.stores import plan_cover
 from . import price_rules
 from . import validation as rules
 from .paid import fee_applies, fee_state, is_live
@@ -596,11 +597,15 @@ async def update_listing(
                 },
             )
 
-        # What the raise does to the fee already paid (price_rules.py).
+        # What the raise does to the fee already paid (price_rules.py). A
+        # listing on its seller's store plan paid no fee - its time is the
+        # plan's (stores/plan_cover) - so there is nothing to shorten, and
+        # shortening it would take it off the plan.
         paid_until_after = listing.paid_until
         if (settings.listing_fees_enabled and fee_applies(listing)
                 and new_price > old_price
-                and listing.paid_until is not None and listing.paid_until > now):
+                and listing.paid_until is not None and listing.paid_until > now
+                and not await plan_cover.is_covered(db, listing, now)):
             fee_before, fee_after = await pricing_service.monthly_fees_at_prices(
                 db, listing.seller_id, listing.category, listing.quantity or 1,
                 old_price, new_price)

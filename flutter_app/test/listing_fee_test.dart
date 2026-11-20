@@ -89,6 +89,27 @@ Map<String, dynamic> _quote({
   };
 }
 
+/// The quote of the current server: two months a period, 2, 4 or 6 at a
+/// time - the KES 1.5M listing of the screenshot that started 2026-11-20.
+Map<String, dynamic> _twoMonthQuote({String category = 'Land'}) => {
+      ..._quote(recommended: 4),
+      'category': category,
+      'list_price': 980,
+      'monthly_fee': 980,
+      'period_fee': 980,
+      'period_months': 2,
+      'discount_percent': 0,
+      'priced_on': 1500000,
+      'multi_unit_percent': 0,
+      'discounts': {'apply': false, 'record_percent': 0, 'launch_percent': 0},
+      'options': [
+        {'months': 2, 'total': 980, 'per_month': 490, 'saving_percent': 0, 'recommended': false},
+        {'months': 4, 'total': 1740, 'per_month': 435, 'saving_percent': 11, 'recommended': true},
+        {'months': 6, 'total': 2440, 'per_month': 406.67, 'saving_percent': 17, 'recommended': false},
+      ],
+      'recommendation': {'months': 4, 'expected_days_to_sell': 51, 'strength': 'strong'},
+    };
+
 /// A backend for the fee endpoints: records what was paid for, and answers
 /// the status poll with [statuses] in turn.
 class _FeeBackend {
@@ -188,13 +209,33 @@ void main() {
       expect(feeReasons(ListingFeeQuote.fromJson(_quote(launch: 30))).join(), contains('Launch offer: 30%'));
     });
 
-    test('with payments off the price is explained by the listing\'s value, not a record', () {
+    test('with payments off the price is explained by one unit\'s price, not a record', () {
       final j = _quote()
-        ..['listing_value'] = 540000
+        ..['priced_on'] = 1500000
+        ..['multi_unit_percent'] = 0
+        ..['listing_value'] = 1500000
         ..['discounts'] = {'apply': false, 'record_percent': 0, 'launch_percent': 0};
       final lines = feeReasons(ListingFeeQuote.fromJson(j));
-      expect(lines.first, contains('KES 540,000'));
+      expect(lines.first, 'Priced on the item\'s price: KES 1,500,000.');
       expect(lines.join(), isNot(contains('complete through BROKA')));
+      expect(lines.join(), isNot(contains('\u00d7 units')));
+    });
+
+    test('several units are priced on one, plus a fifth however many', () {
+      // The founder's case: a KES 10,000 phone pays 150, two or ten of them 180.
+      final j = _quote()
+        ..['unit_price'] = 10000
+        ..['quantity'] = 10
+        ..['priced_on'] = 10000
+        ..['multi_unit_percent'] = 20
+        ..['listing_value'] = 100000
+        ..['discounts'] = {'apply': false, 'record_percent': 0, 'launch_percent': 0};
+      final q = ListingFeeQuote.fromJson(j);
+      expect(q.quantity, 10);
+      expect(feeReasons(q).first,
+          'Priced on one unit: KES 10,000, plus 20% because you\'re listing 10 - '
+          'the same however many you list.');
+      expect(feeReasons(q).join(), isNot(contains('100,000')), reason: 'not price x units');
     });
 
     test('a founding seller is told their discount', () {
@@ -205,9 +246,19 @@ void main() {
 
     test('recommends months for land, says nothing when a month will do', () {
       final land = recommendationText(ListingFeeQuote.fromJson(_quote()));
-      expect(land, contains('about 4 months'));
+      expect(land, startsWith('Land listings like this usually take about 4 months'));
       expect(land, contains('5 months keeps you in front of buyers'));
       expect(recommendationText(ListingFeeQuote.fromJson(_quote(strength: 'none', recommended: 1))), isNull);
+    });
+
+    test('the saving is against renewing the period, never a price a month', () {
+      // KES 980 for 2 months "costs 11% less a month than renewing" read as
+      // a monthly charge.
+      final q = ListingFeeQuote.fromJson(_twoMonthQuote(category: 'Automobiles'));
+      final text = recommendationText(q);
+      expect(text, startsWith('Automobiles listings like this'));
+      expect(text, endsWith('and costs 11% less than renewing every 2 months.'));
+      expect(text, isNot(contains('a month')));
     });
   });
 
@@ -235,6 +286,21 @@ void main() {
           of: find.byKey(const Key('fee-months-5')), matching: find.byType(Semantics)).first);
       expect(chosen.properties.selected, isTrue);
       expect(find.text('Continue to payment · KES 4,600'), findsOneWidget);
+    });
+
+    testWidgets('the price is one payment for its months, never a price a month', (tester) async {
+      // "KES 490 a month" under KES 980 read as a monthly bill.
+      final backend = _FeeBackend(quote: _twoMonthQuote());
+      await _open(tester, ListingFeeScreen(
+          listingId: 'l1', listingName: 'Toyota Probox 2014', repository: backend.repository));
+      expect(find.text('KES 980 for 2 months'), findsOneWidget);
+      expect(find.text('One payment for the whole 2 months.'), findsOneWidget);
+      expect(find.text('Paid once for 2 months'), findsOneWidget);
+      expect(find.text('Paid once for 4 months · save 11%'), findsOneWidget);
+      expect(find.text('Paid once for 6 months · save 17%'), findsOneWidget);
+      expect(find.textContaining('a month'), findsNothing);
+      expect(find.textContaining('490'), findsNothing);
+      expect(find.text('Continue to payment · KES 1,740'), findsOneWidget);
     });
 
     testWidgets('paying starts at the payment methods, then the number to pay from, at the top',
@@ -427,6 +493,60 @@ void main() {
       expect(find.byType(SnackBar), findsOneWidget);
       expect(popped, isNull);
       expect(find.byKey(const Key('fee-renew-free')), findsOneWidget);
+    });
+
+    /// A shop whose plan pays for 20 listings: [covered] says whether this
+    /// listing of the owner's own is already on one of its places.
+    ListingFeeRepository planBackend({required bool covered, List<String>? calls}) =>
+        ListingFeeRepository(client: ApiClient(client: MockClient((req) async {
+          final path = req.url.path;
+          calls?.add(path);
+          if (path.endsWith('/quote')) {
+            return _json({
+              ..._twoMonthQuote(),
+              'fees_enabled': false,
+              'store_plan': {
+                'store_id': 's1', 'store_name': 'Clanix', 'places': 20,
+                'in_use': covered ? 7 : 6, 'free': covered ? 13 : 14,
+                'until': '2027-01-20T10:00:00', 'covered': covered,
+              },
+            });
+          }
+          if (path == '/pricing/listing-fee/renew-free') {
+            return _json({
+              'listing_id': 'l1',
+              'paid_until': '2027-01-20T10:00:00',
+              'listing_fee': {'status': 'live', 'live': true,
+                'paid_until': '2027-01-20T10:00:00', 'needs_payment': false},
+              'time_left': {'status': 'live', 'label': '61d 0h left',
+                'seconds_left': 5270400, 'is_expiring_soon': false},
+            });
+          }
+          return _json({'detail': 'Not found'}, 404);
+        })));
+
+    testWidgets('a place free on the store plan puts the listing up with no fee', (tester) async {
+      // A shop that paid for 20 listings was asked for a fee on its own
+      // listing posted under "No Store".
+      final calls = <String>[];
+      bool? popped;
+      await openRenew(tester, planBackend(covered: false, calls: calls), onPop: (p) => popped = p);
+      expect(find.text('Your store plan covers this one'), findsOneWidget);
+      expect(find.textContaining('20 listings and 14 places are free'), findsOneWidget);
+      expect(find.byKey(const Key('fee-continue')), findsNothing,
+          reason: 'never a fee the plan already covers');
+      await _tap(tester, find.text('Put it up free'));
+      await tester.pumpAndSettle();
+      expect(calls, contains('/pricing/listing-fee/renew-free'));
+      expect(popped, isTrue);
+    });
+
+    testWidgets('a listing already on the store plan has nothing to pay', (tester) async {
+      await openRenew(tester, planBackend(covered: true), onPop: (_) {});
+      expect(find.text('Covered by your store plan'), findsOneWidget);
+      expect(find.textContaining('one of the 20 listings your Clanix plan pays for'), findsOneWidget);
+      expect(find.byKey(const Key('fee-continue')), findsNothing);
+      expect(find.text('Put it up free'), findsNothing);
     });
   });
 

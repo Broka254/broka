@@ -12,12 +12,129 @@
 // The shine runs once, not in a loop: a looping animation never lets a
 // screen settle, which costs battery and stalls every widget test that
 // waits for one.
+//
+// The deal chats carry it differently (2026-11-20): an EscrowPill beside the
+// room switch under the header, and the callout itself in a sheet the pill
+// opens (showEscrowSheet). As a card it took a full-width row of the
+// conversation on every visit - in the Zeno room under the counterpart's
+// card too - and the founder, who asked for it on both screens, found it
+// frustrating there. The pill takes no row and stays in sight: escrow green,
+// a glow, the shield.
 
 import 'package:flutter/material.dart';
 
 import '../../main.dart';
 import '../../theme/motion.dart';
 import 'safe_payment.dart';
+
+/// Escrow in a deal chat: a small glowing pill, in the row of the room
+/// switch (ChatModeSwitch.trailing). [tooltip] names it in full for the
+/// role - "Pay with escrow", "Get paid with escrow" - and is what a screen
+/// reader says.
+class EscrowPill extends StatelessWidget {
+  const EscrowPill({
+    super.key,
+    required this.tooltip,
+    required this.onTap,
+    this.label = 'Escrow',
+  });
+
+  final String tooltip;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        label: tooltip,
+        excludeSemantics: true,
+        child: Tooltip(
+          message: tooltip,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(20),
+              child: Container(
+                height: 34,
+                padding: const EdgeInsets.symmetric(horizontal: 11),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(20),
+                  gradient: LinearGradient(colors: [
+                    BrokaColors.neonGreen.withOpacity(0.26),
+                    BrokaColors.bgCard.withOpacity(0.92),
+                  ]),
+                  border: Border.all(color: BrokaColors.neonGreen.withOpacity(0.75), width: 1.2),
+                  boxShadow: [
+                    BoxShadow(color: BrokaColors.neonGreen.withOpacity(0.28), blurRadius: 10),
+                  ],
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.shield_rounded, size: 15, color: BrokaColors.neonGreen),
+                  const SizedBox(width: 5),
+                  Text(label,
+                      maxLines: 1,
+                      style: const TextStyle(
+                          color: BrokaColors.neonGreen, fontSize: 12, fontWeight: FontWeight.w800)),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      );
+}
+
+/// The escrow callout in a sheet, from an EscrowPill: the full words and
+/// both ways on - the escrow services and Zeno's walkthrough - each closing
+/// the sheet first. [body] replaces the callout (the direct chat buyer's
+/// pay panel); it gets the sheet's dismiss to call before acting.
+Future<void> showEscrowSheet(
+  BuildContext context, {
+  required String title,
+  VoidCallback? onZeno,
+  VoidCallback? onOpen,
+  Widget Function(VoidCallback dismiss)? body,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: BrokaColors.bgMid,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+    builder: (sheet) {
+      void dismiss() => Navigator.of(sheet).pop();
+      return SafeArea(
+        child: Padding(
+          key: const Key('escrow-sheet'),
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                  color: BrokaColors.border, borderRadius: BorderRadius.circular(2)),
+            ),
+            const SizedBox(height: 14),
+            if (body != null)
+              body(dismiss)
+            else
+              EscrowCallout(
+                title: title,
+                onOpen: () {
+                  dismiss();
+                  (onOpen ?? () => openEscrowServices(context))();
+                },
+                onZeno: () {
+                  dismiss();
+                  (onZeno ?? () => openZenoEscrowGuide(context))();
+                },
+              ),
+          ]),
+        ),
+      );
+    },
+  );
+}
 
 class EscrowCallout extends StatefulWidget {
   const EscrowCallout({

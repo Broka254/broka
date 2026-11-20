@@ -13,9 +13,10 @@ Rules that keep this from becoming spam or nonsense:
     period earns its own text - and only that one.
   * listings: personal, active, actually paid (paid_until > created_at -
     a never-paid draft is already offline, not "going offline"), and the
-    seller left SMS alerts on for the listing. Store listings are skipped:
-    their clock is the store's, and the store text covers them - texting
-    both would warn twice about one deadline.
+    seller left SMS alerts on for the listing. Store listings are skipped,
+    and so are the owner's own listings on the store's plan
+    (stores/plan_cover): their clock is the store's, and the store text
+    covers them - texting both would warn twice about one deadline.
   * stores: active, not deleted, subscription paid_until in the window.
   * quiet hours (nudge_templates.is_quiet_hours): deferred, not dropped -
     no dedup row is written, so the morning pass sends it. A seller who
@@ -146,6 +147,16 @@ async def send_due_expiry_alerts(db: AsyncSession,
     horizon = now + timedelta(days=settings.expiry_sms_days_before)
 
     # ── Listings ──────────────────────────────────────────────────────────
+    # A listing of the owner's own on their store plan (stores/plan_cover:
+    # its paid_until IS the plan's) goes offline with the store, and the
+    # store's text says so - one warning per deadline, as for store listings.
+    on_store_plan = (
+        select(StoreSubscription.id)
+        .join(Store, Store.id == StoreSubscription.store_id)
+        .where(Store.owner_id == Listing.seller_id,
+               StoreSubscription.paid_until == Listing.paid_until)
+        .exists()
+    )
     listings = (await db.execute(
         select(Listing).where(
             Listing.status == ListingStatus.active,
@@ -155,6 +166,7 @@ async def send_due_expiry_alerts(db: AsyncSession,
             Listing.paid_until > now,
             Listing.paid_until <= horizon,
             Listing.paid_until > Listing.created_at,
+            ~on_store_plan,
         ).order_by(Listing.paid_until).limit(MAX_PER_PASS)
     )).scalars().all()
     for listing in listings:

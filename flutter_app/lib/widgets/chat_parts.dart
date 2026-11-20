@@ -349,6 +349,7 @@ class ChatModeSwitch extends StatelessWidget {
     required this.zenoActive,
     required this.onSwitch,
     this.unread = 0,
+    this.trailing,
   });
 
   /// True on Zeno's room, false on the direct chat.
@@ -358,44 +359,64 @@ class ChatModeSwitch extends StatelessWidget {
   /// Unread messages waiting in the other room.
   final int unread;
 
+  /// Beside the switch, in its row: the deal chats' escrow pill
+  /// (escrow_callout.dart, EscrowPill). The row had empty space either side
+  /// of the switch, and escrow used to take a full-width row of its own.
+  final Widget? trailing;
+
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
-    child: Align(
-      alignment: Alignment.center,
-      child: Container(
-        key: const Key('chat-mode-switch'),
-        height: 34,
-        padding: const EdgeInsets.all(3),
-        decoration: BoxDecoration(
-          color: BrokaColors.bgCard.withOpacity(0.88),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: BrokaColors.border.withOpacity(0.8)),
-          boxShadow: [
-            BoxShadow(color: Colors.black.withOpacity(0.25), blurRadius: 10, offset: const Offset(0, 3)),
-          ],
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          _segment(
-            key: const Key('chat-mode-direct'),
-            active: !zenoActive,
-            icon: Icons.chat_bubble_outline_rounded,
-            label: 'Direct',
-            fullLabel: 'Direct chat',
-            badge: zenoActive ? unread : 0,
-          ),
-          _segment(
-            key: const Key('chat-mode-zeno'),
-            active: zenoActive,
-            icon: Icons.auto_awesome_rounded,
-            label: 'Zeno',
-            fullLabel: 'Zeno negotiates',
-            badge: zenoActive ? 0 : unread,
-          ),
-        ]),
+  Widget build(BuildContext context) {
+    final rooms = Container(
+      key: const Key('chat-mode-switch'),
+      height: 34,
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: BrokaColors.bgCard.withOpacity(0.88),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: BrokaColors.border.withOpacity(0.8)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.25), blurRadius: 10, offset: const Offset(0, 3)),
+        ],
       ),
-    ),
-  );
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        _segment(
+          key: const Key('chat-mode-direct'),
+          active: !zenoActive,
+          icon: Icons.chat_bubble_outline_rounded,
+          label: 'Direct',
+          fullLabel: 'Direct chat',
+          badge: zenoActive ? unread : 0,
+        ),
+        _segment(
+          key: const Key('chat-mode-zeno'),
+          active: zenoActive,
+          icon: Icons.auto_awesome_rounded,
+          label: 'Zeno',
+          fullLabel: 'Zeno negotiates',
+          badge: zenoActive ? 0 : unread,
+        ),
+      ]),
+    );
+    final extra = trailing;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+      child: Align(
+        alignment: Alignment.center,
+        child: extra == null
+            ? rooms
+            // Scaled down rather than overflowing: on a 320dp phone at a
+            // large text size the switch fits, the pill beside it not always.
+            : FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  rooms,
+                  const SizedBox(width: 8),
+                  extra,
+                ]),
+              ),
+      ),
+    );
+  }
 
   Widget _segment({
     required Key key,
@@ -456,4 +477,88 @@ class ChatModeSwitch extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// A message's words, folded to [collapsedLines] when they run longer, with
+/// "Read more" to open them in place and "Show less" to fold them again.
+///
+/// 2026-11-20: a long message - a report pasted into the chat - drew a
+/// bubble several screens tall, and the conversation around it scrolled out
+/// of reach. Measured, not guessed from the length: a message folds only
+/// when it really is taller than the fold at this width and text size, so a
+/// short one is the same plain Text it always was.
+class ExpandableMessageText extends StatefulWidget {
+  const ExpandableMessageText(
+    this.text, {
+    super.key,
+    required this.style,
+    this.linkColor = BrokaColors.neonCyan,
+    this.collapsedLines = 12,
+  });
+
+  final String text;
+  final TextStyle style;
+
+  /// "Read more" / "Show less": white on my own gradient bubble, a tint on
+  /// theirs.
+  final Color linkColor;
+  final int collapsedLines;
+
+  @override
+  State<ExpandableMessageText> createState() => _ExpandableMessageTextState();
+}
+
+class _ExpandableMessageTextState extends State<ExpandableMessageText> {
+  bool _expanded = false;
+
+  @override
+  void didUpdateWidget(covariant ExpandableMessageText oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Edited into other words: folded again, like a new message.
+    if (oldWidget.text != widget.text) _expanded = false;
+  }
+
+  bool _folds(BuildContext context, double maxWidth) {
+    final painter = TextPainter(
+      text: TextSpan(text: widget.text, style: DefaultTextStyle.of(context).style.merge(widget.style)),
+      maxLines: widget.collapsedLines,
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+    )..layout(maxWidth: maxWidth);
+    final folds = painter.didExceedMaxLines;
+    painter.dispose();
+    return folds;
+  }
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(builder: (context, constraints) {
+        if (!constraints.maxWidth.isFinite || !_folds(context, constraints.maxWidth)) {
+          return Text(widget.text, style: widget.style);
+        }
+        final open = _expanded;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(widget.text,
+                style: widget.style,
+                maxLines: open ? null : widget.collapsedLines,
+                overflow: open ? null : TextOverflow.ellipsis),
+            Semantics(
+              button: true,
+              child: GestureDetector(
+                key: const Key('message-read-more'),
+                behavior: HitTestBehavior.opaque,
+                onTap: () => setState(() => _expanded = !open),
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 6, bottom: 2),
+                  child: Text(open ? 'Show less' : 'Read more',
+                      style: TextStyle(
+                          color: widget.linkColor, fontSize: 13, fontWeight: FontWeight.w800)),
+                ),
+              ),
+            ),
+          ],
+        );
+      });
 }

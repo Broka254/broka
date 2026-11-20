@@ -100,7 +100,9 @@ class TestListingFee:
         q = (await client.get("/pricing/listing-fee/quote", headers=await _headers(),
                               params={"category": "Electronics", "price": 180000, "quantity": 3})).json()
         assert q["listing_value"] == 540_000
-        assert q["monthly_fee"] == q["list_price"] == 685
+        # One unit's fee and a fifth more for three (it was 685, on 540,000).
+        assert q["priced_on"] == 180_000 and q["multi_unit_percent"] == 20
+        assert q["monthly_fee"] == q["list_price"] == 555
 
 
 class TestSafePayment:

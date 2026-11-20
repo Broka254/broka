@@ -456,9 +456,16 @@ async def _settle(db: AsyncSession, payment: StorePayment, receipt: Optional[str
         report_reconciliation("store_payment_unknown_plan", deal_id=None, reason=reason)
         await db.commit()
         return
+    old_until = sub.paid_until if sub is not None else None
     sub = _apply(sub, payment.store_id, plan, payment.months, now)
     db.add(sub)
     payment.period_end = sub.paid_until
+    # The owner's own listings on the plan's places (stores/plan_cover) run
+    # on its clock: moved with it, in this transaction, as the store's own
+    # listings are by live_clause. Without it they went offline at the old
+    # end while the store stayed up.
+    from api.domains.stores.plan_cover import carry_forward
+    await carry_forward(db, payment.store_id, old_until, sub.paid_until, sub.listings, now)
     await record_audit(
         db, payment.user_id, "store_paid", "store", payment.store_id,
         f"payment={payment.id} plan={plan.id} months={payment.months} amount={payment.amount} "
