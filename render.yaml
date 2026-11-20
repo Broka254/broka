@@ -85,6 +85,13 @@ services:
       - key: RESEND_FROM
         sync: false          # Must be on a domain verified in the Resend
                              # dashboard, or Resend refuses every send
+      - key: BROKA_ADMIN_EMAIL_FROM
+        value: "Broka Admin <admin@broka.co.ke>"
+                             # The one sender of the admin dashboard's Email
+                             # Reply tool (POST /admin/email/send); replies
+                             # come back to the same address. Never set by a
+                             # request. Uses RESEND_API_KEY; the domain must be
+                             # verified in Resend. See api/core/email.py
       - key: TEXIN_API_KEY
         sync: false          # Texin BulkSMS — PRIMARY SMS provider (https://sms.texin.co.ke/api).
                              # Required for OTP + SMS nudges to actually send. Backend-only secret:

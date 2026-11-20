@@ -423,6 +423,17 @@ class Settings:
         "RESEND_FROM", "BROKA <noreply@broka.app>"
     ).strip())
     resend_reply_to: str = field(default_factory=lambda: os.getenv("RESEND_REPLY_TO", "").strip())
+    # The one address the admin dashboard's Email Reply tool
+    # (POST /admin/email/send) sends from. It is set here and never by a
+    # request: a sender the body could name would let any admin session send
+    # as anyone on the domain. Replies are directed to the same address
+    # (api/core/email.py). Uses RESEND_API_KEY; the domain must be verified
+    # in Resend like RESEND_FROM's. A blank value means the default, never
+    # "no sender".
+    broka_admin_email_from: str = field(default_factory=lambda: (
+        os.getenv("BROKA_ADMIN_EMAIL_FROM", "").strip()
+        or "Broka Admin <admin@broka.co.ke>"
+    ))
 
     @property
     def email_enabled(self) -> bool:
@@ -1174,6 +1185,18 @@ def validate_startup() -> None:
         logger.warning(
             "[startup] ⚠  RESEND_API_KEY/RESEND_FROM not set — email "
             "verification is unavailable (requests return 503)."
+        )
+
+    # The Email Reply tool's sender. A value that is not exactly one address
+    # (a stray comma, a missing bracket) is refused by the tool rather than
+    # guessed at, so say so at boot instead of at the first reply.
+    # Imported here, not at the top: api.core.email reads `settings`.
+    from api.core.email import admin_email_sender
+    if admin_email_sender() is None:
+        logger.warning(
+            "[startup] ⚠  BROKA_ADMIN_EMAIL_FROM is not a single address "
+            "(use 'Name <address>' or 'address') — the admin Email Reply "
+            "tool will refuse to send."
         )
 
     if s.storefront_api_key and len(s.storefront_api_key) < 32:

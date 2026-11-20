@@ -112,6 +112,7 @@ from api.domains.service_communications.router import (
     admin_router as service_communications_admin_router,
     customer_router as service_communications_customer_router,
 )
+from api.domains.admin_email.router import router as admin_email_router
 from api.domains.feedback.router import (
     admin_router as feedback_admin_router,
     customer_router as feedback_customer_router,
@@ -373,6 +374,9 @@ app.include_router(
     prefix="/communications",
     tags=["Service Communications"],
 )
+# Email Reply: one message to one address from the admin address. Sending
+# only - there is no inbox, no fetch and no list of what was sent.
+app.include_router(admin_email_router, prefix="/admin/email", tags=["Admin - Email Reply"])
 app.include_router(
     feedback_customer_router, prefix="/feedback", tags=["Feedback & Complaints"])
 app.include_router(

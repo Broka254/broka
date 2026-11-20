@@ -1,3 +1,62 @@
+# Admin Email Reply: one message to one address, from the BROKA admin address (2026-11-20)
+
+Asked for: a lightweight way for administrators to answer a customer by email
+from the admin dashboard, through the Resend account that already sends the
+verification codes. Sending only: no inbox, no Gmail, no fetching, forwarding or
+list of what was sent, and the Gmail forwarding, MX records and verification
+codes are untouched. The dashboard half is in `broka-admin` (`/email-reply`).
+
+- **`POST /admin/email/send`** (`api/domains/admin_email/`), body `{to, subject,
+  message}`. The sender is not an input: it is `BROKA_ADMIN_EMAIL_FROM`
+  (default `Broka Admin <admin@broka.co.ke>`) and `Reply-To` is that same address.
+  The body model refuses `from`, `reply_to`, `html`, `cc` and `bcc`
+  (`extra="forbid"`). The HTML part is built here from the plain text, escaped,
+  so the browser never supplies markup. Both HTML and text are sent.
+- **Only an administrator who holds the new `can_send_admin_email` capability**
+  (`Permission.SEND_ADMIN_EMAIL`, in every admin's set today like the others).
+  The permission is checked before the idempotency guard, so a caller who may
+  not send never reaches Redis.
+- **Validation** (`api/core/email.py`, pure functions): one plain ASCII address
+  (no display name, list, quotes or brackets), a one-line subject of at most 200
+  characters, a message of at most 10,000. Surrounding whitespace is trimmed; an
+  interior line break in the address or subject is refused, which is what stops
+  a header being smuggled in.
+- **Nothing sensitive is written down.** The address, subject and message are
+  not logged, audited or returned in an error, and neither is Resend's own error
+  body, which can echo them. What is recorded: who, when, Resend's message id,
+  the recipient's domain and the lengths of the subject and message
+  (`admin_email_sent` / `admin_email_failed`, and a usage row under category
+  `admin_email`). `record_audit` writes `detail` to the application log, so the
+  detail names no address.
+- **The verification codes cannot be affected.** `send_admin_email` is a
+  separate path: its own HTTP client and sender, and no circuit breaker. The code
+  path's breaker counts a provider 4xx as a failure, so sharing it would have let
+  five rejected admin sends switch verification codes off for 30 seconds. The
+  hourly limit (`admin_email_send_limiter`, 30 per administrator) also protects
+  the Resend quota the codes share.
+- **A retry cannot send twice.** The client's `X-Idempotency-Key` goes through
+  `idempotency_guard` (replay, no second audit row) and, hashed with the
+  administrator's id, to Resend's own `Idempotency-Key`, so a retry after a
+  timeout gets the first result. The provider timeout (8 s) is below the
+  dashboard proxy's (10 s), so the answer is a failure the dashboard can show
+  instead of a silence about a message that may have gone out.
+- **Failures are fixed words** with a code: `email_rejected` 422,
+  `email_sender_refused` 502 (key or domain), `email_provider_limit` 429,
+  `email_duplicate_request` 409, `email_provider_unavailable` 502, and
+  `email_not_configured` 503 (no `RESEND_API_KEY`, or a `BROKA_ADMIN_EMAIL_FROM`
+  that is not one address; also warned about at startup). A provider's refusal
+  is never a 401 or 403: the dashboard treats a 401 as "signed out".
+- **Settings**: `BROKA_ADMIN_EMAIL_FROM` in `config.py`, `.env.example`,
+  `render.yaml` and the README table. Blank means the default, never "no sender".
+  The domain must be verified in Resend; the first send is where a missing
+  verification shows, as `email_sender_refused`.
+- **Not run in the sandbox this was written in** (no route to PyPI or npm): the
+  suites, `tests/test_admin_email.py` among them. `email.py` was run against a
+  stand-in for httpx (106 checks: the validation rules, every status mapping,
+  the breaker staying closed after 50 failed admin sends, nothing sensitive in
+  any log line even when the provider echoes the recipient). CI is the first run
+  of the rest.
+
 # Escrow providers compared from one reviewed directory, a fee calculator, and Zeno as a fraud-prevention assistant (2026-11-16)
 
 Asked for: buyers and sellers able to compare the independent escrow

@@ -401,6 +401,7 @@ npm run typecheck && npm run lint && npm test && npm run build
 | `MPESA_*` | For M-Pesa | Safaricom Daraja |
 | `TEXIN_API_KEY` (+ optional `TEXIN_SENDER_ID`, `TEXIN_TIMEOUT_SECONDS`, `TEXIN_WEBHOOK_SECRET`) | For SMS | Phone OTP codes and SMS reminders via Texin BulkSMS (primary); `AT_*` stays as the optional fallback. Mobitech (`MOBITECH_*`) is deprecated and ignored |
 | `RESEND_API_KEY`, `RESEND_FROM` | Optional | Email verification codes (requests return 503 without them) |
+| `BROKA_ADMIN_EMAIL_FROM` | Default `Broka Admin <admin@broka.co.ke>` | The one sender of the admin dashboard's Email Reply tool (`POST /admin/email/send`), also where replies go. Uses `RESEND_API_KEY`; the domain must be verified in Resend |
 | `DEEPGRAM_API_KEY`, `ASSEMBLYAI_API_KEY` | Optional | Zeno voice input. The app only ever receives short-lived tokens |
 | `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN` | Optional | Call relay for networks where a direct connection fails |
 | `FAL_KEY` | Optional | AI showcase images for listings |
