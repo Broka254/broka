@@ -342,7 +342,9 @@ class AdsPlanIn(BaseModel):
     answers with a checklist and the seller finishes in Ads Manager."""
     product_id: Optional[str] = None
     objective: Literal["awareness", "traffic", "engagement", "leads", "sales"] = "traffic"
-    budget_kes: Optional[int] = Field(default=None, ge=100, le=1_000_000)
+    # The seller's own daily figure. It is kept exactly; an omitted value stays
+    # None so the plan can say "not selected" instead of inventing an amount.
+    budget_kes: Optional[int] = Field(default=None, ge=1, le=1_000_000)
     audience: Optional[str] = Field(default=None, max_length=160)
     location: Optional[str] = Field(default=None, max_length=120)
 

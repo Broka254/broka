@@ -739,6 +739,9 @@ Rules:
   has not given.
 - Never say BROKA posts, schedules, publishes or boosts anything, holds or verifies payments,
   or guarantees sales. BROKA does not process buyer-to-seller payments.
+- Meta can only report website purchases when conversion tracking is configured, and BROKA's
+  storefront does not send Meta purchase events. Never say or imply that Meta measures
+  purchases, revenue or return on ad spend, and never treat an order request as a payment.
 - Mention the BROKA tools by name when they are the next step: Creative Studio (images and
   captions), Platform Guides, Video Scripts, Meta Ads guidance.
 - If the seller named a product, use it. If not, suggest one of the live products above by name.
@@ -1055,61 +1058,89 @@ def _validated_video(raw: dict, store: Store, products: list[dict], platform: st
 
 # ── Meta Ads guidance ────────────────────────────────────────────────────────
 
-META_OBJECTIVES = (
-    ("awareness", "Awareness", "Get the store or product seen by more people."),
-    ("traffic", "Traffic", "Send people to your BROKA storefront."),
-    ("engagement", "Engagement", "Get messages, saves and comments."),
-    ("leads", "Leads", "Collect enquiries from people who may buy."),
-    ("sales", "Sales", "Send buyers to a product to complete the sale with you."),
+# There is no Meta Pixel or Conversions API integration anywhere in BROKA, and the
+# storefront does not send purchase events to Meta. Choosing a Sales objective
+# therefore cannot make Meta measure orders or payments on a BROKA store. The
+# guidance says so instead of implying a tracking capability that does not exist.
+META_TRACKING_NOTE = (
+    "BROKA's storefront does not send purchase events to Meta, so Meta cannot confirm "
+    "which clicks became orders or payments. A Sales objective does not create that "
+    "measurement by itself."
 )
 
+META_OBJECTIVES = (
+    ("awareness", "Awareness", "Get the store or product seen by more people.", False),
+    ("traffic", "Traffic", "Send people to your BROKA storefront.", False),
+    ("engagement", "Engagement", "Get messages, saves and comments.", False),
+    ("leads", "Leads", "Collect enquiries from people who may buy.", False),
+    ("sales", "Sales", "Send buyers to a product to complete the sale with you.", True),
+)
 
-def _budget_advice(price: Optional[float], requested: Optional[int]) -> dict:
-    if requested:
-        daily = requested
-    elif price:
-        # A starting point proportional to the product, rounded to KES 100,
-        # kept inside a small shop's range. Advice, not a forecast.
-        daily = int(min(max(round(price * 0.2 / 100) * 100, 300), 3000))
-    else:
-        daily = 500
+TRIAL_DAYS = 5
+
+
+def _budget_plan(requested: Optional[int]) -> dict:
+    """The seller's own budget, or an honest "not chosen yet".
+
+    A product's selling price says nothing about what a seller can afford to
+    spend, so no amount is derived from it. A specified amount is kept exactly
+    as entered - never rounded, raised or lowered - and an unspecified one stays
+    ``None`` rather than becoming a fake recommendation.
+    """
+    if requested and requested > 0:
+        daily = int(requested)
+        return {
+            "specified": True,
+            "daily_kes": daily,
+            "trial_days": TRIAL_DAYS,
+            "total_kes": daily * TRIAL_DAYS,
+            "note": (
+                "This is the daily budget you chose, not a prediction of results. Meta "
+                "sets its own minimum, and you can change or stop the budget at any "
+                "time in Ads Manager."
+            ),
+        }
     return {
-        "daily_kes": daily,
-        "trial_days": 5,
-        "total_kes": daily * 5,
+        "specified": False,
+        "daily_kes": None,
+        "trial_days": TRIAL_DAYS,
+        "total_kes": None,
         "note": (
-            "A starting point for testing, not a prediction of results. Meta sets its own "
-            "minimum; you can change or stop the budget at any time in Ads Manager."
+            "No daily budget has been chosen. Pick an amount you are comfortable "
+            "spending for a few days - BROKA does not estimate one from your product "
+            "price. You set the final budget in Meta Ads Manager."
         ),
     }
 
 
 def _ads_plan(store: Store, products: list[dict], product: Optional[dict], data: dict) -> dict:
     objective = data.get("objective") or "traffic"
-    labels = dict((key, (label, when)) for key, label, when in META_OBJECTIVES)
-    label, when = labels.get(objective, labels["traffic"])
+    labels = dict((key, (label, when, tracked)) for key, label, when, tracked in META_OBJECTIVES)
+    label, when, needs_tracking = labels.get(objective, labels["traffic"])
     audience = marketing._clean(data.get("audience"), 160) or (
         f"People interested in {store.category}" if store.category else
         "People interested in what you sell"
     )
     location = marketing._clean(data.get("location"), 120) or _premises(store) or \
         _coverage(store) or "Kenya"
-    budget = _budget_advice(product.get("price") if product else None,
-                            data.get("budget_kes"))
+    budget = _budget_plan(data.get("budget_kes"))
     creative_name = product["name"] if product else store.name
     price_line = _price(product) if product else None
+    objective_steps = [
+        "Open Meta Ads Manager and choose Create.",
+        f"Pick {label} as the campaign objective.",
+        "Choose a name you will recognise later, for example "
+        f"\"{store.name} - {creative_name}\".",
+    ]
+    if needs_tracking:
+        objective_steps.append(META_TRACKING_NOTE)
 
     stages = [
         {
             "key": "objective", "title": "1. Choose the objective",
             "summary": f"Recommended: {label}. {when}",
             "suggestion": label,
-            "steps": [
-                "Open Meta Ads Manager and choose Create.",
-                f"Pick {label} as the campaign objective.",
-                "Choose a name you will recognise later, for example "
-                f"\"{store.name} - {creative_name}\".",
-            ],
+            "steps": objective_steps,
         },
         {
             "key": "audience", "title": "2. Choose the audience",
@@ -1134,13 +1165,21 @@ def _ads_plan(store: Store, products: list[dict], product: Optional[dict], data:
         },
         {
             "key": "budget", "title": "4. Set the budget in KES",
-            "summary": f"Start at about KES {budget['daily_kes']:,} a day for "
-                       f"{budget['trial_days']} days (about KES {budget['total_kes']:,}).",
-            "suggestion": f"KES {budget['daily_kes']:,} / day",
+            "summary": (
+                f"Your chosen budget: KES {budget['daily_kes']:,} a day for "
+                f"{budget['trial_days']} days (KES {budget['total_kes']:,} in total)."
+                if budget["specified"] else
+                "No daily budget chosen yet. Choose an amount you can afford to spend."
+            ),
+            "suggestion": (
+                f"KES {budget['daily_kes']:,} / day" if budget["specified"]
+                else "Not selected yet"
+            ),
             "steps": [
                 budget["note"],
-                "Keep the budget small until you know the ad reaches the right people.",
-                "Judge it after several days, not after a few hours.",
+                "Set your chosen amount in Ads Manager; Meta shows its own minimum there.",
+                "Judge it after several days, not after a few hours, and stop it if it "
+                "is not reaching buyers.",
             ],
         },
         {
@@ -1174,7 +1213,10 @@ def _ads_plan(store: Store, products: list[dict], product: Optional[dict], data:
                 f"Confirm the price is {price_line}." if price_line else
                 "Confirm every claim in the ad is something you can support.",
                 "Open the destination link yourself; it must be your BROKA store, not another site.",
-                f"Check the total: about KES {budget['total_kes']:,} over {budget['trial_days']} days.",
+                (f"Check the total: KES {budget['total_kes']:,} over "
+                 f"{budget['trial_days']} days." if budget["specified"] else
+                 "Set the daily budget and check the five-day total in Ads Manager "
+                 "before you confirm."),
                 "Make sure you can answer messages or enquiries during the campaign.",
             ],
         },
@@ -1200,19 +1242,36 @@ def _ads_plan(store: Store, products: list[dict], product: Optional[dict], data:
         "objective": objective,
         "objective_label": label,
         "objective_options": [
-            {"value": key, "label": option_label, "when": option_when}
-            for key, option_label, option_when in META_OBJECTIVES
+            {"value": key, "label": option_label, "when": option_when,
+             "needs_tracking": option_tracked}
+            for key, option_label, option_when, option_tracked in META_OBJECTIVES
         ],
         "audience": audience,
         "location": location,
         "budget": budget,
+        "tracking": {
+            "website_purchases_measured": False,
+            "setup_required": True,
+            "summary": META_TRACKING_NOTE,
+            "steps": [
+                "BROKA has no Meta Pixel or Conversions API connection, so purchases on "
+                "your storefront are not reported back to Meta.",
+                "To optimise for website purchases, a developer has to install and verify "
+                "pixel or Conversions API events first. That setup does not exist today.",
+                "Until then, choose Traffic, Awareness, Engagement or Leads, and judge the "
+                "ad by the store visits BROKA counts and the messages you receive.",
+                "An order request or confirmed order is not a payment. BROKA does not "
+                "process buyer-to-seller payments, so do not treat orders as revenue.",
+            ],
+        },
         "stages": stages,
         "manager_url": META_ADS_MANAGER_URL,
         "campaign_created": False,
         "disclaimer": (
             "BROKA has not created or published a campaign. This is a plan for you to "
             "complete in Meta Ads Manager, where Meta sets the final prices and rules. "
-            "BROKA does not process buyer-to-seller payments."
+            "BROKA does not process buyer-to-seller payments, and an order request is "
+            "not a payment."
         ),
     }
 

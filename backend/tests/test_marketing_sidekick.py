@@ -419,10 +419,10 @@ class TestMetaAdsGuidance:
         assert "has not created or published" in body["disclaimer"]
         assert body["manager_url"].startswith("https://adsmanager.facebook.com/")
         assert body["product"]["name"] == "Office Chair"
-        # Budget in KES, and the total is consistent with the daily figure.
-        assert body["budget"]["daily_kes"] >= 300
-        assert body["budget"]["total_kes"] == (
-            body["budget"]["daily_kes"] * body["budget"]["trial_days"])
+        # No budget was given, so none is invented - not even from the price.
+        assert body["budget"]["specified"] is False
+        assert body["budget"]["daily_kes"] is None
+        assert body["budget"]["total_kes"] is None
         keys = [stage["key"] for stage in body["stages"]]
         assert keys == ["objective", "audience", "location", "budget", "creative",
                         "placements", "review", "launch"]
@@ -466,8 +466,90 @@ class TestMetaAdsGuidance:
             f"/stores/{store['id']}/marketing/ads-plan",
             json={"objective": "sales", "budget_kes": 750}, headers=headers,
         )).json()
+        assert body["budget"]["specified"] is True
         assert body["budget"]["daily_kes"] == 750
         assert body["budget"]["total_kes"] == 3750
+        budget_stage = next(s for s in body["stages"] if s["key"] == "budget")
+        assert "KES 750" in budget_stage["summary"]
+        assert budget_stage["suggestion"] == "KES 750 / day"
+
+    async def test_an_unusual_but_real_budget_is_not_rounded(self, client):
+        """The seller's number is theirs: no minimum padding, no rounding."""
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Odd Budget Shop",
+                            slug="odd-budget-shop", store_type="virtual",
+                            service_areas=["Nairobi"])
+        await _listing(client, headers, store["id"], name="Odd Item", price=2000)
+        body = (await client.post(
+            f"/stores/{store['id']}/marketing/ads-plan",
+            json={"budget_kes": 137}, headers=headers,
+        )).json()
+        assert body["budget"]["daily_kes"] == 137
+        assert body["budget"]["total_kes"] == 685
+
+    async def test_no_budget_is_inferred_from_the_product_price(self, client):
+        """A price cannot tell us what a seller can afford to advertise with."""
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Pricey Shop", slug="pricey-shop",
+                            store_type="virtual", service_areas=["Nairobi"])
+        await _listing(client, headers, store["id"], name="Leather Sofa",
+                       price=85000, category="Home & Furniture")
+        body = (await client.post(
+            f"/stores/{store['id']}/marketing/ads-plan",
+            json={"objective": "traffic"}, headers=headers,
+        )).json()
+        budget = body["budget"]
+        assert budget["specified"] is False
+        assert budget["daily_kes"] is None
+        assert budget["total_kes"] is None
+        assert "No daily budget" in budget["note"]
+        budget_stage = next(s for s in body["stages"] if s["key"] == "budget")
+        assert budget_stage["suggestion"] == "Not selected yet"
+        assert "No daily budget chosen yet" in budget_stage["summary"]
+        # Neither the old 20% formula nor its KES 3,000 ceiling appears.
+        assert "3,000" not in budget_stage["summary"]
+        assert "17,000" not in budget_stage["summary"]
+        review = next(s for s in body["stages"] if s["key"] == "review")
+        assert any("Set the daily budget" in step for step in review["steps"])
+
+    async def test_sales_guidance_does_not_promise_purchase_tracking(self, client):
+        """There is no Meta Pixel or Conversions API here, so the plan says so."""
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Tracking Shop",
+                            slug="tracking-shop", store_type="virtual",
+                            service_areas=["Nairobi"])
+        await _listing(client, headers, store["id"], name="Tracking Item", price=3000)
+        body = (await client.post(
+            f"/stores/{store['id']}/marketing/ads-plan",
+            json={"objective": "sales", "budget_kes": 500}, headers=headers,
+        )).json()
+        tracking = body["tracking"]
+        assert tracking["website_purchases_measured"] is False
+        assert tracking["setup_required"] is True
+        assert "does not send purchase events" in tracking["summary"]
+        assert any("Pixel" in step for step in tracking["steps"])
+        assert any("not a payment" in step for step in tracking["steps"])
+        options = {o["value"]: o for o in body["objective_options"]}
+        assert options["sales"]["needs_tracking"] is True
+        assert options["traffic"]["needs_tracking"] is False
+        objective_stage = next(s for s in body["stages"] if s["key"] == "objective")
+        assert any("does not send purchase events" in s
+                   for s in objective_stage["steps"])
+        assert "not a payment" in body["disclaimer"]
+
+    async def test_a_traffic_plan_does_not_claim_purchase_measurement(self, client):
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Traffic Shop", slug="traffic-shop",
+                            store_type="virtual", service_areas=["Nairobi"])
+        await _listing(client, headers, store["id"], name="Traffic Item", price=3000)
+        body = (await client.post(
+            f"/stores/{store['id']}/marketing/ads-plan",
+            json={"objective": "traffic"}, headers=headers,
+        )).json()
+        assert body["tracking"]["website_purchases_measured"] is False
+        objective_stage = next(s for s in body["stages"] if s["key"] == "objective")
+        assert not any("does not send purchase events" in s
+                       for s in objective_stage["steps"])
 
 
 def test_the_prompt_carries_store_facts_and_the_payment_boundary():

@@ -131,6 +131,8 @@ Map<String, dynamic> _sidekickJson() => {
       'suggestions': ['What should I post on Instagram this week?'],
     };
 
+bool _planHasBudget = true;
+
 Map<String, dynamic> _adsPlanJson() => {
       'product': {
         'id': 'l1',
@@ -156,11 +158,30 @@ Map<String, dynamic> _adsPlanJson() => {
       ],
       'audience': 'People interested in Electronics',
       'location': 'Nairobi',
-      'budget': {
-        'daily_kes': 750,
-        'trial_days': 5,
-        'total_kes': 3750,
-        'note': 'A starting point for testing, not a prediction of results.',
+      'budget': _planHasBudget
+          ? {
+              'specified': true,
+              'daily_kes': 750,
+              'trial_days': 5,
+              'total_kes': 3750,
+              'note': 'This is the daily budget you chose, not a prediction.',
+            }
+          : {
+              'specified': false,
+              'daily_kes': null,
+              'total_kes': null,
+              'trial_days': 5,
+              'note': 'No daily budget has been chosen.',
+            },
+      'tracking': {
+        'website_purchases_measured': false,
+        'setup_required': true,
+        'summary': "BROKA's storefront does not send purchase events to Meta, "
+            'so Meta cannot confirm which clicks became orders or payments.',
+        'steps': [
+          'BROKA has no Meta Pixel or Conversions API connection.',
+          'An order request or confirmed order is not a payment.',
+        ],
       },
       'stages': [
         {
@@ -222,6 +243,7 @@ void main() {
 
   setUp(() {
     _failCampaignCreation = false;
+    _planHasBudget = true;
     clearFakeRequests();
     setFakeRoute(_route);
   });
@@ -253,7 +275,7 @@ void main() {
     await tester.tap(find.byKey(const Key('marketing-section-sidekick')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('sidekick-welcome')), findsOneWidget);
-    expect(find.text('Your marketing Sidekick'), findsOneWidget);
+    expect(find.text('What do you want to sell more of?'), findsOneWidget);
     expect(find.text('How should I market my store?'), findsOneWidget);
   });
 
@@ -351,6 +373,11 @@ void main() {
 
   testWidgets('the Meta Ads plan is a checklist, not a created campaign',
       (tester) async {
+    // A tall but narrow phone, so the whole plan summary is laid out at once.
+    tester.view.physicalSize = const Size(430, 2200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     await pumpStudio(tester);
     await tester.tap(find.byKey(const Key('marketing-section-ads')));
     await tester.pumpAndSettle();
@@ -373,7 +400,7 @@ void main() {
 
     // Scroll this tab's own list down to the checklist cards.
     await tester.drag(
-        find.byKey(const Key('marketing-ads')), const Offset(0, -600));
+        find.byKey(const Key('marketing-ads')), const Offset(0, -1600));
     await tester.pumpAndSettle();
     await tester.drag(
         find.byKey(const Key('marketing-ads')), const Offset(0, -400));
@@ -381,5 +408,58 @@ void main() {
     expect(find.byKey(const Key('ads-stage-objective')), findsOneWidget);
     expect(find.text('1. Choose the objective'), findsOneWidget);
     expect(find.text('Traffic'), findsWidgets);
+  });
+
+  testWidgets('all four areas fit a 320 px phone without overflowing',
+      (tester) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await pumpStudio(tester);
+
+    // Every area is reachable without sideways navigation, and none of them
+    // throws a layout overflow at the narrowest phone width we support.
+    for (final section in const [
+      'sidekick',
+      'creative',
+      'ads',
+      'overview',
+    ]) {
+      await tester.tap(find.byKey(Key('marketing-section-$section')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(Key('marketing-$section')), findsOneWidget);
+    }
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('an unspecified budget is not turned into a recommendation',
+      (tester) async {
+    _planHasBudget = false;
+    tester.view.physicalSize = const Size(430, 2200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await pumpStudio(tester);
+    await tester.tap(find.byKey(const Key('marketing-section-ads')));
+    await tester.pumpAndSettle();
+
+    // No amount entered: the request must not invent one either.
+    await tester.ensureVisible(find.byKey(const Key('ads-build-plan')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('ads-build-plan')));
+    await tester.pumpAndSettle();
+
+    final sent = fakeRequests
+        .firstWhere((r) => r.uri.path.endsWith('/marketing/ads-plan'));
+    expect((sent.json as Map).containsKey('budget_kes'), isFalse);
+
+    expect(find.byKey(const Key('ads-budget-unset')), findsOneWidget);
+    expect(find.text('Not selected yet'), findsOneWidget);
+    expect(find.byKey(const Key('ads-budget-total')), findsNothing);
+    expect(find.textContaining('KES 0'), findsNothing);
+    // The tracking limitation travels with the plan, not only the copy.
+    expect(find.byKey(const Key('ads-tracking')), findsOneWidget);
+    expect(find.text('Purchase tracking is not set up'), findsOneWidget);
   });
 }
