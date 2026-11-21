@@ -261,35 +261,35 @@ Counts: admin 94, optional 7, public 72, token 6, user 220.
 | POST | `/feedback` | user | `submit_feedback` (backend/api/domains/feedback/router.py:374) |
 | GET | `/feedback/{feedback_id}` | user | `get_my_feedback` (backend/api/domains/feedback/router.py:433) |
 | GET | `/health` | public | `health` (backend/main.py:621) |
-| GET | `/listings/` | public | `list_listings` (backend/api/domains/listings/router.py:225) |
-| POST | `/listings/` | user | `create_listing` (backend/api/domains/listings/router.py:294) |
-| GET | `/listings/reported-unavailable` | user | `reported_unavailable` (backend/api/domains/listings/router.py:209) |
-| GET | `/listings/saved` | user | `saved_listings` (backend/api/domains/listings/router.py:198) |
-| GET | `/listings/seller/{seller_id}/metrics` | user | `seller_metrics` (backend/api/domains/listings/router.py:864) |
-| GET | `/listings/seller/{seller_id}/receipts` | user | `seller_receipts` (backend/api/domains/listings/router.py:803) |
-| GET | `/listings/seller/{seller_id}/revenue` | user | `get_seller_revenue` (backend/api/domains/listings/router.py:1057) |
-| GET | `/listings/seller/{seller_id}/summary` | user | `get_seller_summary` (backend/api/domains/listings/router.py:1042) |
-| GET | `/listings/stats` | public | `get_stats` (backend/api/domains/listings/router.py:191) |
-| GET | `/listings/{listing_id}` | public | `get_listing` (backend/api/domains/listings/router.py:1092) |
-| PATCH | `/listings/{listing_id}` | user | `update_listing` (backend/api/domains/listings/router.py:393) |
-| DELETE | `/listings/{listing_id}` | user | `delete_listing` (backend/api/domains/listings/router.py:1174) |
-| GET | `/listings/{listing_id}/engagement` | user | `get_engagement` (backend/api/domains/listings/router.py:1139) |
-| POST | `/listings/{listing_id}/interest` | user | `express_interest` (backend/api/domains/listings/router.py:1209) |
-| POST | `/listings/{listing_id}/like` | user | `like_listing` (backend/api/domains/listings/router.py:1152) |
-| DELETE | `/listings/{listing_id}/like` | user | `unlike_listing` (backend/api/domains/listings/router.py:1164) |
-| GET | `/listings/{listing_id}/matches` | user | `get_matches` (backend/api/domains/listings/router.py:1245) |
-| GET | `/listings/{listing_id}/metrics` | user | `listing_metrics` (backend/api/domains/listings/router.py:660) |
-| GET | `/listings/{listing_id}/private` | user | `get_own_listing` (backend/api/domains/listings/router.py:1074) |
-| GET | `/listings/{listing_id}/save` | user | `get_saved` (backend/api/domains/listings/router.py:1105) |
-| POST | `/listings/{listing_id}/save` | user | `save_listing` (backend/api/domains/listings/router.py:1117) |
-| DELETE | `/listings/{listing_id}/save` | user | `unsave_listing` (backend/api/domains/listings/router.py:1129) |
+| GET | `/listings/` | public | `list_listings` (backend/api/domains/listings/router.py:226) |
+| POST | `/listings/` | user | `create_listing` (backend/api/domains/listings/router.py:295) |
+| GET | `/listings/reported-unavailable` | user | `reported_unavailable` (backend/api/domains/listings/router.py:210) |
+| GET | `/listings/saved` | user | `saved_listings` (backend/api/domains/listings/router.py:199) |
+| GET | `/listings/seller/{seller_id}/metrics` | user | `seller_metrics` (backend/api/domains/listings/router.py:869) |
+| GET | `/listings/seller/{seller_id}/receipts` | user | `seller_receipts` (backend/api/domains/listings/router.py:808) |
+| GET | `/listings/seller/{seller_id}/revenue` | user | `get_seller_revenue` (backend/api/domains/listings/router.py:1062) |
+| GET | `/listings/seller/{seller_id}/summary` | user | `get_seller_summary` (backend/api/domains/listings/router.py:1047) |
+| GET | `/listings/stats` | public | `get_stats` (backend/api/domains/listings/router.py:192) |
+| GET | `/listings/{listing_id}` | public | `get_listing` (backend/api/domains/listings/router.py:1097) |
+| PATCH | `/listings/{listing_id}` | user | `update_listing` (backend/api/domains/listings/router.py:394) |
+| DELETE | `/listings/{listing_id}` | user | `delete_listing` (backend/api/domains/listings/router.py:1179) |
+| GET | `/listings/{listing_id}/engagement` | user | `get_engagement` (backend/api/domains/listings/router.py:1144) |
+| POST | `/listings/{listing_id}/interest` | user | `express_interest` (backend/api/domains/listings/router.py:1214) |
+| POST | `/listings/{listing_id}/like` | user | `like_listing` (backend/api/domains/listings/router.py:1157) |
+| DELETE | `/listings/{listing_id}/like` | user | `unlike_listing` (backend/api/domains/listings/router.py:1169) |
+| GET | `/listings/{listing_id}/matches` | user | `get_matches` (backend/api/domains/listings/router.py:1250) |
+| GET | `/listings/{listing_id}/metrics` | user | `listing_metrics` (backend/api/domains/listings/router.py:665) |
+| GET | `/listings/{listing_id}/private` | user | `get_own_listing` (backend/api/domains/listings/router.py:1079) |
+| GET | `/listings/{listing_id}/save` | user | `get_saved` (backend/api/domains/listings/router.py:1110) |
+| POST | `/listings/{listing_id}/save` | user | `save_listing` (backend/api/domains/listings/router.py:1122) |
+| DELETE | `/listings/{listing_id}/save` | user | `unsave_listing` (backend/api/domains/listings/router.py:1134) |
 | POST | `/listings/{listing_id}/showcase` | user | `set_showcase` (backend/api/domains/showcase/router.py:77) |
 | DELETE | `/listings/{listing_id}/showcase` | user | `remove_showcase` (backend/api/domains/showcase/router.py:89) |
 | POST | `/listings/{listing_id}/showcase/generate` | user | `generate_showcase` (backend/api/domains/showcase/router.py:61) |
-| POST | `/listings/{listing_id}/sold-out` | user | `report_sold_out` (backend/api/domains/listings/router.py:1220) |
-| DELETE | `/listings/{listing_id}/sold-out` | user | `revoke_sold_out` (backend/api/domains/listings/router.py:1234) |
-| POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:1186) |
-| DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:1198) |
+| POST | `/listings/{listing_id}/sold-out` | user | `report_sold_out` (backend/api/domains/listings/router.py:1225) |
+| DELETE | `/listings/{listing_id}/sold-out` | user | `revoke_sold_out` (backend/api/domains/listings/router.py:1239) |
+| POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:1191) |
+| DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:1203) |
 | GET | `/live` | public | `live` (backend/main.py:715) |
 | GET | `/media/chat-files/{file_id}` | user | `download_chat_file` (backend/api/routers/media.py:771) |
 | GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:85) |
@@ -365,19 +365,19 @@ Counts: admin 94, optional 7, public 72, token 6, user 220.
 | GET | `/premium/me` | user | `my_premium` (backend/api/domains/premium/router.py:29) |
 | GET | `/premium/payments/{payment_id}` | user | `premium_payment_status` (backend/api/domains/premium/router.py:72) |
 | POST | `/premium/subscribe` | user | `subscribe` (backend/api/domains/premium/router.py:54) |
-| GET | `/pricing/categories` | public | `pricing_categories` (backend/api/domains/pricing/router.py:221) |
+| GET | `/pricing/categories` | public | `pricing_categories` (backend/api/domains/pricing/router.py:223) |
 | GET | `/pricing/launch-offers` | user | `launch_offers` (backend/api/domains/pricing/router.py:75) |
-| POST | `/pricing/listing-fee/callback` | public | `listing_fee_callback` (backend/api/domains/pricing/router.py:178) |
-| POST | `/pricing/listing-fee/callback/{secret}` | public | `listing_fee_callback_secured` (backend/api/domains/pricing/router.py:188) |
+| POST | `/pricing/listing-fee/callback` | public | `listing_fee_callback` (backend/api/domains/pricing/router.py:180) |
+| POST | `/pricing/listing-fee/callback/{secret}` | public | `listing_fee_callback_secured` (backend/api/domains/pricing/router.py:190) |
 | GET | `/pricing/listing-fee/listings/{listing_id}/quote` | user | `listing_quote` (backend/api/domains/pricing/router.py:88) |
-| GET | `/pricing/listing-fee/mine` | user | `my_listings_needing_payment` (backend/api/domains/pricing/router.py:159) |
+| GET | `/pricing/listing-fee/mine` | user | `my_listings_needing_payment` (backend/api/domains/pricing/router.py:161) |
 | POST | `/pricing/listing-fee/pay` | user | `pay_listing_fee` (backend/api/domains/pricing/router.py:109) |
 | GET | `/pricing/listing-fee/payments/{payment_id}` | user | `listing_fee_payment_status` (backend/api/domains/pricing/router.py:131) |
 | GET | `/pricing/listing-fee/quote` | user | `listing_fee_quote` (backend/api/domains/pricing/router.py:39) |
 | POST | `/pricing/listing-fee/renew-free` | user | `renew_listing_free` (backend/api/domains/pricing/router.py:144) |
-| GET | `/pricing/plans` | public | `pricing_plans` (backend/api/domains/pricing/router.py:195) |
-| GET | `/pricing/safe-payment` | public | `safe_payment_info` (backend/api/domains/pricing/router.py:227) |
-| GET | `/pricing/store-plan` | public | `store_plan` (backend/api/domains/pricing/router.py:201) |
+| GET | `/pricing/plans` | public | `pricing_plans` (backend/api/domains/pricing/router.py:197) |
+| GET | `/pricing/safe-payment` | public | `safe_payment_info` (backend/api/domains/pricing/router.py:229) |
+| GET | `/pricing/store-plan` | public | `store_plan` (backend/api/domains/pricing/router.py:203) |
 | GET | `/ready` | public | `ready` (backend/main.py:627) |
 | POST | `/reviews/` | user | `submit_review` (backend/api/domains/reviews/router.py:48) |
 | GET | `/reviews/my-deals` | user | `my_reviewable_deals` (backend/api/domains/reviews/router.py:82) |
@@ -659,6 +659,7 @@ Counts: admin 94, optional 7, public 72, token 6, user 220.
 - `media.py` — Store Media — small abstraction over Store.logo_url / Store.photos.
 - `naming.py` — Store link names: the `clanix` in https://broka.co.ke/store/clanix.
 - `opening_hours.py` — Structured opening hours for a physical store.
+- `plan_cover.py` — A store plan's places, for its owner's own listings (PRICING.md §5).
 - `rating.py` — Store rating — a shop's own number, 0-10.
 - `review_scope.py` — Which reviews belong to a store.
 - `router.py` — Stores router.
@@ -1017,7 +1018,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-181 files in `backend/tests/`.
+182 files in `backend/tests/`.
 
 - `test_admin_additions.py` — Admin additions: SMS cost hook, timeseries, detail reads, users search.
 - `test_admin_alerts.py` — Admin alerts: event-driven creation, dedup, transitions, SSE smoke.
@@ -1174,6 +1175,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_store_order_rules.py` — The store-order rules on their own: the state machine, the payment-report rules, the money arithmetic and the notification wording.
 - `test_store_orders.py` — Store orders, end to end through the API: a buyer with no app signs in with an SMS code, sends a store an order request, the store confirms…
 - `test_store_orders_migration.py` — The store-orders schema change on a database that predates it.
+- `test_store_plan_cover.py` — A store plan's places cover its owner's own listings (stores/plan_cover.py).
 - `test_store_rating.py` — Store rating, directory order, and the store insights endpoint.
 - `test_store_schema_migration.py` — The store-type migration on a database that predates it.
 - `test_store_setup.py` — Online Stores phase 2: setting a store up, and what its owner sees.
@@ -1898,7 +1900,7 @@ Modules:
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `BUSINESS_MODEL_REVIEW.md` — BROKA's business model without the commission
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Admin Email Reply: one message to one address, from the BROKA admin address (2026-11-20)
+- `CHANGES.md` — Listing fee: store plans cover their owners' listings, one unit's price, no monthly figures; chats: escrow as a pill, a slim counterpart ro…
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
