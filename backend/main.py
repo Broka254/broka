@@ -366,6 +366,9 @@ app.include_router(admin_intelligence_router, prefix="/admin", tags=["Admin - In
 # User activity intelligence and account moderation (suspend / reinstate).
 from api.domains.admin.activity import router as admin_activity_router
 app.include_router(admin_activity_router, prefix="/admin", tags=["Admin - Activity"])
+# Listing intelligence: rankings, trending and per-listing performance.
+from api.domains.admin.listing_intelligence import router as admin_listing_intel_router
+app.include_router(admin_listing_intel_router, prefix="/admin", tags=["Admin - Listing Intelligence"])
 # Production cost tracking. Mounted at /admin/revenue/costs, a more specific
 # prefix than /admin/revenue, whose handler lives in alerts_revenue.py above.
 app.include_router(
