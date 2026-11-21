@@ -37,6 +37,48 @@ class FeeOption {
       );
 }
 
+/// The seller's store plan, when its places cover one of their own listings
+/// or have room for it (backend stores/plan_cover.py): a shop that paid for
+/// 20 listings pays no listing fee until it has 20 up.
+class StorePlanCover {
+  const StorePlanCover({
+    required this.storeName,
+    required this.places,
+    required this.inUse,
+    required this.free,
+    required this.covered,
+    this.until,
+  });
+
+  final String storeName;
+
+  /// Listings the plan pays for, and how many of them are taken.
+  final int places;
+  final int inUse;
+  final int free;
+
+  /// The listing asked about is already on the plan (false: a place is
+  /// free for it).
+  final bool covered;
+
+  /// When the plan's paid time ends - and with it a covered listing's.
+  final DateTime? until;
+
+  static StorePlanCover? fromJson(Object? j) {
+    if (j is! Map) return null;
+    final until = j['until'] as String?;
+    return StorePlanCover(
+      storeName: j['store_name'] as String? ?? 'your store',
+      places: _int(j['places']),
+      inUse: _int(j['in_use']),
+      free: _int(j['free']),
+      covered: j['covered'] == true,
+      // Naive UTC from the server.
+      until: until == null ? null : DateTime.tryParse('${until}Z')?.toLocal(),
+    );
+  }
+}
+
 /// Where a listing's paid time stands (listings/paid.py fee_state).
 class FeeState {
   const FeeState({required this.status, required this.live, required this.paidUntil});
@@ -83,11 +125,15 @@ class ListingFeeQuote {
     required this.feesEnabled,
     this.discountsApply = true,
     this.listingValue = 0,
+    this.pricedOn = 0,
+    this.quantity = 1,
+    this.multiUnitPercent = 0,
     this.monthsAvailable,
     this.state,
     this.periodMonths = 2,
     this.freeListing = false,
     this.storeCovered = false,
+    this.storePlan,
     this.launchOffer,
   });
 
@@ -125,8 +171,19 @@ class ListingFeeQuote {
   /// applies, and the price is the listing's value alone.
   final bool discountsApply;
 
-  /// Price x units, KES - what the fee is charged on.
+  /// Price x units, KES: what the listing offers. Not what the fee is
+  /// charged on since 2026-11-20 - that is [pricedOn].
   final double listingValue;
+
+  /// One unit's price, KES: what the fee is charged on.
+  final double pricedOn;
+
+  /// Units in the listing.
+  final int quantity;
+
+  /// What more than one unit adds to the fee, in percent (20), however
+  /// many there are; 0 for a single unit.
+  final int multiUnitPercent;
 
   /// For an existing listing: months that can still be paid for.
   final int? monthsAvailable;
@@ -136,8 +193,13 @@ class ListingFeeQuote {
   /// the launch offer. The sell screen says so instead of quoting a fee.
   final bool freeListing;
 
-  /// Posted through the seller's store: no listing fee, ever.
+  /// Posted through the seller's store - or, for a listing about to be
+  /// posted, taking a place on their store plan ([storePlan]): no listing fee.
   final bool storeCovered;
+
+  /// The seller's store plan when it covers this listing of their own, or
+  /// has a place free for it; null otherwise.
+  final StorePlanCover? storePlan;
 
   /// The launch offer as this seller stands with it, when quoted.
   final LaunchOffer? launchOffer;
@@ -169,10 +231,15 @@ class ListingFeeQuote {
       // Absent from older servers, which always applied the discounts.
       discountsApply: discounts['apply'] != false,
       listingValue: _double(j['listing_value']),
+      // Older servers sent no priced_on: they charged price x units.
+      pricedOn: _double(j['priced_on']),
+      quantity: j['quantity'] == null ? 1 : _int(j['quantity']),
+      multiUnitPercent: _int(j['multi_unit_percent']),
       monthsAvailable: j['months_available'] == null ? null : _int(j['months_available']),
       state: FeeState.fromJson(j['listing_fee']),
       freeListing: j['free_listing'] == true,
       storeCovered: j['store_covered'] == true,
+      storePlan: StorePlanCover.fromJson(j['store_plan']),
       launchOffer: j['launch_offer'] is Map
           ? LaunchOffer.fromQuoteJson((j['launch_offer'] as Map).cast<String, dynamic>())
           : null,
@@ -298,14 +365,29 @@ class ListingAwaitingFee {
 
 String _pct(double rate) => '${(rate * 100).round()}%';
 
+/// What the fee is charged on (2026-11-20): one unit's price, and a flat
+/// share more for a listing of several - the same for 2 units or 200. Null
+/// from a server that sends no priced_on (it charged price x units).
+String? pricedOnText(ListingFeeQuote q) {
+  if (q.pricedOn <= 0) return null;
+  if (q.quantity > 1 && q.multiUnitPercent > 0) {
+    return 'Priced on one unit: ${formatKes(q.pricedOn)}, plus ${q.multiUnitPercent}% '
+        'because you\'re listing ${q.quantity} - the same however many you list.';
+  }
+  return 'Priced on the item\'s price: ${formatKes(q.pricedOn)}.';
+}
+
 /// Why the price is what it is - one line per discount.
 List<String> feeReasons(ListingFeeQuote q) {
   final lines = <String>[];
+  final pricedOn = pricedOnText(q);
   if (!q.discountsApply) {
-    if (q.listingValue > 0) {
+    if (pricedOn != null) {
+      lines.add(pricedOn);
+    } else if (q.listingValue > 0) {
       lines.add('Priced on what you\'re listing: ${formatKes(q.listingValue)} (price \u00d7 units).');
     }
-    lines.add('The rate falls as the value rises, so bigger listings pay a smaller share.');
+    lines.add('The rate falls as the price rises, so dearer items pay a smaller share.');
     // The founding-seller offer travels in the launch discount's place.
     if (q.launchPercent > 0) {
       lines.add('Founding seller: ${q.launchPercent}% off your first listing.');
@@ -324,8 +406,14 @@ List<String> feeReasons(ListingFeeQuote q) {
     lines.add('Launch offer: ${q.launchPercent}% off while ${q.category} gets going on BROKA.');
   }
   lines.add('The more of your deals complete through BROKA, the less you pay.');
+  // Several units cost more whatever the record: said too, or a seller of
+  // ten would wonder why their price is above the category's.
+  if (pricedOn != null && q.multiUnitPercent > 0 && q.quantity > 1) lines.add(pricedOn);
   return lines;
 }
+
+/// "2 months", or "a month" for a server still selling single months.
+String periodLabel(int months) => months <= 1 ? 'a month' : '$months months';
 
 /// "about 3 weeks", "about 4 months".
 String roughDuration(int days) {
@@ -335,11 +423,16 @@ String roughDuration(int days) {
 }
 
 /// The recommendation, or null when the shortest period is enough.
+///
+/// The saving is against renewing the shortest period over and over, never
+/// "a month": a fee paid once for two months, quoted per month, read as a
+/// monthly charge (2026-11-20).
 String? recommendationText(ListingFeeQuote q) {
   if (q.strength == 'none' || q.recommendedMonths <= q.periodMonths) return null;
   final option = q.option(q.recommendedMonths);
+  final every = q.periodMonths <= 1 ? 'every month' : 'every ${q.periodMonths} months';
   final saving = option != null && option.savingPercent > 0
-      ? ', and costs ${option.savingPercent}% less a month than renewing'
+      ? ', and costs ${option.savingPercent}% less than renewing $every'
       : '';
   return '${q.category} listings like this usually take ${roughDuration(q.expectedDaysToSell)} '
       'to find a buyer on BROKA. ${q.recommendedMonths} months keeps you in front of buyers '

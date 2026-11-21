@@ -351,39 +351,7 @@ class ListingService:
                 {MediaPurpose.LISTING_SHOWCASE, MediaPurpose.LISTING_PHOTO},
             )
 
-        # subcategory_id is a foreign key. An id that isn't a category (a
-        # draft saved before the taxonomy changed, say) used to reach the
-        # INSERT: a 500 on PostgreSQL, and on SQLite, which doesn't enforce
-        # the key, a listing filed under nothing.
-        subcategory_id = data.get("subcategory_id") or None
-        subcategory = await self.db.get(Category, subcategory_id) if subcategory_id else None
-        if subcategory_id and subcategory is None:
-            raise HTTPException(
-                status_code=400,
-                detail="That category is no longer available. Go back and choose it again.",
-            )
-        # The top-level category is the subcategory's parent, whatever name
-        # the request carried: the two used to be taken separately, so a
-        # draft could file a plot under "Electronics" - and the Land size
-        # rule below keys on the category.
-        category_name = data["category"]
-        if subcategory is not None:
-            top = (
-                await self.db.get(Category, subcategory.parent_id)
-                if subcategory.parent_id else subcategory
-            )
-            if top is not None:
-                category_name = top.name
-
-        attributes = data.get("attributes")
-        if category_name.strip().lower() == rules.LAND_CATEGORY.lower():
-            # Land must say how big it is (validation.clean_land_details).
-            try:
-                attributes = rules.clean_land_details(attributes)
-            except PydanticCustomError as exc:
-                raise HTTPException(status_code=400, detail=exc.message())
-        if subcategory is not None and attributes:
-            attributes = await self._file_brands(subcategory.id, attributes)
+        category_name, subcategory_id, attributes = await self._filed_category(data)
 
         # Store association (optional - spec §5/§11: "[No Store] / [My
         # Store]" at creation time). Ownership is checked server-side
@@ -496,6 +464,20 @@ class ListingService:
         if awaiting_fee:
             from api.domains.pricing.service import free_listings_left
             awaiting_fee = await free_listings_left(self.db, seller_id) <= 0
+        if awaiting_fee:
+            # A store owner's own listing takes one of their store plan's
+            # places while it has one (stores/plan_cover): no fee, and it
+            # stays up exactly as long as the plan does. Before the launch
+            # and founding offers below, so a seller already covered never
+            # spends one of the platform's few free listings. Regression:
+            # only listings posted INTO the store were exempt, so a shop
+            # that had paid for 20 listings was charged a fee for the very
+            # first one posted under "No Store" (the sell wizard's default).
+            from api.domains.stores.plan_cover import plan_cover
+            cover = await plan_cover(self.db, seller_id, category_name, lock=True)
+            if cover is not None:
+                listing.paid_until = cover.until
+                awaiting_fee = False
         if awaiting_fee:
             listing.created_at = listing.paid_until = datetime.utcnow()
         # Hosting an auction is premium (PRICING.md): one of the seller's
@@ -613,6 +595,45 @@ class ListingService:
         return self._owner_listing_dict(listing, seller=seller, store=store, assets=assets,
                                         counted=counted)
 
+    async def _filed_category(self, data: dict) -> tuple[str, Optional[str], Optional[dict]]:
+        """(top-level category, subcategory id, attributes) for a create
+        body, checked and filed the way every listing is - for a new
+        listing and for an unpaid one its draft is sent again for."""
+        # subcategory_id is a foreign key. An id that isn't a category (a
+        # draft saved before the taxonomy changed, say) used to reach the
+        # INSERT: a 500 on PostgreSQL, and on SQLite, which doesn't enforce
+        # the key, a listing filed under nothing.
+        subcategory_id = data.get("subcategory_id") or None
+        subcategory = await self.db.get(Category, subcategory_id) if subcategory_id else None
+        if subcategory_id and subcategory is None:
+            raise HTTPException(
+                status_code=400,
+                detail="That category is no longer available. Go back and choose it again.",
+            )
+        # The top-level category is the subcategory's parent, whatever name
+        # the request carried: the two used to be taken separately, so a
+        # draft could file a plot under "Electronics" - and the Land size
+        # rule below keys on the category.
+        category_name = data["category"]
+        if subcategory is not None:
+            top = (
+                await self.db.get(Category, subcategory.parent_id)
+                if subcategory.parent_id else subcategory
+            )
+            if top is not None:
+                category_name = top.name
+
+        attributes = data.get("attributes")
+        if category_name.strip().lower() == rules.LAND_CATEGORY.lower():
+            # Land must say how big it is (validation.clean_land_details).
+            try:
+                attributes = rules.clean_land_details(attributes)
+            except PydanticCustomError as exc:
+                raise HTTPException(status_code=400, detail=exc.message())
+        if subcategory is not None and attributes:
+            attributes = await self._file_brands(subcategory.id, attributes)
+        return category_name, subcategory_id, attributes
+
     # What a seller may still change on a listing created but never paid
     # for: Go live created it, the seller backed out of the Listing fee
     # screen, changed the price or how many, and pressed Go live again.
@@ -639,6 +660,25 @@ class ListingService:
                 or listing.paid_until != listing.created_at):
             return
         changed = False
+        # Where it is filed, first: the delivery terms below depend on it.
+        # Regression: only _DRAFT_TERMS were refreshed, so a seller who went
+        # back from the Listing fee screen and moved the draft to another
+        # category - a Toyota Probox out of Electronics, into Automobiles ›
+        # Cars - got the first listing back as it was filed. The fee screen
+        # then advised "Electronics listings like this usually take about 2
+        # months..." and priced the advice and the cost floor as Electronics.
+        if "category" in data:
+            category_name, subcategory_id, attributes = await self._filed_category(data)
+            attributes_json = json.dumps(attributes) if attributes else None
+            if (listing.category, listing.subcategory_id, listing.attributes) != (
+                    category_name, subcategory_id, attributes_json):
+                listing.category = category_name
+                listing.subcategory_id = subcategory_id
+                listing.attributes = attributes_json
+                if not is_deliverable(category_name):
+                    # Land and buildings don't move (as at creation).
+                    listing.delivery_available = listing.delivery_note = None
+                changed = True
         for field in self._DRAFT_TERMS:
             if field not in data or data[field] is None and field in ("name", "price"):
                 continue

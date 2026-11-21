@@ -241,6 +241,23 @@ async def listing_fee_quote(
         result["launch_offer"] = {"eligible": False, "reason": "store_covered"}
         result["fees_enabled"] = False
         return result
+    # A listing of the seller's own that their store plan still has a place
+    # for pays nothing either (stores/plan_cover): ListingService.create
+    # posts it on the plan - after any free place, as create does - so the
+    # quote says so the way it does for a store listing, with the places.
+    if (new_listing and settings.listing_fees_enabled
+            and await free_listings_left(db, user_id) <= 0):
+        from api.domains.stores.plan_cover import plan_cover
+
+        cover = await plan_cover(db, user_id, category_name)
+        if cover is not None:
+            result["store_covered"] = True
+            result["store_plan"] = cover.to_dict()
+            result["free_listing"] = True
+            result["free_listings_per_seller"] = settings.free_listings_per_seller
+            result["launch_offer"] = {"eligible": False, "reason": "store_plan"}
+            result["fees_enabled"] = False
+            return result
     result["store_covered"] = False
     # Launch offer (first FREE_LISTING_OFFER_LIMIT listings, one per user):
     # a peek only - the slot is claimed in ListingService.create_listing's

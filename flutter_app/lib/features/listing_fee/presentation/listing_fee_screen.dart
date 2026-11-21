@@ -244,6 +244,11 @@ class _ListingFeeScreenState extends State<ListingFeeScreen> {
         onAction: () => Navigator.of(context).pop(true),
       );
     }
+    // One of the seller's own listings that their store plan's places cover,
+    // or have room for: before !feesEnabled, which the server also sends
+    // here so an older build never asks M-Pesa for it.
+    final plan = q.storePlan;
+    if (plan != null) return _onStorePlan(plan);
     if (!q.feesEnabled) {
       final offer = q.launchOffer;
       if (_needsFreeRenew(q)) {
@@ -322,6 +327,39 @@ class _ListingFeeScreenState extends State<ListingFeeScreen> {
       ]),
     );
   }
+
+  /// A shop that paid for 20 listings pays no listing fee until it has 20
+  /// up, its own listings included: on the plan already, or a place free
+  /// to put it up on, through the same free renewal call.
+  Widget _onStorePlan(StorePlanCover plan) {
+    final until = plan.until;
+    if (plan.covered) {
+      return CheckoutMessage(
+        key: const Key('fee-store-plan-covered'),
+        icon: Icons.storefront_rounded,
+        title: 'Covered by your store plan',
+        body: '"${widget.listingName}" is one of the ${plan.places} listings your '
+            '${plan.storeName} plan pays for, so there is no listing fee'
+            '${until == null ? '' : '. It stays up until ${_date(until)}'}'
+            ' - renewing the plan keeps it up.',
+        action: 'Done',
+        onAction: () => Navigator.of(context).pop(true),
+      );
+    }
+    return CheckoutMessage(
+      key: const Key('fee-store-plan-free'),
+      icon: Icons.storefront_rounded,
+      iconColor: BrokaColors.success,
+      title: 'Your store plan covers this one',
+      body: 'Your ${plan.storeName} plan pays for ${plan.places} listings and '
+          '${plan.free == 1 ? 'one place is' : '${plan.free} places are'} free. '
+          'Put "${widget.listingName}" up on one - no listing fee, and it stays up '
+          'while the plan is paid.',
+      action: 'Put it up free',
+      onAction: _renewing ? null : _renewFree,
+      busy: _renewing,
+    );
+  }
 }
 
 /// The quote's fee state as a countdown, for the banner above the price.
@@ -374,16 +412,25 @@ class _PriceHero extends StatelessWidget {
                       fontSize: 14,
                       decoration: TextDecoration.lineThrough,
                       decorationColor: BrokaColors.textMid)),
+            // "KES 980 for 2 months", said as one payment: "KES 980 / 2
+            // months" beside per-month figures read as a monthly charge.
             Text.rich(
                 TextSpan(children: [
                   TextSpan(
                       text: 'KES ${formatKesAmount(quote.monthlyFee)}',
                       style: const TextStyle(color: BrokaColors.textHigh, fontSize: 30, fontWeight: FontWeight.w900)),
                   TextSpan(
-                      text: quote.periodMonths == 1 ? ' / month' : ' / ${quote.periodMonths} months',
+                      text: ' for ${periodLabel(quote.periodMonths)}',
                       style: const TextStyle(color: BrokaColors.textMid, fontSize: 14, fontWeight: FontWeight.w600)),
                 ]),
                 key: const Key('fee-monthly')),
+            const SizedBox(height: 2),
+            Text(
+                quote.periodMonths <= 1
+                    ? 'One payment for the month.'
+                    : 'One payment for the whole ${quote.periodMonths} months.',
+                key: const Key('fee-period-note'),
+                style: const TextStyle(color: BrokaColors.textMid, fontSize: 12)),
           ]),
         ),
         if (discounted && quote.discountPercent > 0)
@@ -495,11 +542,13 @@ class _MonthOption extends StatelessWidget {
                       ),
                     ],
                   ]),
-                  if (option.months > 1)
-                    Text(
-                        'KES ${formatKesAmount(option.perMonth.round())} a month'
-                        '${option.savingPercent > 0 ? ' · save ${option.savingPercent}%' : ''}',
-                        style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
+                  // The total is for the whole period, paid once - never a
+                  // price per month beside it (2026-11-20: "KES 490 a
+                  // month" under KES 980 read as a monthly bill).
+                  Text(
+                      'Paid once for $months'
+                      '${option.savingPercent > 0 ? ' · save ${option.savingPercent}%' : ''}',
+                      style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
                 ]),
               ),
               Text('KES ${formatKesAmount(option.total)}',

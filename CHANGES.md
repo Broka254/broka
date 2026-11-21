@@ -1,3 +1,67 @@
+# Listing fee: store plans cover their owners' listings, one unit's price, no monthly figures; chats: escrow as a pill, a slim counterpart row, long messages folded, a quiet review hint (2026-11-20)
+
+Asked for: stop charging store owners a listing fee before their plan's
+listings are used up; fix the fee screen calling a Toyota Probox an
+Electronics listing; drop the per-month prices and say plainly the fee is for
+two months; fold very long chat messages; find the "pay with escrow" widget a
+smaller place in both chats and fold the counterpart card into a "more"
+button; charge one unit's price plus 20% for a listing of several; tell
+buyers, without fuss, that they can review the seller.
+
+- **A store plan's places cover its owner's own listings**
+  (`stores/plan_cover.py`). A shop that paid for 20 listings was charged a fee
+  for its very first listing posted under "No Store" - the sell wizard's
+  default - because only listings posted into the store were exempt. Now an
+  owner's listing takes one of the plan's spare places (live store listings
+  plus their own listings on the plan, counted against
+  `StoreSubscription.listings`), is posted live with no fee, and runs on the
+  plan's clock: its `paid_until` is the plan's, and paying for the plan moves
+  both together (`billing._settle` -> `carry_forward`), a lapsed plan paid
+  again included. That equality is the record; no column was added and the
+  schema version is unchanged. Only for what the store may hold
+  (`stores/categories.may_hold`): a shop's places, priced for goods, never
+  cover a car or land. Once the places are full, the owner's own listings pay
+  as anyone's do. The draft quote says `store_covered` with a `store_plan`
+  (places, in use, free); a listing posted before the plan had room shows
+  "Your store plan covers this one" on the Listing fee screen and goes up
+  free through `POST /pricing/listing-fee/renew-free`, which now does that
+  while fees are on (and only that). A raise of a covered listing's price
+  shortens nothing, and its expiry SMS is left to the store's own. The plan's
+  size is still not a cap on listings posted into the store itself.
+- **The Probox filed as Electronics.** A seller who backed out of the Listing
+  fee screen and moved the draft to another category got the first listing
+  back as filed: the draft-key replay (`_refresh_unpaid_draft`) refreshed
+  price and quantity but not the category, type of item or details, so the
+  advice ("Electronics listings like this usually take about 2 months") and
+  the cost floor were Electronics'. The replay now files them the way create
+  does (`_filed_category`, shared by both). A listing already filed this way
+  keeps its category: a posted listing's category can't be edited.
+- **The fee is one unit's price, 20% more for several, however many**
+  (`engine.units_fee`, `MULTI_UNIT_SURCHARGE`): a KES 10,000 phone pays 150,
+  two or ten of them 180 (ten paid 370 on price x quantity). The KES 2,000
+  ceiling still holds. The quote adds `priced_on` and `multi_unit_percent`;
+  `listing_value` stays price x quantity. PRICING.md's tables are
+  recomputed from the engine.
+- **No price per month on the Listing fee screen.** "KES 980 for 2 months",
+  "One payment for the whole 2 months", options read "Paid once for 4 months
+  · save 11%", and the advice saves "11% less than renewing every 2 months".
+- **Chats.** Escrow is a glowing "Escrow" pill beside the room switch in both
+  chats (`EscrowPill`), opening the callout - or the buyer's pay panel in the
+  direct chat - in a sheet (`showEscrowSheet`); it was a full-width card under
+  the switch, and above the composer in the Zeno room. The Zeno room's
+  counterpart card is one slim row (name, listing, deal likelihood) with a ⋯
+  "Deal details" sheet for the record, map, profile and review. Text messages
+  over twelve lines fold with "Read more" (`ExpandableMessageText`, measured
+  at the bubble's width and text size).
+- **Reviews.** A buyer with an unreviewed deal with the seller sees one muted
+  line under the direct chat, "You can review Xavier", and a row in the Zeno
+  room's deal sheet. Reviews still need a deal (`reviews/service.py`); while
+  payments are off the app creates none, so few buyers will see it yet.
+- **Not run in the sandbox this was written in** (no route to PyPI or the
+  Flutter SDK): the backend and app suites. The pricing engine's tests in
+  `test_pricing.py` (`TestListPrice`, `TestPeriods`) were run against the real
+  engine, and `ruff`/`py_compile` pass. CI is the first run of the rest.
+
 # Admin Email Reply: one message to one address, from the BROKA admin address (2026-11-20)
 
 Asked for: a lightweight way for administrators to answer a customer by email

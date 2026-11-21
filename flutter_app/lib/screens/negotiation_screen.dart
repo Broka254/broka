@@ -24,7 +24,10 @@ import '../widgets/broka_image.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../services/call_dock.dart';
+import '../core/utils/result.dart';
 import '../features/escrow/presentation/escrow_actions.dart';
+import '../features/reviews/data/repositories/reviews_repository.dart';
+import '../features/reviews/domain/models/review.dart';
 import '../features/safe_payment/escrow_callout.dart';
 import '../features/safe_payment/payments_shown.dart';
 import '../features/safe_payment/safe_payment.dart' show openZenoEscrowGuide;
@@ -964,6 +967,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       unawaited(_pollNewMessages());
     });
     _loadCounterpartyInfo();
+    unawaited(_loadReviewable());
     _refreshZenoUnreadCount();
     // Nothing on screen to keep current while the app is in the background:
     // the poller and pushes own that time, and resuming refreshes it all
@@ -3747,27 +3751,14 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         animate: widget.animateBackground,
         child: Column(children: [
           _buildHeader(),
+          // Escrow rides in this row now (_escrowPill): it used to be a
+          // full-width card of its own under it.
           if (!_isStoreThread)
             ChatModeSwitch(
               zenoActive: false,
               unread: _zenoUnreadCount,
               onSwitch: _openZenoAi,
-            ),
-          // Every buyer can pay from here: there is no "finalize" step before
-          // it any more (auctions are paid from the auction screen).
-          // Nothing at all while payments are hidden (payments_shown.dart).
-          if (_isStoreThread || !paymentsShown)
-            const SizedBox.shrink()
-          else if (_role == 'buyer' && _listing != null && _listing!.listingType != 'auction')
-            _buildPaymentPanel()
-          // The seller needs escrow as much: "the money is held" is what lets
-          // them hand an item to a stranger - and a screenshot is not.
-          else if (_role == 'seller' && _listing != null)
-            EscrowCallout(
-              compact: true,
-              title: 'Get paid with escrow',
-              margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-              onZeno: () => openZenoEscrowGuide(context, prompt: 'How do I get paid through escrow?'),
+              trailing: _escrowPill(),
             ),
           Expanded(child: _loading
               ? const Center(child: CircularProgressIndicator(color: BrokaColors.gold))
@@ -3914,13 +3905,45 @@ class _NegotiationScreenState extends State<NegotiationScreen>
 
   // ── Payment Panel ──────────────────────────────────────────────────────────
 
-  /// The buyer's way to pay, at the top of the chat - loud on purpose
+  /// Escrow beside the room switch, as an EscrowPill (escrow_callout.dart,
+  /// 2026-11-20). It was a full-width card under the switch on every visit -
+  /// the buyer's three lines and two buttons tall - and the conversation is
+  /// what this screen is for. The pill opens the same words and buttons in
+  /// a sheet. Every buyer can pay from here (no "finalize" step before it;
+  /// auctions are paid from the auction screen), and the seller needs
+  /// escrow as much: "the money is held" is what lets them hand an item to
+  /// a stranger - and a screenshot is not. Nothing at all while payments
+  /// are hidden (payments_shown.dart).
+  Widget? _escrowPill() {
+    final listing = _listing;
+    if (!paymentsShown || _isStoreThread || listing == null) return null;
+    if (_role == 'buyer' && listing.listingType != 'auction') {
+      return EscrowPill(
+        key: const Key('escrow-pill'),
+        tooltip: 'Pay with escrow',
+        onTap: () => showEscrowSheet(context,
+            title: 'Pay with escrow', body: (dismiss) => _buildPaymentPanel(dismiss: dismiss)),
+      );
+    }
+    if (_role == 'seller') {
+      return EscrowPill(
+        key: const Key('escrow-pill'),
+        tooltip: 'Get paid with escrow',
+        onTap: () => showEscrowSheet(context,
+            title: 'Get paid with escrow',
+            onZeno: () => openZenoEscrowGuide(context, prompt: 'How do I get paid through escrow?')),
+      );
+    }
+    return null;
+  }
+
+  /// The buyer's way to pay, in the escrow sheet - loud on purpose
   /// (escrow_callout.dart). While BROKA holds no payments, Pay with escrow
   /// opens the escrow services and Zeno's walkthrough (escrow_actions.dart
   /// -> safe_payment.dart); with payments on, BROKA's own escrow payment.
-  Widget _buildPaymentPanel() {
+  /// [dismiss] closes the sheet before either button acts.
+  Widget _buildPaymentPanel({VoidCallback? dismiss}) {
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 10, 16, 4),
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
       decoration: BoxDecoration(
         gradient: LinearGradient(colors: [
@@ -3943,7 +3966,10 @@ class _NegotiationScreenState extends State<NegotiationScreen>
           Expanded(
             child: GestureDetector(
               key: const Key('pay-now'),
-              onTap: _payNow,
+              onTap: () {
+                dismiss?.call();
+                _payNow();
+              },
               child: Container(
                 padding: const EdgeInsets.symmetric(vertical: 9),
                 alignment: Alignment.center,
@@ -3956,7 +3982,10 @@ class _NegotiationScreenState extends State<NegotiationScreen>
           ),
           const SizedBox(width: 8),
           TextButton.icon(
-            onPressed: () => openZenoEscrowGuide(context),
+            onPressed: () {
+              dismiss?.call();
+              openZenoEscrowGuide(context);
+            },
             style: TextButton.styleFrom(
               backgroundColor: BrokaColors.neonPurple,
               foregroundColor: Colors.white,
@@ -3968,6 +3997,62 @@ class _NegotiationScreenState extends State<NegotiationScreen>
           ),
         ]),
       ]),
+    );
+  }
+
+  // ── Reviews ────────────────────────────────────────────────────────────────
+
+  /// The buyer's deals with this seller - or, in a store thread, with this
+  /// shop - not reviewed yet. A review needs a deal (backend
+  /// reviews/service.py), so a conversation alone never offers one.
+  List<ReviewableDeal> _toReview = const [];
+
+  Future<void> _loadReviewable() async {
+    if (_role != 'buyer') return;
+    final sellerId = _isStoreThread ? null : _listing?.sellerId;
+    final storeId = _isStoreThread ? _storeId : null;
+    if ((sellerId == null && storeId == null) || sellerId == ApiService.currentUserId) return;
+    final result = await reviewsRepository.myReviewableDeals(sellerId: sellerId, storeId: storeId);
+    if (!mounted) return;
+    if (result case Success(:final data)) {
+      setState(() => _toReview = [for (final d in data) if (!d.alreadyReviewed) d]);
+    }
+  }
+
+  Future<void> _writeReview() async {
+    final pending = _toReview;
+    if (pending.isEmpty) return;
+    final wrote = await Navigator.pushNamed(context, '/review', arguments: {
+      if (_isStoreThread) 'store_id': _storeId else 'seller_id': pending.first.sellerId,
+      'seller_name': _counterpartyName,
+      if (pending.length == 1) 'deal_id': pending.first.dealId,
+      if (pending.length == 1) 'listing_name': pending.first.listingName,
+    });
+    if (wrote == true && mounted) await _loadReviewable();
+  }
+
+  /// "You can review Arnold": one quiet line under the conversation, in the
+  /// thread's own muted text - a buyer with a deal to review is told, not
+  /// pressed (no card, no sheet popping up). Shown only while there is a
+  /// deal left to review.
+  Widget _reviewHint() {
+    final name = _counterpartyName.split(' ').first;
+    return Padding(
+      key: const Key('direct-chat-review-hint'),
+      padding: const EdgeInsets.only(top: 4, bottom: 4),
+      child: Center(
+        child: TextButton.icon(
+          onPressed: _writeReview,
+          style: TextButton.styleFrom(
+            foregroundColor: BrokaColors.textMid,
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            textStyle: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600),
+          ),
+          icon: const Icon(Icons.star_outline_rounded, size: 14, color: BrokaColors.gold),
+          label: Text('You can review $name'),
+        ),
+      ),
     );
   }
 
@@ -4077,8 +4162,11 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       reverse: false,
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-      itemCount: rows.length,
+      // The review hint, when there is one, is the thread's last row: under
+      // the latest message, scrolling with it.
+      itemCount: rows.length + (_toReview.isEmpty ? 0 : 1),
       itemBuilder: (_, i) {
+        if (i >= rows.length) return _reviewHint();
         final row = rows[i];
         final first = row.first;
         final id = first.id;
@@ -4647,9 +4735,12 @@ class _ChatBubble extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (hasQuote) quoteBlock(),
-            Text(message.content,
+            // Folded past twelve lines, "Read more" to open it: a pasted
+            // report drew a bubble several screens tall.
+            ExpandableMessageText(message.content,
                 style: TextStyle(color: isMe ? Colors.white : BrokaColors.textHigh,
-                    fontSize: 14.5, height: 1.4)),
+                    fontSize: 14.5, height: 1.4),
+                linkColor: isMe ? Colors.white : BrokaColors.neonCyan),
           ],
         ),
       );

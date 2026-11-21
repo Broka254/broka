@@ -24,7 +24,8 @@ from main import app
 from api.core import mpesa_stk
 from api.core.config import settings
 from api.database import (
-    AsyncSessionLocal, AuditLog, Listing, ListingStatus, SellerTier, User, init_db, reset_engine,
+    AsyncSessionLocal, AuditLog, Category, Listing, ListingStatus, SellerTier, User, init_db,
+    reset_engine,
 )
 from api.domains.listings.paid import MONTH
 from api.models.listing_payment import ListingPayment
@@ -154,6 +155,14 @@ async def _checkout_id(payment_id) -> str:
 async def _in_feed(client, listing_id) -> bool:
     items = (await client.get("/listings/", params={"limit": 100, "sort": "recent"})).json()
     return any(i["id"] == listing_id for i in items)
+
+
+async def _subcategory(top: str, name: str) -> str:
+    async with AsyncSessionLocal() as db:
+        parent = (await db.execute(select(Category.id).where(
+            Category.name == top, Category.parent_id.is_(None)))).scalar_one()
+        return (await db.execute(select(Category.id).where(
+            Category.parent_id == parent, Category.name == name))).scalar_one()
 
 
 async def _paid_listing(client, headers, months=2):
@@ -317,6 +326,28 @@ class TestPaying:
         assert after["period_fee"] > before["period_fee"]
         r = await _pay(client, h, first["id"], months=2)
         assert r.json()["amount"] == after["options"][0]["total"]
+
+    @pytest.mark.asyncio
+    async def test_going_back_and_changing_the_category_files_it_there(self, client, fees_on):
+        # The Listing fee screen advised "Electronics listings like this
+        # usually take about 2 months to find a buyer" for a Toyota Probox.
+        # Its seller had backed out of the screen, moved the draft from
+        # Electronics to Automobiles > Cars and pressed Go live again; the
+        # draft key replayed the listing still filed under Electronics, so
+        # the advice - and the cost floor under the fee - were Electronics'.
+        _, h = await _user()
+        key = {**h, "X-Idempotency-Key": uuid.uuid4().hex}
+        first = await _listing(client, key, subcategory_id=await _subcategory("Electronics", "Phones"))
+        assert first["category"] == "Electronics"
+        cars = await _subcategory("Automobiles", "Cars")
+        again = await _listing(client, key, name="Toyota Probox 2014", category="Automobiles",
+                               subcategory_id=cars, price=1_500_000,
+                               attributes={"make": "Toyota", "model": "Probox"})
+        assert again["id"] == first["id"], "still one listing"
+        assert again["category"] == "Automobiles" and again["subcategory_id"] == cars
+        assert again["attributes"]["model"] == "Probox"
+        q = (await client.get(f"/pricing/listing-fee/listings/{first['id']}/quote", headers=h)).json()
+        assert q["category"] == "Automobiles"
 
     @pytest.mark.asyncio
     async def test_a_paid_listing_is_not_changed_by_a_replay(self, client, fees_on, mpesa):

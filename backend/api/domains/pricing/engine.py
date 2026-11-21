@@ -1,10 +1,11 @@
 """The listing fee: f = C x R, for two months at a time.
 
   C  what the listing costs to list for one period (PERIOD_MONTHS, two
-     months) at full price: a cube root
-     of its value - price x quantity - held between KES 10 and 2,000, and
-     never under the cost of serving it (costs.listing_month_cost). This is
-     the "list price" a seller sees crossed out.
+     months) at full price: a cube root of ONE unit's price, 20% more when
+     the listing offers more than one unit (however many), held between
+     KES 10 and 2,000, and never under the cost of serving it
+     (costs.listing_month_cost). This is the "list price" a seller sees
+     crossed out.
   R  the risk coefficient, 0.4-1.0: how likely this seller's deals are to
      leave BROKA before the money moves. 1.0 pays the full list price; a
      seller whose deals reliably complete through escrow pays as little as
@@ -31,27 +32,32 @@ from api.domains.pricing.categories import CategoryPricing
 
 # ── C: the list price ────────────────────────────────────────────────────────
 
-# The fee is charged on what the listing is worth: its price times the units
-# it offers. 200 phones are 200 phones' worth of stock and pay on that, not
-# on one phone's price nudged up for quantity - the old square-root-per-unit
-# fee, capped per category and grown only by the log of the quantity, had 200
-# KES 180k iPhones (KES 36M) paying 3.7 times what one did.
+# The fee is charged on ONE unit's price. A listing offering more than one
+# unit pays 20% more than a single one would - two phones or two hundred
+# (the founder, 2026-11-20): a KES 10,000 phone pays 150, two of them 180,
+# and ten still 180. From 2026-10-09 it was charged on the whole value,
+# price x units, and sellers with stock found it unreasonably high - ten of
+# those phones paid 370, and every extra unit added to the bill.
 #
-# One month is a cube root of that value, set by the founder on 2026-10-09:
+# A period is a cube root of that price, set by the founder on 2026-10-09:
 #
 #     f(x) = 8.91822 x cbrt(x) - 42.1011, held between KES 10 and 2,000
 #
 # fitted through round fees - a KES 1,500 dress pays 60, a KES 20,000 phone
-# 200, a KES 1M car 850, and from KES 12M of value the 2,000 ceiling. A cube
-# root rises smoothly (no band edge where one more shilling jumps the fee)
-# and ever more slowly: a listing fee is paid whether or not anything sells,
-# so a share of KES 36M of stock would be an up-front commission with no sale
-# behind it. It replaced the marginal value bands (0.50% of the first
-# KES 20,000 ... 0.03% above 2M, capped at 15,000), which charged a phone
-# half as much and a big listing up to seven times as much. PRICING.md §2 has
-# the worked examples.
+# 200, a KES 1M car 850, and from KES 12M the 2,000 ceiling. A cube root
+# rises smoothly (no band edge where one more shilling jumps the fee) and
+# ever more slowly: a listing fee is paid whether or not anything sells, so
+# it must never become an up-front commission with no sale behind it. It
+# replaced the marginal value bands (0.50% of the first KES 20,000 ... 0.03%
+# above 2M, capped at 15,000), which charged a phone half as much and a big
+# listing up to seven times as much. PRICING.md §2 has the worked examples.
 FEE_SCALE = 8.91822
 FEE_OFFSET = -42.1011
+
+# What more than one unit adds to one unit's fee, whatever the count. A flat
+# share, not a per-unit step: the seller of ten pays what the seller of two
+# does, so a listing is never cheaper split into several.
+MULTI_UNIT_SURCHARGE = 0.20
 
 # A listing is paid for two months at a time (the founder, 2026-10-11): the
 # cube-root fee buys two months, not one - a KES 1,500 dress pays KES 60 for
@@ -61,19 +67,20 @@ FEE_OFFSET = -42.1011
 # records and older app builds read them.
 PERIOD_MONTHS = 2
 
-# The least and the most one listing pays for a period, however little or
-# much it offers. The ceiling is reached at about KES 12M of value; a seller
-# listing more than that wants a store.
+# The least and the most one listing pays for a period, however cheap or
+# dear it is and however many units it offers. The ceiling is reached at
+# about KES 12M a unit (about KES 7M with the surcharge for several).
 MIN_MONTHLY_FEE = 10
 MAX_MONTHLY_FEE = 2_000
 
 # Only the duration advice caps quantity: stock past this clears at the same
-# pace. The fee itself counts every unit.
+# pace. The fee asks only whether there is more than one unit.
 QUANTITY_CAP = 1_000
 
 
 def listing_value(unit_price: float, quantity: int = 1) -> float:
-    """What the listing offers, in shillings: price x units."""
+    """What the listing offers, in shillings: price x units. Shown to the
+    seller and used by the duration advice - the fee is not charged on it."""
     return max(unit_price, 0.0) * max(int(quantity or 1), 1)
 
 
@@ -83,9 +90,23 @@ def real_cbrt(x: float) -> float:
 
 
 def value_fee(value: float) -> float:
-    """One month's fee on a listing worth `value` shillings, KES 10-2,000."""
+    """One period's fee on a price of `value` shillings, KES 10-2,000."""
     raw = FEE_SCALE * real_cbrt(value) + FEE_OFFSET
     return max(MIN_MONTHLY_FEE, min(MAX_MONTHLY_FEE, raw))
+
+
+def multi_unit_percent(quantity: int = 1) -> int:
+    """The surcharge for more than one unit, in percent: 0 for one unit."""
+    return round(100 * MULTI_UNIT_SURCHARGE) if max(int(quantity or 1), 1) > 1 else 0
+
+
+def units_fee(unit_price: float, quantity: int = 1) -> float:
+    """One unit's fee, MULTI_UNIT_SURCHARGE more for any count above one -
+    still never over the KES 2,000 ceiling."""
+    fee = value_fee(max(unit_price, 0.0))
+    if multi_unit_percent(quantity):
+        fee = min(MAX_MONTHLY_FEE, fee * (1 + MULTI_UNIT_SURCHARGE))
+    return fee
 
 
 def list_price(category: CategoryPricing, unit_price: float, quantity: int = 1) -> float:
@@ -94,10 +115,10 @@ def list_price(category: CategoryPricing, unit_price: float, quantity: int = 1) 
     Never under what serving the listing costs (with the VAT on it): KES 10
     is under that for the categories whose buyers keep Zeno busiest (KES
     10.91-13.18 for electronics, vehicles, property and land), so a listing
-    there worth under about KES 240 pays the cost instead.
+    there priced under about KES 240 pays the cost instead.
     """
     cost = period_cost(category)
-    return max(costs.with_vat(cost), value_fee(listing_value(unit_price, quantity)))
+    return max(costs.with_vat(cost), units_fee(unit_price, quantity))
 
 
 def period_cost(category: CategoryPricing) -> float:
@@ -331,6 +352,10 @@ def quote(
         "unit_price": unit_price,
         "quantity": quantity,
         "listing_value": listing_value(unit_price, quantity),
+        # What C is charged on: one unit's price, and the share added
+        # because the listing offers more than one (0 for a single unit).
+        "priced_on": max(unit_price, 0.0),
+        "multi_unit_percent": multi_unit_percent(quantity),
         "currency": "KES",
         "list_price": list_kes,
         "max_monthly_fee": MAX_MONTHLY_FEE,

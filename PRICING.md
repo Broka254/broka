@@ -21,14 +21,14 @@ Figures are in Kenyan shillings (KES), at **USD 1 = KES 129.5** (late September
 |---|---|
 | **Buyer-to-seller payments** | **Paused** (`IN_APP_PAYMENTS_ENABLED=false`): buyers pay sellers directly, so BROKA charges **no commission** for now. The app advises meeting to inspect first, and lists independent escrow services for deals at a distance (`GET /pricing/safe-payment`). See "While BROKA handles no payments" below |
 | **Commission**, when payments return | Negotiated deal: buyer pays **4.49%** (BROKA 3.49%, never under KES 20, + E-Confirm 1%). Auction: **5%** (BROKA 4% + E-Confirm 1%) |
-| **Listing fee** | Per listing, **for two months at a time** (2026-10-11), a cube root of its **value - price × quantity**: **f = 8.91822 × ∛value − 42.1011, between KES 10 and 2,000** (set 2026-10-09), never under what the listing costs to serve for those two months. A KES 1,500 dress pays KES 60 for two months, a KES 20,000 phone 200, a KES 800,000 car 785; from KES 12M of value (200 KES 180,000 iPhones, a house) it is KES 2,000. **Founding sellers' first listing is discounted by the order they joined**: the first 50 sellers list it free, the next 150 at half price, for 30 days (`FOUNDING_SELLER_TIERS`, `FOUNDING_DISCOUNT_DAYS`; costed in LAUNCH_DISCOUNT_MODEL.md). **One free listing per seller, ever**: the launch offer (first 50 listings, 60 days) and the founding offer's free band never stack, and deleting the free listing doesn't free another. 2, 4 or 6 months at a time; longer is cheaper per month |
+| **Listing fee** | Per listing, **for two months at a time** (2026-10-11), a cube root of **one unit's price**: **f = 8.91822 × ∛price − 42.1011, between KES 10 and 2,000** (set 2026-10-09), and **20% more when the listing offers more than one unit, however many** (2026-11-20; it was charged on price × quantity), never under what the listing costs to serve for those two months. A KES 1,500 dress pays KES 60 for two months, a KES 10,000 phone 150 - two or ten of them 180 - a KES 20,000 phone 200, a KES 800,000 car 785; from KES 12M a unit (a house) it is KES 2,000. **Founding sellers' first listing is discounted by the order they joined**: the first 50 sellers list it free, the next 150 at half price, for 30 days (`FOUNDING_SELLER_TIERS`, `FOUNDING_DISCOUNT_DAYS`; costed in LAUNCH_DISCOUNT_MODEL.md). **One free listing per seller, ever**: the launch offer (first 50 listings, 60 days) and the founding offer's free band never stack, and deleting the free listing doesn't free another. 2, 4 or 6 months at a time; longer is cheaper per month |
 | **Featured placement** | Short-term sellers only: KES 99 for 7 days, KES 350 for 28 days |
 | **Plus** | KES 199 / month: Zeno writing listing descriptions from photos, voice mode (15 requests every day), Zeno's texts, a Buying Agent watch, AI covers for ~2 listings |
 | **Pro** | KES 599 / month: pricing listings with Zeno against the market, Zeno negotiating for you, 3 watches, AI covers for ~7 listings, 2 auctions |
 | **Elite** | KES 1,499 / month: volume allowances, AI covers for ~20 listings, priority support |
 | **Free** | Buying, selling, typing to Zeno, negotiating, bidding and your own photos - plus one AI cover try and one listing written by Zeno from its photo |
 | **AI covers** | **Off for now** (`AI_COVERS_ENABLED=false`, 2026-11-19): sellers upload their own cover; no plan offers or counts AI covers and the free try is withheld until they are switched back on |
-| **Store** | Any size the owner picks (`GET /pricing/store-plan`). Shops (online stores): KES 60 a listing per two months for the first 20 - KES 1,199 for two months - then 15 a listing a month to 30, 14 to 100, 13 to 1,000 (30 listings 1,499 for two months, 100 listings 3,459), no opening fee. Car yards and agents: KES 2,999 a month for 10, then by the listing, KES 299 to open (waived on 6+ months). Store listings pay no listing fee |
+| **Store** | Any size the owner picks (`GET /pricing/store-plan`). Shops (online stores): KES 60 a listing per two months for the first 20 - KES 1,199 for two months - then 15 a listing a month to 30, 14 to 100, 13 to 1,000 (30 listings 1,499 for two months, 100 listings 3,459), no opening fee. Car yards and agents: KES 2,999 a month for 10, then by the listing, KES 299 to open (waived on 6+ months). Store listings pay no listing fee, and while the plan has places to spare they cover the owner's own listings too (2026-11-20, §5) |
 
 ---
 
@@ -180,9 +180,10 @@ runs when payments are on.
 
 A seller pays per listing for **2, 4 or 6 months** at a time (since
 2026-10-11; it was 1 to 6, monthly). The fee for one two-month period is
-**C** (a cube root of the listing's value) times **R** (the
-seller's risk coefficient, 0.4 to 1.0, only while payments run through
-BROKA), less the founding-seller offer below.
+**C** (a cube root of one unit's price, 20% more for several units) times
+**R** (the seller's risk coefficient, 0.4 to 1.0, only while payments run
+through BROKA), less the founding-seller offer below. A store owner's
+listings that their store plan has places for pay nothing (§5).
 
 ### The founding-seller offer
 
@@ -224,17 +225,20 @@ number of free active listings for good. It never ends, so it is off.
 ### C - the list price
 
 ```
-C = max(cost, f(price × quantity))
+C = max(cost, f(price))            one unit
+C = max(cost, min(2,000, 1.2 × f(price)))   more than one unit, however many
 f(x) = 8.91822 × ∛x − 42.1011, held between KES 10 and KES 2,000
 ```
 
-Set by the founder on 2026-10-09 (`engine.value_fee`), and rounded like
-every fee (whole shillings; to 5 from KES 100, to 10 from KES 1,000). The
-curve runs through round fees:
+Set by the founder on 2026-10-09 (`engine.value_fee`; the surcharge for
+several units, `engine.MULTI_UNIT_SURCHARGE`, on 2026-11-20), and rounded
+like every fee (whole shillings; to 5 from KES 100, to 10 from KES 1,000).
+The curve runs through round fees:
 
-| Listing value, KES | 200 | 1,500 | 10,000 | 20,000 | 1M | 12M and up |
+| Price of one unit, KES | 200 | 1,500 | 10,000 | 20,000 | 1M | 12M and up |
 |---|---|---|---|---|---|---|
 | Two months, KES | 10 | 60 | 150 | 200 | 850 | 2,000 |
+| Two months, more than one unit | 12 | 72 | 180 | 240 | 1,020 | 2,000 |
 
 **It replaced the value bands** (0.50% of the first KES 20,000, 0.20% to
 200,000, 0.11% to 2M, 0.03% above, capped at 15,000; 2026-10-06 to
@@ -243,23 +247,26 @@ cheap items more (a KES 1,500 dress 60, from 10); from about KES 300,000 of
 value it pays less - a car 785 from 1,120, a plot 980 from 1,890 - and no
 listing pays over KES 2,000, where 200 iPhones paid 12,640.
 
-- **The value is price × quantity.** 200 phones are 200 phones' worth of
-  stock. The first version charged √price for one unit, capped per category,
-  and grew with quantity only by a log - so 200 KES 180,000 iPhones
-  (KES 36M) paid 3.7 times one iPhone. Ten KES 20,000 phones still pay
-  exactly what one KES 200,000 item does; stock worth over KES 12M meets
-  the ceiling.
+- **One unit's price, and 20% more for several (2026-11-20).** A KES 10,000
+  phone pays 150; two of them 180, and ten still 180. From 2026-10-09 the
+  fee was charged on the listing's whole value, price × quantity, and
+  sellers with stock found it unreasonably high: ten of those phones paid
+  370, and every unit added to the bill. The surcharge is a flat share, not
+  a step per unit, so the seller of ten pays what the seller of two does and
+  a listing is never cheaper split in two. It never lifts a fee over the
+  KES 2,000 ceiling. (The first version, before 2026-10-09, charged √price
+  for one unit, capped per category, and grew with quantity by a log.)
 - **A curve, not bands.** The fee rises smoothly - one more shilling of
   price never jumps it - and ever more slowly, because a listing fee is paid
-  whether or not anything sells; a share of KES 36M of stock would be an
-  up-front commission with no sale behind it.
+  whether or not anything sells; it must never become an up-front
+  commission with no sale behind it.
 - **cost** is the listing's cost for a month (§1), with VAT: the floor. f
   never goes under KES 10, but serving a listing costs more than that where
   buyers keep Zeno busiest (KES 10.91 to 13.18 a month for electronics,
   vehicles, property and land), so there a listing worth under about
   KES 240 pays the cost.
-- **KES 2,000** is the most one listing pays a month, reached at about
-  KES 12M of value. A seller with more stock than that wants a store (§5).
+- **KES 2,000** is the most one listing pays for two months, reached at
+  about KES 12M a unit (about KES 7M a unit for a listing of several).
 
 ### R - the risk coefficient
 
@@ -356,9 +363,12 @@ to clear (units^0.35), and the recommendation covers 20% more than the
 expected wait. From KES 250,000 of listing value, a recommendation of 3+
 months is **pressed** (`"strength": "strong"`), not merely offered: a land or
 car seller who lists for one month and gives up has lost a sale BROKA could
-have made. Suggested copy: *"Plots usually take about 4 months to find a buyer
-on BROKA. Listing for 6 months keeps you in front of buyers that long, and
-costs 26% less per month than renewing."*
+have made. The app's copy (2026-11-20; the category is the listing's own):
+*"Land listings like this usually take about 4 months to find a buyer on
+BROKA. 6 months keeps you in front of buyers that long, and costs 17% less
+than renewing every 2 months."* The app shows each option's total for its
+whole period and never a price per month: a fee paid once for two months
+read as a monthly charge.
 
 ### The launch offer (kept from the design journal)
 
@@ -374,23 +384,27 @@ first sellers a free ride or setting a cutoff date to rush toward. Set
 
 ### Worked examples
 
-Monthly fees as they stand while BROKA handles no payments (no record
-discount, no launch offer), for a seller past their free listings.
+Fees as they stand while BROKA handles no payments (no record discount, no
+launch offer), for a seller past their free listings, from the engine
+(2026-11-20: one unit's price, 20% more for several).
 
-| Listing | Value, KES | Monthly | 3 months | 6 months | Recommended |
+| Listing | Priced on, KES | 2 months | 4 months | 6 months | Recommended |
 |---|---|---|---|---|---|
-| Shirt, KES 300 | 300 | 18 | 45 | 80 | 1 month |
-| Dress, KES 1,500 | 1,500 | 60 | 150 | 265 | 1 month |
-| Phone, KES 20,000 | 20,000 | 200 | 500 | 885 | 1 month |
-| iPhone, KES 180,000 | 180,000 | 460 | 1,140 | 2,040 | 2 months |
-| 3 iPhones, KES 180,000 each | 540,000 | 685 | 1,700 | 3,030 | 2 months |
-| 200 iPhones, KES 180,000 each | 36,000,000 | 2,000 | 4,980 | 8,850 | 6 months |
-| Sofa, KES 25,000 | 25,000 | 220 | 550 | 975 | 2 months |
-| Car, KES 800,000 | 800,000 | 785 | 1,950 | 3,470 | 3 months |
-| Plot, KES 1.5M | 1,500,000 | 980 | 2,440 | 4,340 | 5 months |
-| House, KES 10M | 10,000,000 | 1,880 | 4,680 | 8,320 | 5 months |
-| House, KES 20M | 20,000,000 | 2,000 | 4,980 | 8,850 | 6 months |
-| House to let, KES 30,000/month | 30,000 | 235 | 585 | 1,040 | 1 month |
+| Shirt, KES 300 | 300 | 19 | 38 | 56 | 2 months |
+| Dress, KES 1,500 | 1,500 | 60 | 105 | 150 | 2 months |
+| Phone, KES 10,000 | 10,000 | 150 | 265 | 375 | 2 months |
+| 2 phones, KES 10,000 each | 10,000 + 20% | 180 | 320 | 450 | 2 months |
+| 10 phones, KES 10,000 each | 10,000 + 20% | 180 | 320 | 450 | 2 months |
+| Phone, KES 20,000 | 20,000 | 200 | 355 | 500 | 2 months |
+| iPhone, KES 180,000 | 180,000 | 460 | 820 | 1,140 | 2 months |
+| 3 iPhones, KES 180,000 each | 180,000 + 20% | 555 | 985 | 1,380 | 2 months |
+| 200 iPhones, KES 180,000 each | 180,000 + 20% | 555 | 985 | 1,380 | 6 months |
+| Sofa, KES 25,000 | 25,000 | 220 | 390 | 550 | 2 months |
+| Car, KES 800,000 | 800,000 | 785 | 1,400 | 1,950 | 4 months |
+| Plot, KES 1.5M | 1,500,000 | 980 | 1,740 | 2,440 | 6 months |
+| House, KES 10M | 10,000,000 | 1,880 | 3,340 | 4,680 | 6 months |
+| House, KES 20M | 20,000,000 | 2,000 | 3,560 | 4,980 | 6 months |
+| House to let, KES 30,000/month | 30,000 | 235 | 420 | 585 | 2 months |
 
 When payments run through BROKA again, R and the launch offer discount
 these: a proven seller pays as little as 40% of them.
@@ -652,6 +666,19 @@ is for long-term sellers, and what they want to pay for is shelf space. So:
 a one-off opening fee, then a monthly plan sized by how many listings the
 store holds - and **listings in the store pay no listing fee**.
 
+**A plan's places cover the owner's own listings too (2026-11-20).** A
+seller who paid for 20 listings pays no listing fee until they have 20 up:
+a listing posted under "No Store" - the sell wizard's default - takes one of
+the plan's spare places, stays up exactly as long as the plan is paid, and
+moves with it when the plan is renewed (`stores/plan_cover.py`). Once the
+places are full, the owner's own listings pay the fee as anyone's do. Only
+for what the store may hold: a shop's places are priced for goods and never
+cover a car, land or a house. A listing posted before the plan had room
+goes up on it free from the Listing fee screen (`POST
+/pricing/listing-fee/renew-free`). Before this, every listing outside the
+store paid from the first one, whatever the plan still had free. The plan's
+size is still not a cap on listings posted into the store itself.
+
 - **Opening fee: KES 299**, once. Covers reviewing the store and an onboarding
   call (~25 minutes of a person, ~KES 120), and puts a price on a store name
   so names are not squatted. **Waived** when the first payment covers 6
@@ -751,8 +778,9 @@ them the fee is most of what BROKA earns from the listing.
 
 | Endpoint | Auth | What |
 |---|---|---|
-| `GET /pricing/listing-fee/quote?category=&price=&quantity=` | signed in | The caller's fee for two months (`period_fee`, `period_months`; `monthly_fee` is the same number under its old name) for a listing not yet made: list price, discount (record and launch parts), R and what went into it, 2, 4 and 6 month options with the recommended one marked, featured options for short-term sellers, and `fees_enabled` |
-| `GET /pricing/listing-fee/listings/{id}/quote` | owner | The same for one of the caller's listings, with only the months that still fit under six ahead (`months_available`) and where its paid time stands (`listing_fee`) |
+| `GET /pricing/listing-fee/quote?category=&price=&quantity=` | signed in | The caller's fee for two months (`period_fee`, `period_months`; `monthly_fee` is the same number under its old name) for a listing not yet made: list price, what it is priced on (`priced_on`, one unit's price, and `multi_unit_percent`, 20 for more than one unit), discount (record and launch parts), R and what went into it, 2, 4 and 6 month options with the recommended one marked, featured options for short-term sellers, `fees_enabled`, and `store_covered` with `store_plan` when the seller's store plan has a place for it |
+| `GET /pricing/listing-fee/listings/{id}/quote` | owner | The same for one of the caller's listings, with only the months that still fit under six ahead (`months_available`) and where its paid time stands (`listing_fee`); `store_plan` (`places`, `in_use`, `free`, `until`, `covered`) when the seller's store plan covers it or has a place for it, and then `fees_enabled` is false |
+| `POST /pricing/listing-fee/renew-free` | owner | `{listing_id}`: with fees off, one more free launch window for a listing ending or offline; with fees on, puts it on a place its seller's store plan has free (§5) |
 | `POST /pricing/listing-fee/pay` | owner | `{listing_id, months, phone_number, featured_plan?}`: sends the M-Pesa prompt for the server's total. Takes `X-Idempotency-Key` |
 | `GET /pricing/listing-fee/payments/{id}` | owner | pending / success / failed; asks Safaricom itself when the callback is late |
 | `GET /pricing/listing-fee/mine` | signed in | The caller's listings buyers can't see until paid, or won't within a week |
@@ -893,7 +921,7 @@ subscriptions (Part IV), as store plans.
 
 **Superseded:** the 14-day auto-archive and the KSh 10 relist fee (§11.6) -
 the monthly listing fee does both jobs. The per-category Base_c (§2.2) - the
-fee on price × quantity (§2, C) replaces it.
+fee on one unit's price (§2, C) replaces it.
 
 **Left for later, when there is data or a lawyer:** Kalman-filtered DCR,
 Thompson-sampling who pays the fee, copula-based cost floors, the dispute

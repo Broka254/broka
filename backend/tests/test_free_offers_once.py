@@ -231,7 +231,9 @@ async def test_moving_the_free_listing_into_a_store_makes_the_next_one_pay(clien
     """With no launch slot, the founding band covers a first listing. Moving
     it into the seller's store made the next listing their "first" again,
     and free again."""
-    _patch(monkeypatch, free_listing_offer_limit=0)
+    # The store opens unpaid: a free store period's plan places would cover
+    # the owner's own listings (stores/plan_cover) and hide the offers here.
+    _patch(monkeypatch, free_listing_offer_limit=0, free_store_offer_limit=0)
     _, h = await _user(store_owner=True)
     store = await _store(client, h)
 
@@ -265,6 +267,9 @@ async def test_with_no_launch_slot_the_founding_band_still_covers_the_first(clie
 async def test_listings_posted_into_a_store_leave_the_free_listing_alone(client, monkeypatch):
     """A store listing is covered by its store's plan: it was never the
     seller's free listing, so their first own listing still is."""
+    # An unpaid store, whose plan has no places to cover the owner's own
+    # listing with (that case is the test below).
+    _patch(monkeypatch, free_store_offer_limit=0)
     uid, h = await _user(store_owner=True)
     store = await _store(client, h)
     for _ in range(2):
@@ -275,6 +280,22 @@ async def test_listings_posted_into_a_store_leave_the_free_listing_alone(client,
     own = await _listing(client, h)
     assert _is_free(own) and abs(_days_left(own) - 60) <= 1
     assert [c.entity_id for c in await _claims(uid, LaunchOfferType.LISTING_FREE)] == [own["id"]]
+
+
+@pytest.mark.asyncio
+async def test_a_place_on_the_store_plan_spends_no_launch_slot(client):
+    """The owner's own listing goes on a place their store plan has free
+    (stores/plan_cover) before any offer is looked at: the platform's few
+    free listings are for sellers no plan covers."""
+    uid, h = await _user(store_owner=True)
+    store = await _store(client, h)
+    assert store["billing"]["active"] is True  # its free period: a 20-listing plan
+    q = await _quote(client, h)
+    assert q["store_covered"] is True and q["fees_enabled"] is False
+    assert q["launch_offer"] == {"eligible": False, "reason": "store_plan"}
+    own = await _listing(client, h)
+    assert _is_free(own)
+    assert await _claims(uid, LaunchOfferType.LISTING_FREE) == []
 
 
 @pytest.mark.asyncio

@@ -160,13 +160,64 @@ void main() {
       expect(find.text('Zeno is composing...'), findsNothing);
       // BROKA holds no payments while they are paused: the header no longer
       // says "Escrow protected", and the pay chip doesn't promise security.
-      // It names the way that is real - an independent escrow service - and
-      // the escrow callout sits above the composer, with Zeno to guide.
+      // It names the way that is real - an independent escrow service - in
+      // a pill beside the room switch (2026-11-20: it was a full-width card
+      // above the composer), whose sheet has the callout, with Zeno to guide.
       expect(find.text('Zeno mediating · Pay with escrow'), findsOneWidget);
       expect(find.textContaining('Escrow protected'), findsNothing);
-      expect(find.byType(EscrowCallout), findsOneWidget);
-      expect(find.text('Ask Zeno'), findsOneWidget);
+      expect(find.descendant(of: find.byType(ChatModeSwitch),
+          matching: find.byKey(const Key('escrow-pill'))), findsOneWidget);
+      expect(find.byType(EscrowCallout), findsNothing);
       expect(find.text('Pay securely'), findsNothing);
+
+      await tester.tap(find.byKey(const Key('escrow-pill')));
+      await _settle(tester);
+      expect(find.byType(EscrowCallout), findsOneWidget);
+      // The callout's own title: the quick actions under the chat carry a
+      // "Pay with escrow" chip of their own.
+      expect(find.descendant(of: find.byType(EscrowCallout),
+          matching: find.text('Pay with escrow')), findsOneWidget);
+      expect(find.text('Ask Zeno'), findsOneWidget);
+    });
+
+    testWidgets('the counterpart is one slim row; the rest is one tap away', (tester) async {
+      // The card took a fifth of the screen above the negotiation, with the
+      // escrow card above the composer under it.
+      await tester.pumpWidget(screen(const NegotiateScreen(animateBackground: false)));
+      await _settle(tester);
+      final strip = find.byKey(const Key('negotiate-info-strip'));
+      expect(strip, findsOneWidget);
+      // Margins included: the card was about 110 tall.
+      expect(tester.getSize(strip).height, lessThan(72));
+      expect(find.descendant(of: strip, matching: find.text('Xavier Bravin')), findsOneWidget);
+      expect(find.textContaining('3 deals'), findsNothing, reason: 'folded into the sheet');
+      expect(find.text('Where'), findsNothing);
+
+      await tester.tap(find.byTooltip('Deal details'));
+      await _settle(tester);
+      expect(find.byKey(const Key('deal-details-sheet')), findsOneWidget);
+      expect(find.text('Where they are'), findsOneWidget);
+      expect(find.text("Xavier Bravin's profile"), findsOneWidget);
+      expect(find.byKey(const Key('deal-details-review')), findsNothing,
+          reason: 'no deal to review with this seller');
+    });
+
+    testWidgets('a buyer with a deal to review finds it in the deal sheet', (tester) async {
+      setFakeRoute((uri) {
+        final p = uri.path;
+        if (p == '/negotiate/listing-1/history') return <Object?>[];
+        if (p.startsWith('/negotiate/deal-status')) return {'has_deal': false};
+        if (p == '/auth/user/seller-1') return {'id': 'seller-1', 'name': 'Xavier Bravin'};
+        if (p == '/reviews/my-deals') return {'deals': [_reviewableDeal()]};
+        return null;
+      });
+      await tester.pumpWidget(screen(const NegotiateScreen(animateBackground: false)));
+      await _settle(tester);
+      await tester.tap(find.byTooltip('Deal details'));
+      await _settle(tester);
+      expect(find.text('Write a review of Xavier Bravin'), findsOneWidget);
+      final asked = fakeRequests.firstWhere((r) => r.uri.path == '/reviews/my-deals');
+      expect(asked.uri.queryParameters['seller_id'], 'seller-1');
     });
 
     testWidgets('the history is there at once; a new reply is written out',
@@ -217,6 +268,8 @@ void main() {
         (tester) async {
       await tester.pumpWidget(screen(const NegotiateScreen(animateBackground: false)));
       await _settle(tester);
+      await tester.tap(find.byTooltip('Deal details'));
+      await _settle(tester);
 
       expect(find.textContaining('4.8/5 · 8 reviews'), findsOneWidget);
       expect(find.textContaining('3 deals'), findsOneWidget);
@@ -260,17 +313,10 @@ void main() {
       expect(find.byTooltip('Video call'), findsOneWidget);
       // No "agree the deal" step: the buyer pays straight from the chat.
       expect(find.byTooltip('Agree the deal'), findsNothing);
-      expect(find.byKey(const Key('pay-now')), findsOneWidget);
-      // Not "Pay securely - the seller is paid only after you've received
-      // the item": that was BROKA's escrow, which it doesn't run while
-      // payments are paused. It says so, and offers an independent one.
-      expect(find.textContaining("BROKA doesn't take payments itself yet. Pay with escrow"), findsOneWidget);
-      expect(find.descendant(of: find.byKey(const Key('pay-now')), matching: find.text('Pay with escrow')),
-          findsOneWidget);
-      expect(find.text('Zeno, guide me'), findsOneWidget);
-      expect(find.textContaining('Pay securely'), findsNothing);
       expect(find.byTooltip('Ask Zeno'), findsOneWidget);
       expect(find.byType(ChatComposerCard), findsOneWidget);
+      // No deal with this seller: nothing to review.
+      expect(find.byKey(const Key('direct-chat-review-hint')), findsNothing);
 
       // The direct thread only - Zeno's room stays private.
       expect(find.text('Is it still available?'), findsOneWidget);
@@ -280,6 +326,95 @@ void main() {
           .ancestor(of: find.text('Yes, pick up in Westlands'), matching: find.byType(Container))
           .first);
       expect((mine.decoration as BoxDecoration).gradient, isNotNull);
+
+      // Paying is one tap away: a pill beside the room switch (2026-11-20:
+      // the panel was a card under it on every visit), its sheet the panel.
+      expect(find.descendant(of: find.byType(ChatModeSwitch),
+          matching: find.byKey(const Key('escrow-pill'))), findsOneWidget);
+      expect(find.byKey(const Key('pay-now')), findsNothing);
+      await tester.tap(find.byKey(const Key('escrow-pill')));
+      await _settle(tester);
+      expect(find.byKey(const Key('pay-now')), findsOneWidget);
+      // Not "Pay securely - the seller is paid only after you've received
+      // the item": that was BROKA's escrow, which it doesn't run while
+      // payments are paused. It says so, and offers an independent one.
+      expect(find.textContaining("BROKA doesn't take payments itself yet. Pay with escrow"), findsOneWidget);
+      expect(find.descendant(of: find.byKey(const Key('pay-now')), matching: find.text('Pay with escrow')),
+          findsOneWidget);
+      expect(find.text('Zeno, guide me'), findsOneWidget);
+      expect(find.textContaining('Pay securely'), findsNothing);
+    });
+
+    testWidgets('a long message is folded, with Read more to open it', (tester) async {
+      // A report pasted into the chat drew a bubble several screens tall.
+      final report = List.generate(60, (i) => 'Line ${i + 1} of the latency report.').join('\n');
+      setFakeRoute((uri) {
+        if (uri.path == '/negotiate/listing-1/history') {
+          return [
+            {'role': 'seller', 'content': report, 'id': 'm7'},
+            {'role': 'buyer', 'content': 'Thanks', 'id': 'm8'},
+          ];
+        }
+        if (uri.path.startsWith('/negotiate/deal-status')) return {'has_deal': false};
+        return null;
+      });
+      await tester.pumpWidget(screen(const NegotiationScreen(animateBackground: false)));
+      await _settle(tester);
+
+      expect(tester.widget<Text>(find.text(report)).maxLines, 12);
+      final folded = tester.getSize(find.text(report)).height;
+      expect(find.text('Read more'), findsOneWidget);
+      // A short message stays the plain Text it always was.
+      expect(tester.widget<Text>(find.text('Thanks')).maxLines, isNull);
+
+      await tester.tap(find.text('Read more'));
+      await _settle(tester);
+      expect(tester.widget<Text>(find.text(report)).maxLines, isNull);
+      expect(tester.getSize(find.text(report)).height, greaterThan(folded * 3));
+      expect(find.text('Show less'), findsOneWidget);
+    });
+
+    testWidgets('a buyer with a deal to review is told so, quietly', (tester) async {
+      setFakeRoute((uri) {
+        final p = uri.path;
+        if (p == '/negotiate/listing-1/history') {
+          return [{'role': 'seller', 'content': 'Is it still available?', 'id': 'm3'}];
+        }
+        if (p.startsWith('/negotiate/deal-status')) return {'has_deal': false};
+        if (p == '/reviews/my-deals') return {'deals': [_reviewableDeal()]};
+        return null;
+      });
+      Object? reviewArgs;
+      final listing = Listing.fromJson({
+        ...fakeListingJson(1), 'listing_type': 'fixed', 'status': 'active',
+      });
+      await tester.pumpWidget(MaterialApp(
+        onGenerateRoute: (s) => MaterialPageRoute(
+          settings: s.name == '/review'
+              ? s
+              : RouteSettings(name: s.name, arguments: {'listing': listing, 'role': 'buyer'}),
+          builder: (_) {
+            if (s.name != '/review') return const NegotiationScreen(animateBackground: false);
+            reviewArgs = s.arguments;
+            return const Scaffold(body: Text('review form'));
+          },
+        ),
+      ));
+      await _settle(tester);
+
+      // One muted line under the conversation - no card, no sheet.
+      expect(find.byKey(const Key('direct-chat-review-hint')), findsOneWidget);
+      expect(find.byType(BottomSheet), findsNothing);
+      final asked = fakeRequests.firstWhere((r) => r.uri.path == '/reviews/my-deals');
+      expect(asked.uri.queryParameters['seller_id'], 'seller-1');
+
+      await tester.tap(find.text('You can review Xavier'));
+      await _settle(tester);
+      expect(find.text('review form'), findsOneWidget);
+      expect(reviewArgs, {
+        'seller_id': 'seller-1', 'seller_name': 'Xavier Bravin',
+        'deal_id': 'deal-7', 'listing_name': 'Test item 1',
+      });
     });
 
     testWidgets('nothing overflows on a 320dp phone at a large text size',
@@ -321,6 +456,8 @@ void main() {
       ));
       await _settle(tester);
 
+      await tester.tap(find.byKey(const Key('escrow-pill')));
+      await _settle(tester);
       await tester.tap(find.byKey(const Key('pay-now')));
       await _settle(tester);
       for (var i = 0; i < 4; i++) {
@@ -362,6 +499,8 @@ void main() {
               : const NegotiationScreen(animateBackground: false),
         ),
       ));
+      await _settle(tester);
+      await tester.tap(find.byKey(const Key('escrow-pill')));
       await _settle(tester);
       await tester.tap(find.byKey(const Key('pay-now')));
       await _settle(tester);
@@ -564,6 +703,14 @@ class _FakeRecorder extends RecordPlatform {
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
+
+/// One of the buyer's deals with seller-1, not reviewed yet
+/// (GET /reviews/my-deals).
+Map<String, dynamic> _reviewableDeal() => {
+      'deal_id': 'deal-7', 'seller_id': 'seller-1', 'seller_name': 'Xavier Bravin',
+      'listing_name': 'Test item 1', 'status': 'agreed', 'agreed_price': 1300,
+      'created_at': '2026-11-10T10:00:00', 'already_reviewed': false,
+    };
 
 void _smallPhone(WidgetTester tester) {
   tester.view.physicalSize = const Size(320 * 2, 640 * 2);

@@ -30,6 +30,9 @@ import '../widgets/zeno_streaming_text.dart';
 import '../widgets/message_receipt.dart' show MessageTimeLabel, formatMessageTime;
 import '../widgets/protection_badge.dart';
 import '../widgets/units_stepper.dart';
+import '../core/utils/result.dart';
+import '../features/reviews/data/repositories/reviews_repository.dart';
+import '../features/reviews/domain/models/review.dart';
 import '../features/reviews/presentation/review_prompt.dart';
 import '../utils/price_format.dart';
 import '../features/escrow/presentation/escrow_actions.dart';
@@ -189,6 +192,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     _initVoice();
     _loadHistory();
     _loadCounterparty();
+    unawaited(_loadReviewable());
     // The Inbox opens this thread here next time (ChatScreenMemory).
     final listingId = _listing?.id;
     if (listingId != null) {
@@ -1434,21 +1438,10 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
                 zenoActive: true,
                 unread: _directChatUnreadCount,
                 onSwitch: _openDirectChat,
+                trailing: _escrowPill(),
               ),
             if (_listing != null) _buildInfoStrip(),
             Expanded(child: _buildChat()),
-            // Escrow, where the deal is struck: BROKA holds no payments, so
-            // this is how either side is protected - and how they learn
-            // Zeno walks them through it (escrow_callout.dart). Gone once
-            // money is held through BROKA (payments on, deal funded).
-            if (paymentsShown && _listing != null && !_hasFundedDeal)
-              EscrowCallout(
-                compact: true,
-                title: _role == 'seller' ? 'Get paid with escrow' : 'Pay with escrow',
-                margin: const EdgeInsets.fromLTRB(12, 4, 12, 6),
-                onZeno: () => openZenoEscrowGuide(context,
-                    prompt: _role == 'seller' ? 'How do I get paid through escrow?' : zenoEscrowPrompt),
-              ),
             _buildActionBar(),
             _buildActionProposal(),
             _buildInputBar(),
@@ -1482,8 +1475,8 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
           // Was "Escrow protected": BROKA holds no payments while they
           // are paused, and a buyer who thinks it does is the one who pays
           // a fraudster's "BROKA escrow" number. "Pay with escrow" names
-          // the way that is real now - an independent service.
-          // escrow_callout.dart, under the chat, opens them.
+          // the way that is real now - an independent service. The escrow
+          // pill beside the room switch opens them (_escrowPill).
           Row(children: [
             const Icon(Icons.visibility_outlined, size: 12, color: BrokaColors.neonGreen),
             const SizedBox(width: 5),
@@ -1527,132 +1520,362 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     ]),
   );
 
-  /// One compact card replacing the old three stacked cards (deal strip,
-  /// counterparty strip, status bar) - same information, far less vertical
-  /// space, leaving much more room for the actual chat below.
+  /// The counterpart in one slim row (2026-11-20): who, what is being
+  /// negotiated and how likely the deal is - and "more" (⋯) for the rest,
+  /// in a sheet (_openDealDetails). The card it replaced was the tallest
+  /// thing above the conversation, its reviews, deals, distance and map
+  /// button always open; with the escrow card above the composer, the
+  /// negotiation itself was left a strip in the middle of the screen.
   Widget _buildInfoStrip() {
-    final cName = _counterName; final cDist = _distKm;
-    final cPhoto = _sellerPhoto; final rating = (_sellerInfo?['rating'] as num?)?.toDouble();
+    final cName = _counterName;
+    final ver = _sellerInfo?['is_verified'] as bool? ?? false;
+    final prob = _dealProbability;
+    final probColor = _probColor(prob);
+    return Container(
+      key: const Key('negotiate-info-strip'),
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      padding: const EdgeInsets.fromLTRB(8, 4, 2, 4),
+      // A card like Home's, kept light: it is a caption for the room now.
+      decoration: BoxDecoration(
+        color: BrokaColors.bgCard.withOpacity(0.72),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: BrokaColors.border),
+      ),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Row(children: [
+          Expanded(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _openDealDetails,
+              child: Row(children: [
+                _counterAvatar(cName, _sellerPhoto, _counterIsOnline, 26),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(children: [
+                          Flexible(
+                            child: Text(cName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: BrokaColors.textHigh,
+                                    fontWeight: FontWeight.w700, fontSize: 12.5)),
+                          ),
+                          if (ver) ...[
+                            const SizedBox(width: 3),
+                            const Icon(Icons.verified_rounded, color: BrokaColors.gold, size: 11),
+                          ],
+                        ]),
+                        Text('${_listing!.emoji} ${_listing!.name} · ${_priceLabel()}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: BrokaColors.textMid,
+                                fontSize: 10.5, fontWeight: FontWeight.w600)),
+                      ]),
+                ),
+                const SizedBox(width: 8),
+                Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+                  Text('$prob%',
+                      style: TextStyle(color: probColor, fontSize: 12, fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 2),
+                  SizedBox(
+                    width: 36,
+                    height: 3,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(2),
+                      child: LinearProgressIndicator(
+                          value: prob / 100,
+                          backgroundColor: BrokaColors.border,
+                          valueColor: AlwaysStoppedAnimation<Color>(probColor)),
+                    ),
+                  ),
+                ]),
+              ]),
+            ),
+          ),
+          IconButton(
+            key: const Key('deal-details-button'),
+            tooltip: 'Deal details',
+            visualDensity: VisualDensity.compact,
+            onPressed: _openDealDetails,
+            icon: const Icon(Icons.more_horiz_rounded, color: BrokaColors.textHigh, size: 20),
+          ),
+        ]),
+        if (_hasFundedDeal && _dealStatusStr != null) ...[
+          const SizedBox(height: 4),
+          ProtectionBadge(status: _dealStatusStr, compact: true),
+        ],
+      ]),
+    );
+  }
+
+  Color _probColor(int prob) =>
+      prob >= 70 ? BrokaColors.neonGreen : prob >= 40 ? Colors.orangeAccent : BrokaColors.danger;
+
+  String _priceLabel() => _currentOffer != null
+      ? 'Offer: KES ${_currentOffer!.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => "${m[1]},")}'
+      : 'Asking ${_listing!.formattedPrice}';
+
+  Widget _counterAvatar(String name, String? photo, bool online, double size) => Stack(children: [
+        Container(
+          width: size,
+          height: size,
+          decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(colors: [BrokaColors.gold, BrokaColors.goldDim])),
+          child: ClipOval(
+            child: photo != null && photo.isNotEmpty
+                ? Image.memory(base64Decode(photo), fit: BoxFit.cover)
+                : Center(
+                    child: Text(name.isEmpty ? '?' : name[0].toUpperCase(),
+                        style: TextStyle(color: Colors.white,
+                            fontWeight: FontWeight.w800, fontSize: size * 0.44))),
+          ),
+        ),
+        Positioned(
+          bottom: 0,
+          right: 0,
+          child: Container(
+            width: size * 0.3,
+            height: size * 0.3,
+            decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: online ? BrokaColors.neonGreen : BrokaColors.textLow,
+                border: Border.all(color: BrokaColors.bg, width: 1.5)),
+          ),
+        ),
+      ]);
+
+  Widget _factChip(IconData icon, String label) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+        decoration: BoxDecoration(
+          color: BrokaColors.bgCard,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: BrokaColors.border),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 12, color: BrokaColors.gold),
+          const SizedBox(width: 4),
+          Text(label, style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
+        ]),
+      );
+
+  /// What the slim strip folds away, one tap from it: the counterpart's
+  /// record, how likely the deal is, the listing, where they are, their
+  /// profile - and, for a buyer with a deal to review, the review.
+  Future<void> _openDealDetails() async {
+    final listing = _listing;
+    if (listing == null) return;
+    final info = _sellerInfo;
+    final cName = _counterName;
     // A buyer-review average is only a rating when reviews exist. Keep its
     // /5 scale and count beside it; the deals figure is a separate fact and
     // must not read as the evidence for the stars.
-    final reviewCount = (_sellerInfo?['review_count'] as num?)?.toInt() ?? 0;
+    final rating = (info?['rating'] as num?)?.toDouble();
+    final reviewCount = (info?['review_count'] as num?)?.toInt() ?? 0;
     final reviewLabel = rating != null && reviewCount > 0
         ? '${rating.toStringAsFixed(1)}/5 · '
             '${reviewCount == 1 ? '1 review' : '$reviewCount reviews'}'
         : null;
-    final deals = _sellerInfo?['completed_deals'] as int?;
-    final escrowPct = (_sellerInfo?['escrow_success_rate_pct'] as num?)?.toStringAsFixed(0);
-    final ver = _sellerInfo?['is_verified'] as bool? ?? false;
-    final isOnline = _counterIsOnline; final lastSeen = _counterLastSeenText;
-    final sellerId = _sellerInfo?['id'] as String? ?? _listing?.sellerId;
+    final deals = info?['completed_deals'] as int?;
+    final escrowPct = (info?['escrow_success_rate_pct'] as num?)?.toStringAsFixed(0);
+    final ver = info?['is_verified'] as bool? ?? false;
+    final online = _counterIsOnline;
+    final lastSeen = _counterLastSeenText;
+    final profileId = info?['id'] as String? ?? (_role == 'seller' ? _buyerId : listing.sellerId);
+    final dist = _distKm;
     final prob = _dealProbability;
-    final probColor = prob >= 70 ? BrokaColors.neonGreen : prob >= 40 ? Colors.orangeAccent : BrokaColors.danger;
-    final priceLabel = _currentOffer != null
-        ? 'Offer: KES ${_currentOffer!.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => "${m[1]},")}'
-        : 'Asking ${_listing!.formattedPrice}';
+    final probColor = _probColor(prob);
+    const tileTitle = TextStyle(color: BrokaColors.textHigh, fontSize: 14, fontWeight: FontWeight.w600);
+    const tileSubtitle = TextStyle(color: BrokaColors.textMid, fontSize: 12);
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: BrokaColors.bgMid,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+      builder: (sheet) {
+        // Close the sheet, then act: the screen's context, not the sheet's.
+        void go(VoidCallback action) {
+          Navigator.of(sheet).pop();
+          action();
+        }
 
-    return GestureDetector(
-      onTap: sellerId != null ? () => Navigator.pushNamed(context, '/user-profile', arguments: sellerId) : null,
-      child: Container(
-        margin: const EdgeInsets.fromLTRB(16, 10, 16, 8),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        // A card like Home's: the dark translucent fill and hairline border
-        // every card on the constellation has.
-        decoration: BoxDecoration(
-          color: BrokaColors.bgCard.withOpacity(0.86),
-          borderRadius: BorderRadius.circular(16), border: Border.all(color: BrokaColors.border),
-        ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Stack(children: [
-              Container(width: 32, height: 32,
-                decoration: const BoxDecoration(shape: BoxShape.circle, gradient: LinearGradient(colors: [BrokaColors.gold, BrokaColors.goldDim])),
-                child: ClipOval(child: cPhoto != null && cPhoto.isNotEmpty
-                    ? Image.memory(base64Decode(cPhoto), fit: BoxFit.cover)
-                    : Center(child: Text(cName[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14))))),
-              Positioned(bottom: 0, right: 0, child: Container(width: 9, height: 9,
-                decoration: BoxDecoration(shape: BoxShape.circle,
-                  color: isOnline ? BrokaColors.neonGreen : BrokaColors.textLow,
-                  border: Border.all(color: BrokaColors.bg, width: 1.5)))),
-            ]),
-            const SizedBox(width: 9),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                Flexible(child: Text(cName, style: const TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.w700, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis)),
-                if (ver) ...[const SizedBox(width: 4), const Icon(Icons.verified_rounded, color: BrokaColors.gold, size: 12)],
-              ]),
-              Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
-                Text(isOnline ? 'Online' : lastSeen != null ? 'Last seen $lastSeen' : 'Offline',
-                    style: TextStyle(fontSize: 10, color: isOnline ? BrokaColors.neonGreen : BrokaColors.textLow, fontWeight: FontWeight.w600)),
-                if (reviewLabel != null) ...[
-                  const Text('  ·  ', style: TextStyle(fontSize: 10, color: BrokaColors.textLow)),
-                  const Icon(Icons.star_rounded, size: 10, color: BrokaColors.gold),
-                  Text(' $reviewLabel', style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
-                ],
-                if (deals != null)
-                  Text('  ·  $deals deals', style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
-                if (escrowPct != null)
-                  Text('  ·  $escrowPct% escrow success', style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
-              ]),
-            ])),
-            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Text('$prob%', style: TextStyle(color: probColor, fontSize: 13, fontWeight: FontWeight.w800)),
-              SizedBox(width: 44, height: 4,
-                child: ClipRRect(borderRadius: BorderRadius.circular(2),
-                  child: LinearProgressIndicator(value: prob / 100, backgroundColor: BrokaColors.border,
-                    valueColor: AlwaysStoppedAnimation<Color>(probColor)))),
-            ]),
-          ]),
-          const Padding(padding: EdgeInsets.symmetric(vertical: 6), child: Divider(height: 1, color: BrokaColors.border)),
-          Row(children: [
-            Text(_listing!.emoji, style: const TextStyle(fontSize: 14)),
-            const SizedBox(width: 6),
-            Expanded(child: Text('${_listing!.name} · $priceLabel',
-                style: const TextStyle(color: BrokaColors.textMid, fontSize: 11, fontWeight: FontWeight.w600),
-                maxLines: 1, overflow: TextOverflow.ellipsis)),
-            if (cDist != null) ...[
-              Icon(Icons.near_me_rounded, size: 11, color: BrokaColors.neonBlue.withOpacity(0.8)),
-              const SizedBox(width: 2),
-              Text('${cDist.toStringAsFixed(1)}km', style: const TextStyle(color: BrokaColors.neonBlue, fontSize: 10, fontWeight: FontWeight.w700)),
-              const SizedBox(width: 8),
-            ],
-            // "Where are they" - a labelled target, not a bare 14px glyph.
-            //
-            // The map has existed since the beginning behind that icon, and
-            // nothing about it said what it did or that it would show the
-            // OTHER person rather than a pin on the listing. At 14px it was
-            // also under the ~44px minimum anyone can reliably hit.
-            //
-            // Now passes the counterparty explicitly, so the seller gets the
-            // buyer's position rather than a map of their own listing back
-            // at them - see _mapArgs.
-            GestureDetector(
-              onTap: _openCounterpartyMap,
-              behavior: HitTestBehavior.opaque,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: BrokaColors.neonGreen.withOpacity(0.10),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: BrokaColors.neonGreen.withOpacity(0.35)),
+        return SafeArea(
+          child: SingleChildScrollView(
+            key: const Key('deal-details-sheet'),
+            padding: const EdgeInsets.fromLTRB(18, 10, 18, 12),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                      color: BrokaColors.border, borderRadius: BorderRadius.circular(2)),
                 ),
-                child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.map_outlined, size: 13, color: BrokaColors.neonGreen),
-                  SizedBox(width: 4),
-                  Text('Where', style: TextStyle(color: BrokaColors.neonGreen,
-                      fontSize: 10, fontWeight: FontWeight.w700)),
-                ]),
               ),
-            ),
-          ]),
-          if (_hasFundedDeal && _dealStatusStr != null) ...[
-            const SizedBox(height: 8),
-            ProtectionBadge(status: _dealStatusStr, compact: true),
-          ],
-        ]),
-      ),
+              const SizedBox(height: 14),
+              Row(children: [
+                _counterAvatar(cName, _sellerPhoto, online, 40),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [
+                      Flexible(
+                        child: Text(cName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: BrokaColors.textHigh,
+                                fontSize: 16, fontWeight: FontWeight.w800)),
+                      ),
+                      if (ver) ...[
+                        const SizedBox(width: 4),
+                        const Icon(Icons.verified_rounded, color: BrokaColors.gold, size: 14),
+                      ],
+                    ]),
+                    const SizedBox(height: 2),
+                    // The server's label already reads "Active 23h ago".
+                    Text(online ? 'Online' : (lastSeen ?? 'Offline'),
+                        style: TextStyle(fontSize: 12,
+                            color: online ? BrokaColors.neonGreen : BrokaColors.textMid)),
+                  ]),
+                ),
+              ]),
+              if (reviewLabel != null || deals != null || escrowPct != null) ...[
+                const SizedBox(height: 12),
+                Wrap(spacing: 6, runSpacing: 6, children: [
+                  if (reviewLabel != null) _factChip(Icons.star_rounded, reviewLabel),
+                  if (deals != null) _factChip(Icons.handshake_outlined, '$deals deals'),
+                  if (escrowPct != null) _factChip(Icons.shield_outlined, '$escrowPct% escrow success'),
+                ]),
+              ],
+              const SizedBox(height: 16),
+              Row(children: [
+                const Expanded(
+                  child: Text('Deal likelihood',
+                      style: TextStyle(color: BrokaColors.textMid, fontSize: 12, fontWeight: FontWeight.w600)),
+                ),
+                Text('$prob%', style: TextStyle(color: probColor, fontSize: 13, fontWeight: FontWeight.w800)),
+              ]),
+              const SizedBox(height: 6),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(3),
+                child: LinearProgressIndicator(
+                    value: prob / 100,
+                    minHeight: 5,
+                    backgroundColor: BrokaColors.border,
+                    valueColor: AlwaysStoppedAnimation<Color>(probColor)),
+              ),
+              const SizedBox(height: 4),
+              const Text('Zeno updates it as the negotiation moves.',
+                  style: TextStyle(color: BrokaColors.textMid, fontSize: 11)),
+              const SizedBox(height: 16),
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(listing.emoji, style: const TextStyle(fontSize: 16)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('${listing.name} · ${_priceLabel()}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: BrokaColors.textHigh, fontSize: 13, fontWeight: FontWeight.w600)),
+                ),
+              ]),
+              const SizedBox(height: 10),
+              const Divider(height: 1, color: BrokaColors.border),
+              // "Where are they": the map shows the OTHER person, not a pin
+              // on the listing - the seller gets the buyer's position
+              // (_openCounterpartyMap).
+              ListTile(
+                key: const Key('deal-details-where'),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                leading: const Icon(Icons.map_outlined, color: BrokaColors.neonGreen),
+                title: const Text('Where they are', style: tileTitle),
+                subtitle: dist == null
+                    ? null
+                    : Text('${dist.toStringAsFixed(1)} km away', style: tileSubtitle),
+                onTap: () => go(_openCounterpartyMap),
+              ),
+              if (profileId != null)
+                ListTile(
+                  key: const Key('deal-details-profile'),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  leading: const Icon(Icons.person_outline_rounded, color: BrokaColors.neonBlue),
+                  title: Text('$cName\'s profile', style: tileTitle),
+                  onTap: () => go(() => Navigator.pushNamed(context, '/user-profile', arguments: profileId)),
+                ),
+              if (_toReview.isNotEmpty)
+                ListTile(
+                  key: const Key('deal-details-review'),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  leading: const Icon(Icons.star_outline_rounded, color: BrokaColors.gold),
+                  title: Text('Write a review of $cName', style: tileTitle),
+                  subtitle: const Text('You had a deal - your review helps the next buyer.',
+                      style: tileSubtitle),
+                  onTap: () => go(_writeReview),
+                ),
+              if (_hasFundedDeal && _dealStatusStr != null) ...[
+                const SizedBox(height: 8),
+                ProtectionBadge(status: _dealStatusStr, compact: true),
+              ],
+            ]),
+          ),
+        );
+      },
     );
+  }
+
+  /// Escrow beside the room switch (escrow_callout.dart, EscrowPill), not a
+  /// card above the composer: with the counterpart's card that was two rows
+  /// of the room before a word of the negotiation. BROKA holds no payments,
+  /// so this is how either side is protected - and how they learn Zeno
+  /// walks them through it. Gone once money is held through BROKA (payments
+  /// on, deal funded).
+  Widget? _escrowPill() {
+    if (!paymentsShown || _listing == null || _hasFundedDeal) return null;
+    final seller = _role == 'seller';
+    final title = seller ? 'Get paid with escrow' : 'Pay with escrow';
+    return EscrowPill(
+      key: const Key('escrow-pill'),
+      tooltip: title,
+      onTap: () => showEscrowSheet(context,
+          title: title,
+          onZeno: () => openZenoEscrowGuide(context,
+              prompt: seller ? 'How do I get paid through escrow?' : zenoEscrowPrompt)),
+    );
+  }
+
+  // ── Reviews ────────────────────────────────────────────────────────────────
+
+  /// The buyer's deals with this seller not yet reviewed. A review needs a
+  /// deal (backend reviews/service.py), so a conversation alone never
+  /// offers one; with one, the deal sheet does - quietly, as a row.
+  List<ReviewableDeal> _toReview = const [];
+
+  Future<void> _loadReviewable() async {
+    final sellerId = _listing?.sellerId;
+    if (_role != 'buyer' || sellerId == null || sellerId == ApiService.currentUserId) return;
+    final result = await reviewsRepository.myReviewableDeals(sellerId: sellerId);
+    if (!mounted) return;
+    if (result case Success(:final data)) {
+      setState(() => _toReview = [for (final d in data) if (!d.alreadyReviewed) d]);
+    }
+  }
+
+  Future<void> _writeReview() async {
+    final pending = _toReview;
+    if (pending.isEmpty) return;
+    final wrote = await Navigator.pushNamed(context, '/review', arguments: {
+      'seller_id': pending.first.sellerId,
+      'seller_name': _counterName,
+      if (pending.length == 1) 'deal_id': pending.first.dealId,
+      if (pending.length == 1) 'listing_name': pending.first.listingName,
+    });
+    if (wrote == true && mounted) await _loadReviewable();
   }
 
   // KeepLatestInView: the keyboard shrinks this list without moving it, and
@@ -1978,8 +2201,11 @@ class _Bubble extends StatelessWidget {
                 constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
                 decoration: isMe ? myBubbleDecoration() : theirBubbleDecoration(),
-                child: Text(msg.content, style: TextStyle(
-                    color: isMe ? Colors.white : BrokaColors.textHigh, fontSize: 14, height: 1.45))),
+                // Folded past twelve lines, as in the direct chat.
+                child: ExpandableMessageText(msg.content,
+                    style: TextStyle(
+                        color: isMe ? Colors.white : BrokaColors.textHigh, fontSize: 14, height: 1.45),
+                    linkColor: isMe ? Colors.white : BrokaColors.neonCyan)),
               // When it was sent - bubbles carried no time at all.
               if (formatMessageTime(msg.createdAt).isNotEmpty)
                 Padding(

@@ -14,7 +14,7 @@
 // the listing exists.
 //
 // The listing fee (PRICING.md). While listing fees are on, the screen says
-// up front what listing will cost ("from KES 84 a month"), and a listing
+// up front what listing will cost ("KES 150 for 2 months"), and a listing
 // the server creates unpaid - hidden from buyers until paid - goes straight
 // on to the Listing fee screen. Paid, it celebrates as before; not paid, it
 // says the listing is saved and offers to pay now or later (the Seller
@@ -401,9 +401,15 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
           _summary(),
           if (_unpaidListingId != null) _savedUnpaid()
           else if (_fee?.storeCovered == true)
-            const Padding(
-              padding: EdgeInsets.only(top: 12),
-              child: StoreCoveredBanner(),
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              // A listing of the seller's own on their store plan's places
+              // says so with the places; one posted into the store as ever.
+              child: StoreCoveredBanner(
+                storeName: _fee?.storePlan?.storeName,
+                planPlaces: _fee?.storePlan?.places,
+                planFree: _fee?.storePlan?.free,
+              ),
             )
           else if (_fee?.launchOffer?.eligible == true && _fee?.launchOffer != null)
             Padding(

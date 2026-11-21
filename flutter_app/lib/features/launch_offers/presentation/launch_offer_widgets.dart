@@ -578,10 +578,17 @@ class OfferStateLine extends StatelessWidget {
   }
 }
 
-/// A listing posted through a store never pays a listing fee.
+/// A listing posted through a store never pays a listing fee - nor one of
+/// the owner's own while their store plan has a place free for it.
 class StoreCoveredBanner extends StatelessWidget {
-  const StoreCoveredBanner({super.key, this.storeName});
+  const StoreCoveredBanner({super.key, this.storeName, this.planPlaces, this.planFree});
   final String? storeName;
+
+  /// For a listing of the seller's own taking a place on their store plan
+  /// (not posted into the store): the listings the plan pays for, and how
+  /// many of those places are free.
+  final int? planPlaces;
+  final int? planFree;
 
   @override
   Widget build(BuildContext context) {
@@ -602,8 +609,12 @@ class StoreCoveredBanner extends StatelessWidget {
                 style: TextStyle(color: BrokaColors.textHigh, fontSize: 14, fontWeight: FontWeight.w800)),
             const SizedBox(height: 4),
             Text(
-              'Listings in ${storeName ?? 'your store'} are covered by the store plan — '
-              'no per-listing payment, and no free-listing slot is used.',
+              planPlaces != null
+                  ? 'Your ${storeName ?? 'store'} plan pays for $planPlaces listings and '
+                      '${(planFree ?? 0) == 1 ? 'one place is' : '${planFree ?? 0} places are'} '
+                      'free - this one takes a place. No per-listing payment.'
+                  : 'Listings in ${storeName ?? 'your store'} are covered by the store plan — '
+                      'no per-listing payment, and no free-listing slot is used.',
               style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.4),
             ),
           ]),

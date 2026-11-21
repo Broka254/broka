@@ -113,6 +113,19 @@ def _refuse_unless_payable(listing: Listing) -> None:
         raise HTTPException(status_code=409, detail="This listing is no longer for sale.")
 
 
+async def _store_plan_cover(db: AsyncSession, listing: Listing, lock: bool = False):
+    """The seller's store plan that covers this listing of their own, or has
+    a place to put it on free (stores/plan_cover) - None when none does, or
+    when there is no fee to spare it: fees off, a store listing or an
+    auction, one already free for good, or one no longer for sale."""
+    if (not settings.listing_fees_enabled or not fee_applies(listing)
+            or listing.paid_until is None or listing.status != ListingStatus.active):
+        return None
+    from api.domains.stores.plan_cover import plan_cover
+
+    return await plan_cover(db, listing.seller_id, listing.category, listing=listing, lock=lock)
+
+
 async def listing_quote(db: AsyncSession, user_id: str, listing_id: str) -> dict:
     """The quote for one of the seller's own listings, as it stands."""
     listing = await _owned_listing(db, user_id, listing_id)
@@ -126,6 +139,14 @@ async def listing_quote(db: AsyncSession, user_id: str, listing_id: str) -> dict
     quote["months_available"] = available
     quote["listing_id"] = listing.id
     quote["listing_fee"] = fee_state(listing)
+    cover = await _store_plan_cover(db, listing)
+    if cover is not None:
+        # On the seller's store plan, or a place free for it: nothing to pay.
+        # `covered` says which; renew_free puts it on the plan. An app build
+        # from before reads fees_enabled and offers its free renewal - the
+        # same call - instead of asking M-Pesa for a fee the plan covers.
+        quote["store_plan"] = cover.to_dict()
+        quote["fees_enabled"] = False
     return quote
 
 
@@ -444,13 +465,62 @@ async def payment_status(db: AsyncSession, user_id: str, payment_id: str) -> dic
     return _payment_dict(payment, listing)
 
 
-async def renew_free(db: AsyncSession, user_id: str, listing_id: str) -> dict:
-    """Extend one owned listing's live window by one launch window, free.
+def _renewed(listing: Listing) -> dict:
+    from api.domains.listings.time_left import time_left as _time_left
 
-    Only while listing fees are off: every listing then carries a launch
-    window (service.create_listing stamps one), and an expired window must
-    have a way back that is not an M-Pesa prompt the switches refuse to
-    send. Once fees turn on this refuses and renewals go through pay/.
+    countdown = _time_left(listing.paid_until, created_at=listing.created_at)
+    return {
+        "listing_id": listing.id,
+        "paid_until": listing.paid_until.isoformat(),
+        "listing_fee": fee_state(listing),
+        "time_left": countdown,
+        "time_left_label": countdown["label"],
+        "goes_offline_at": countdown["goes_offline_at"],
+    }
+
+
+async def _put_on_store_plan(db: AsyncSession, user_id: str, listing: Listing) -> dict:
+    """With fees on: put one of the seller's own listings on a place their
+    store plan has free (stores/plan_cover) - unpaid, run out or ending, it
+    stays up while the plan is paid, for nothing. The way back for a
+    listing posted before its seller's plan had room for it, which would
+    otherwise wait on a fee the plan already covers."""
+    cover = await _store_plan_cover(db, listing, lock=True)
+    if cover is not None and cover.covered:
+        raise HTTPException(status_code=409, detail=(
+            f"Your {cover.store_name} plan already covers this listing - it stays up "
+            f"until {cover.until.day} {cover.until:%b %Y}, and renewing the plan keeps it up."))
+    if cover is None:
+        raise HTTPException(status_code=409, detail=(
+            "Listing fees are on - renew this listing on the listing fee screen."))
+    never_live = listing.created_at is not None and listing.paid_until <= listing.created_at
+    listing.paid_until = cover.until
+    await record_audit(
+        db, user_id, "listing_on_store_plan", "listing", listing.id,
+        f"store={cover.store_id} until={cover.until.isoformat()} "
+        f"places={cover.in_use + 1}/{cover.places}",
+    )
+    await db.commit()
+    # A listing buyers never saw is new to them, as after its first payment
+    # (_settle): announced once, after commit, so the Buying Agent reads it live.
+    if never_live:
+        await publish(ListingCreated(
+            listing_id=listing.id, seller_id=listing.seller_id,
+            price=float(listing.price), category=listing.category,
+        ))
+    return _renewed(listing)
+
+
+async def renew_free(db: AsyncSession, user_id: str, listing_id: str) -> dict:
+    """Extend one owned listing's live window, free.
+
+    While listing fees are off: by one launch window. Every listing then
+    carries one (service.create_listing stamps it), and an expired window
+    must have a way back that is not an M-Pesa prompt the switches refuse
+    to send.
+
+    While they are on: only onto a place the seller's store plan has free
+    (_put_on_store_plan); every other renewal goes through pay/.
 
     Rules mirror start_payment's, minus money: owned, active, fee-applying
     listings only (a store listing's clock is its store's - renew the store;
@@ -459,12 +529,9 @@ async def renew_free(db: AsyncSession, user_id: str, listing_id: str) -> dict:
     months left would mint free time on top of free time. Never past
     MAX_AHEAD, same ceiling as paid time.
     """
-    from api.domains.listings.time_left import time_left as _time_left
-
-    if settings.listing_fees_enabled:
-        raise HTTPException(status_code=409, detail=(
-            "Listing fees are on - renew this listing on the listing fee screen."))
     listing = await _owned_listing(db, user_id, listing_id)
+    if settings.listing_fees_enabled:
+        return await _put_on_store_plan(db, user_id, listing)
     if not fee_applies(listing):
         if getattr(listing, "store_id", None):
             raise HTTPException(status_code=409, detail=(
@@ -487,15 +554,7 @@ async def renew_free(db: AsyncSession, user_id: str, listing_id: str) -> dict:
             "A listing can be live for up to 6 months ahead. This one already is."))
     listing.paid_until = start + window
     await db.commit()
-    countdown = _time_left(listing.paid_until, created_at=listing.created_at)
-    return {
-        "listing_id": listing.id,
-        "paid_until": listing.paid_until.isoformat(),
-        "listing_fee": fee_state(listing),
-        "time_left": countdown,
-        "time_left_label": countdown["label"],
-        "goes_offline_at": countdown["goes_offline_at"],
-    }
+    return _renewed(listing)
 
 
 async def listings_needing_payment(db: AsyncSession, user_id: str) -> list[dict]:
