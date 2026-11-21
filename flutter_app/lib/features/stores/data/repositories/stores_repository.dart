@@ -10,6 +10,7 @@ import '../../../../core/network/api_client.dart';
 import '../../../../services/api_service.dart';
 import '../../../../core/utils/result.dart';
 import '../../../listings/domain/models/listing.dart';
+import '../../domain/models/marketing_sidekick.dart';
 import '../../domain/models/store.dart';
 import '../../domain/models/store_insights.dart';
 import '../../domain/models/store_billing.dart';
@@ -57,7 +58,8 @@ class StoresRepository {
     } on ApiException catch (e) {
       return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } on SocketException {
-      return const Failure("You're offline. Check your connection and try again.");
+      return const Failure(
+          "You're offline. Check your connection and try again.");
     } on TimeoutException {
       return const Failure('BROKA is taking too long to answer. Try again.');
     } on http.ClientException {
@@ -94,7 +96,8 @@ class StoresRepository {
           'offset': offset.toString(),
           if (lat != null) 'lat': lat.toString(),
           if (lng != null) 'lng': lng.toString(),
-          if (maxDistanceKm != null) 'max_distance_km': maxDistanceKm.toString(),
+          if (maxDistanceKm != null)
+            'max_distance_km': maxDistanceKm.toString(),
           if (nearestFirst) 'nearest_first': 'true',
         }) as List;
         final raw = data.cast<Map<String, dynamic>>();
@@ -109,9 +112,15 @@ class StoresRepository {
   /// The directory as it last opened with no search or filter - its stores
   /// and the "near you" rail - without asking the server. Null: nothing
   /// saved (or past CachePolicies.storeDirectory's keepFor).
-  Future<({List<Store> stores, List<Store> nearby, DateTime fetchedAt, bool fresh})?>
-      savedDirectory() async {
-    final e = await ScreenCache.instance.read(_directoryKey(), CachePolicies.storeDirectory);
+  Future<
+      ({
+        List<Store> stores,
+        List<Store> nearby,
+        DateTime fetchedAt,
+        bool fresh
+      })?> savedDirectory() async {
+    final e = await ScreenCache.instance
+        .read(_directoryKey(), CachePolicies.storeDirectory);
     final data = e?.data;
     if (e == null || data is! Map) return null;
     List<Store> parse(Object? list) {
@@ -130,48 +139,64 @@ class StoresRepository {
 
     final stores = parse(data['stores']);
     if (stores.isEmpty) return null;
-    return (stores: stores, nearby: parse(data['nearby']), fetchedAt: e.fetchedAt, fresh: e.isFresh);
+    return (
+      stores: stores,
+      nearby: parse(data['nearby']),
+      fetchedAt: e.fetchedAt,
+      fresh: e.isFresh
+    );
   }
 
   /// Saves the unfiltered directory, as [listStores] sent it ([stores] and
   /// [nearby] are its onRaw pages), less large inline pictures.
-  Future<void> saveDirectory(List<Map<String, dynamic>> stores, List<Map<String, dynamic>> nearby) =>
+  Future<void> saveDirectory(List<Map<String, dynamic>> stores,
+          List<Map<String, dynamic>> nearby) =>
       ScreenCache.instance.write(_directoryKey(), {
         'stores': [for (final s in stores) stripLargeInlineMedia(s)],
         'nearby': [for (final s in nearby) stripLargeInlineMedia(s)],
       });
 
-  Future<Result<Store>> createStore(Map<String, dynamic> payload) =>
-      _guard(() async => Store.fromJson(await _client.post('/stores', payload)));
+  Future<Result<Store>> createStore(Map<String, dynamic> payload) => _guard(
+      () async => Store.fromJson(await _client.post('/stores', payload)));
 
   Future<Result<Store>> getStore(String storeId) =>
       _guard(() async => Store.fromJson(await _client.get('/stores/$storeId')));
 
-  Future<Result<Store>> getStoreBySlug(String slug) =>
-      _guard(() async => Store.fromJson(await _client.get('/stores/slug/$slug')));
+  Future<Result<Store>> getStoreBySlug(String slug) => _guard(
+      () async => Store.fromJson(await _client.get('/stores/slug/$slug')));
 
   /// Success(null) - not a Failure - when the signed-in user has no store
   /// yet, which is the normal state for most accounts.
-  CacheKey _myStoreKey() => CacheKey.forUser(CacheFeature.storeSummary, ApiService.currentUserId);
+  CacheKey _myStoreKey() =>
+      CacheKey.forUser(CacheFeature.storeSummary, ApiService.currentUserId);
   CacheKey _statsKey(String storeId, int days) => CacheKey.forUser(
-      CacheFeature.storeStats, ApiService.currentUserId, {'store': storeId, 'days': days});
+      CacheFeature.storeStats,
+      ApiService.currentUserId,
+      {'store': storeId, 'days': days});
 
   /// Fetches the caller's store (null: none yet) and saves it on the phone
   /// for [savedMyStore].
   Future<Result<Store?>> getMyStore() => _guard(() async {
-        final data = await ScreenCache.instance.fetch(_myStoreKey(), () => _client.get('/stores/mine'),
-            persist: (d) => d is Map<String, dynamic> ? stripLargeInlineMedia(d) : d);
-        return data == null ? null : Store.fromJson(data as Map<String, dynamic>);
+        final data = await ScreenCache.instance.fetch(
+            _myStoreKey(), () => _client.get('/stores/mine'),
+            persist: (d) =>
+                d is Map<String, dynamic> ? stripLargeInlineMedia(d) : d);
+        return data == null
+            ? null
+            : Store.fromJson(data as Map<String, dynamic>);
       });
 
   /// The caller's store as last fetched on this phone - `store` null when
   /// they had none - without asking the server. Null: nothing saved.
-  Future<({Store? store, DateTime fetchedAt, bool fresh})?> savedMyStore() async {
-    final e = await ScreenCache.instance.read(_myStoreKey(), CachePolicies.storeSummary);
+  Future<({Store? store, DateTime fetchedAt, bool fresh})?>
+      savedMyStore() async {
+    final e = await ScreenCache.instance
+        .read(_myStoreKey(), CachePolicies.storeSummary);
     if (e == null) return null;
     final data = e.data;
     try {
-      final store = data is Map ? Store.fromJson(Map<String, dynamic>.from(data)) : null;
+      final store =
+          data is Map ? Store.fromJson(Map<String, dynamic>.from(data)) : null;
       if (data != null && store == null) return null;
       return (store: store, fetchedAt: e.fetchedAt, fresh: e.isFresh);
     } catch (_) {
@@ -180,28 +205,37 @@ class StoresRepository {
   }
 
   /// The saved week of visits and shares for [storeId].
-  Future<({StoreStats stats, bool fresh})?> savedStats(String storeId, {int days = 7}) async {
-    final e = await ScreenCache.instance.read(_statsKey(storeId, days), CachePolicies.storeStats);
+  Future<({StoreStats stats, bool fresh})?> savedStats(String storeId,
+      {int days = 7}) async {
+    final e = await ScreenCache.instance
+        .read(_statsKey(storeId, days), CachePolicies.storeStats);
     final data = e?.data;
     if (e == null || data is! Map) return null;
     try {
-      return (stats: StoreStats.fromJson(Map<String, dynamic>.from(data)), fresh: e.isFresh);
+      return (
+        stats: StoreStats.fromJson(Map<String, dynamic>.from(data)),
+        fresh: e.isFresh
+      );
     } catch (_) {
       return null;
     }
   }
 
-  Future<Result<Store>> updateStore(String storeId, Map<String, dynamic> payload) =>
-      _guard(() async => Store.fromJson(await _client.patch('/stores/$storeId', payload)));
+  Future<Result<Store>> updateStore(
+          String storeId, Map<String, dynamic> payload) =>
+      _guard(() async =>
+          Store.fromJson(await _client.patch('/stores/$storeId', payload)));
 
-  Future<Result<Store>> setStoreStatus(String storeId, bool isActive) => _guard(() async =>
-      Store.fromJson(await _client.post('/stores/$storeId/status', {'is_active': isActive})));
+  Future<Result<Store>> setStoreStatus(String storeId, bool isActive) =>
+      _guard(() async => Store.fromJson(await _client
+          .post('/stores/$storeId/status', {'is_active': isActive})));
 
   /// Deletes the caller's store: the shop and its link go dark, and its
   /// products are archived (cancelled) rather than deleted. See
   /// StoreService.delete_store on the backend.
   Future<Result<int>> deleteStore(String storeId) => _guard(() async {
-        final data = await _client.delete('/stores/$storeId') as Map<String, dynamic>;
+        final data =
+            await _client.delete('/stores/$storeId') as Map<String, dynamic>;
         return (data['archived_listings'] as num?)?.toInt() ?? 0;
       });
 
@@ -219,10 +253,12 @@ class StoresRepository {
     StorePriceBand? price,
   }) =>
       _guard(() async {
-        final data = await _client.get('/stores/$storeId/listings', queryParams: {
+        final data =
+            await _client.get('/stores/$storeId/listings', queryParams: {
           'limit': limit.toString(),
           'offset': offset.toString(),
-          if (search != null && search.trim().isNotEmpty) 'search': search.trim(),
+          if (search != null && search.trim().isNotEmpty)
+            'search': search.trim(),
           if (category != null) 'category': category,
           if (subcategoryId != null) 'subcategory_id': subcategoryId,
           if (sort != StoreSort.featured) 'sort': sort.value,
@@ -230,7 +266,9 @@ class StoresRepository {
           if (price?.min != null) 'min_price': price!.min!.toStringAsFixed(0),
           if (price?.max != null) 'max_price': price!.max!.toStringAsFixed(0),
         }) as List;
-        return data.map((e) => BrokaListing.fromJson(e as Map<String, dynamic>)).toList();
+        return data
+            .map((e) => BrokaListing.fromJson(e as Map<String, dynamic>))
+            .toList();
       });
 
   /// One listing, as the product screen reads it - for a cart link's
@@ -253,28 +291,33 @@ class StoresRepository {
     int offset = 0,
   }) =>
       _guard(() async {
-        Future<Object?> load() => _client.get('/stores/$storeId/manage/listings', queryParams: {
-          'limit': limit.toString(),
-          'offset': offset.toString(),
-          if (state != null) 'state': state.value,
-          if (search != null && search.trim().isNotEmpty) 'search': search.trim(),
-          if (category != null && category.isNotEmpty) 'category': category,
-          if (sort != 'newest') 'sort': sort,
-        });
+        Future<Object?> load() =>
+            _client.get('/stores/$storeId/manage/listings', queryParams: {
+              'limit': limit.toString(),
+              'offset': offset.toString(),
+              if (state != null) 'state': state.value,
+              if (search != null && search.trim().isNotEmpty)
+                'search': search.trim(),
+              if (category != null && category.isNotEmpty) 'category': category,
+              if (sort != 'newest') 'sort': sort,
+            });
         // A first page without a search is saved (savedOwnerProducts); a
         // later page or a search is asked for as before.
         final key = (offset == 0 && (search == null || search.trim().isEmpty))
-            ? _ownerProductsKey(storeId, state: state, category: category, sort: sort, limit: limit)
+            ? _ownerProductsKey(storeId,
+                state: state, category: category, sort: sort, limit: limit)
             : null;
         final data = (key == null
             ? await load()
             : await ScreenCache.instance.fetch(key, load,
-                persist: (d) => d is Map<String, dynamic> ? stripLargeInlineMedia(d) : d))
-            as Map<String, dynamic>;
+                persist: (d) => d is Map<String, dynamic>
+                    ? stripLargeInlineMedia(d)
+                    : d)) as Map<String, dynamic>;
         return _productsPage(data);
       });
 
-  static StoreProductsPage _productsPage(Map<String, dynamic> data) => StoreProductsPage(
+  static StoreProductsPage _productsPage(Map<String, dynamic> data) =>
+      StoreProductsPage(
         items: [
           for (final e in data['items'] as List? ?? const [])
             StoreProduct.fromJson(Map<String, dynamic>.from(e as Map)),
@@ -284,7 +327,10 @@ class StoresRepository {
       );
 
   CacheKey _ownerProductsKey(String storeId,
-          {StoreProductState? state, String? category, String sort = 'newest', int limit = 20}) =>
+          {StoreProductState? state,
+          String? category,
+          String sort = 'newest',
+          int limit = 20}) =>
       CacheKey.forUser(CacheFeature.storeProducts, ApiService.currentUserId, {
         'store': storeId,
         'state': state?.value,
@@ -304,12 +350,16 @@ class StoresRepository {
     int limit = 20,
   }) async {
     final e = await ScreenCache.instance.read(
-        _ownerProductsKey(storeId, state: state, category: category, sort: sort, limit: limit),
+        _ownerProductsKey(storeId,
+            state: state, category: category, sort: sort, limit: limit),
         CachePolicies.storeProducts);
     final data = e?.data;
     if (e == null || data is! Map) return null;
     try {
-      return (page: _productsPage(Map<String, dynamic>.from(data)), fresh: e.isFresh);
+      return (
+        page: _productsPage(Map<String, dynamic>.from(data)),
+        fresh: e.isFresh
+      );
     } catch (_) {
       return null;
     }
@@ -325,10 +375,12 @@ class StoresRepository {
   Future<Result<StoreInsights>> getInsights(String storeId, {int days = 7}) =>
       _guard(() async {
         final key = _insightsKey(storeId, days);
-        final data = await ScreenCache.instance.fetch(key, () => _client.get(
-              '/stores/$storeId/insights',
-              queryParams: {'days': days.toString()},
-            ));
+        final data = await ScreenCache.instance.fetch(
+            key,
+            () => _client.get(
+                  '/stores/$storeId/insights',
+                  queryParams: {'days': days.toString()},
+                ));
         final encoded = jsonEncode(data);
         _insightsUnchanged[key.value] = _lastInsights[key.value] == encoded;
         _lastInsights[key.value] = encoded;
@@ -347,22 +399,31 @@ class StoresRepository {
       _insightsUnchanged[_insightsKey(storeId, days).value] ?? false;
 
   CacheKey _insightsKey(String storeId, int days) => CacheKey.forUser(
-      CacheFeature.storeInsights, ApiService.currentUserId, {'store': storeId, 'days': days});
+      CacheFeature.storeInsights,
+      ApiService.currentUserId,
+      {'store': storeId, 'days': days});
 
   /// The dashboard's numbers as last fetched on this phone.
-  Future<({StoreInsights insights, bool fresh})?> savedInsights(String storeId, {int days = 7}) async {
-    final e = await ScreenCache.instance.read(_insightsKey(storeId, days), CachePolicies.storeInsights);
+  Future<({StoreInsights insights, bool fresh})?> savedInsights(String storeId,
+      {int days = 7}) async {
+    final e = await ScreenCache.instance
+        .read(_insightsKey(storeId, days), CachePolicies.storeInsights);
     final data = e?.data;
     if (e == null || data is! Map) return null;
     try {
-      return (insights: StoreInsights.fromJson(Map<String, dynamic>.from(data)), fresh: e.isFresh);
+      return (
+        insights: StoreInsights.fromJson(Map<String, dynamic>.from(data)),
+        fresh: e.isFresh
+      );
     } catch (_) {
       return null;
     }
   }
 
   CacheKey _categoriesKey(String storeId) => CacheKey.forUser(
-      CacheFeature.storeProducts, ApiService.currentUserId, {'store': storeId, 'categories': 1});
+      CacheFeature.storeProducts,
+      ApiService.currentUserId,
+      {'store': storeId, 'categories': 1});
 
   /// The categories the store has products in, biggest first. From the
   /// saved copy while it is current, unless [forceRefresh].
@@ -371,11 +432,13 @@ class StoresRepository {
       _guard(() async {
         List<StoreCategoryCount> parse(Object? data) => [
               for (final e in data as List)
-                StoreCategoryCount.fromJson(Map<String, dynamic>.from(e as Map)),
+                StoreCategoryCount.fromJson(
+                    Map<String, dynamic>.from(e as Map)),
             ];
         final key = _categoriesKey(storeId);
         if (!forceRefresh) {
-          final saved = await ScreenCache.instance.read(key, CachePolicies.storeProducts);
+          final saved =
+              await ScreenCache.instance.read(key, CachePolicies.storeProducts);
           if (saved != null && saved.isFresh && saved.data is List) {
             try {
               return parse(saved.data);
@@ -395,25 +458,31 @@ class StoresRepository {
   }) =>
       _guard(() async => StoreReviews.fromJson(await _client.get(
             '/stores/$storeId/reviews',
-            queryParams: {'limit': limit.toString(), 'offset': offset.toString()},
+            queryParams: {
+              'limit': limit.toString(),
+              'offset': offset.toString()
+            },
           ) as Map<String, dynamic>));
 
   /// The setup wizard's live check of a link name.
-  Future<Result<LinkNameCheck>> checkLinkName(String name) => _guard(() async =>
-      LinkNameCheck.fromJson(
-          await _client.get('/stores/name-available', queryParams: {'name': name})));
+  Future<Result<LinkNameCheck>> checkLinkName(String name) =>
+      _guard(() async => LinkNameCheck.fromJson(await _client
+          .get('/stores/name-available', queryParams: {'name': name})));
 
   /// Emails a code to [email] to prove the store owner receives mail
   /// there. Returns the code itself only on development servers.
   Future<Result<String?>> requestEmailCode(String email) => _guard(() async {
-        final data = await _client.post('/stores/email/request-code', {'email': email});
+        final data =
+            await _client.post('/stores/email/request-code', {'email': email});
         return (data as Map?)?['debug_code'] as String?;
       });
 
   /// Checks the emailed code; returns the token that proves the address
   /// when the store is saved (`business_email_token`).
-  Future<Result<String>> verifyEmailCode(String email, String code) => _guard(() async {
-        final data = await _client.post('/stores/email/verify', {'email': email, 'code': code});
+  Future<Result<String>> verifyEmailCode(String email, String code) =>
+      _guard(() async {
+        final data = await _client
+            .post('/stores/email/verify', {'email': email, 'code': code});
         return (data as Map)['email_verify_token'] as String;
       });
 
@@ -421,7 +490,8 @@ class StoresRepository {
   /// counts. Fire-and-forget: failures are ignored.
   Future<void> recordVisit(String storeId, {String? via}) async {
     try {
-      await _client.post('/stores/$storeId/visit', {if (via != null) 'via': via});
+      await _client
+          .post('/stores/$storeId/visit', {if (via != null) 'via': via});
     } catch (_) {}
   }
 
@@ -436,30 +506,34 @@ class StoresRepository {
   /// state and the count beside it, from the one response - the screen
   /// never re-reads the store to learn what it just did.
   Future<Result<StoreFollowState>> followStore(String storeId) =>
-      _guard(() async => StoreFollowState.fromJson(
-          await _client.post('/stores/$storeId/follow', const {})
-              as Map<String, dynamic>));
+      _guard(() async => StoreFollowState.fromJson(await _client
+          .post('/stores/$storeId/follow', const {}) as Map<String, dynamic>));
 
   Future<Result<StoreFollowState>> unfollowStore(String storeId) =>
-      _guard(() async => StoreFollowState.fromJson(
-          await _client.delete('/stores/$storeId/follow') as Map<String, dynamic>));
+      _guard(() async => StoreFollowState.fromJson(await _client
+          .delete('/stores/$storeId/follow') as Map<String, dynamic>));
 
   /// The signed-in seller, for the setup wizard.
-  Future<Result<StoreOwnerProfile>> getOwnerProfile() => _guard(() async =>
-      StoreOwnerProfile.fromJson(await _client.get('/auth/me') as Map<String, dynamic>));
+  Future<Result<StoreOwnerProfile>> getOwnerProfile() =>
+      _guard(() async => StoreOwnerProfile.fromJson(
+          await _client.get('/auth/me') as Map<String, dynamic>));
 
-  Future<Result<StoreStats>> getStats(String storeId, {int days = 7}) => _guard(() async =>
-      StoreStats.fromJson(await ScreenCache.instance.fetch(
-          _statsKey(storeId, days),
-          () => _client.get('/stores/$storeId/stats', queryParams: {'days': days.toString()}))
+  Future<Result<StoreStats>> getStats(String storeId, {int days = 7}) =>
+      _guard(() async => StoreStats.fromJson(await ScreenCache.instance.fetch(
+              _statsKey(storeId, days),
+              () => _client.get('/stores/$storeId/stats',
+                  queryParams: {'days': days.toString()}))
           as Map<String, dynamic>));
 
   /// The owner's billing screen: their rate card and plan state, and - with
   /// [listings] - that size's priced periods. Owner only.
-  Future<Result<StoreBillingQuote>> billingQuote(String storeId, {int? listings}) =>
+  Future<Result<StoreBillingQuote>> billingQuote(String storeId,
+          {int? listings}) =>
       _guard(() async => StoreBillingQuote.fromJson(await _client.get(
             '/stores/$storeId/billing',
-            queryParams: {if (listings != null) 'listings': listings.toString()},
+            queryParams: {
+              if (listings != null) 'listings': listings.toString()
+            },
           ) as Map<String, dynamic>));
 
   /// Sends the M-Pesa prompt for a store plan. [idempotencyKey] is the
@@ -478,14 +552,17 @@ class StoresRepository {
             headers: {'X-Idempotency-Key': idempotencyKey},
           ) as Map<String, dynamic>));
 
-  Future<Result<StorePlanPayment>> storePaymentStatus(String storeId, String paymentId) =>
-      _guard(() async => StorePlanPayment.fromJson(await _client.get(
-          '/stores/$storeId/billing/payments/$paymentId') as Map<String, dynamic>));
+  Future<Result<StorePlanPayment>> storePaymentStatus(
+          String storeId, String paymentId) =>
+      _guard(() async => StorePlanPayment.fromJson(
+          await _client.get('/stores/$storeId/billing/payments/$paymentId')
+              as Map<String, dynamic>));
 
   /// Archives several of the store's products at once. The server validates
   /// every id against this store and its owner before changing any of them;
   /// anything it refused comes back in the failure message.
-  Future<Result<int>> archiveProducts(String storeId, List<String> listingIds) =>
+  Future<Result<int>> archiveProducts(
+          String storeId, List<String> listingIds) =>
       _guard(() async {
         final data = await _client.post(
           '/stores/$storeId/manage/listings/bulk',
@@ -507,7 +584,8 @@ class StoresRepository {
     int offset = 0,
   }) =>
       _guard(() async {
-        final data = await _client.get('/stores/$storeId/marketing/campaigns', queryParams: {
+        final data = await _client
+            .get('/stores/$storeId/marketing/campaigns', queryParams: {
           'limit': limit.toString(),
           'offset': offset.toString(),
         }) as Map<String, dynamic>;
@@ -520,9 +598,11 @@ class StoresRepository {
         );
       });
 
-  Future<Result<MarketingCampaign>> getCampaign(String storeId, String campaignId) =>
-      _guard(() async => MarketingCampaign.fromJson(await _client.get(
-          '/stores/$storeId/marketing/campaigns/$campaignId') as Map<String, dynamic>));
+  Future<Result<MarketingCampaign>> getCampaign(
+          String storeId, String campaignId) =>
+      _guard(() async => MarketingCampaign.fromJson(
+          await _client.get('/stores/$storeId/marketing/campaigns/$campaignId')
+              as Map<String, dynamic>));
 
   /// Creates a campaign. With [generate] false only the configuration is
   /// saved; generate later with [regenerateCampaign]. Product facts are read
@@ -544,11 +624,13 @@ class StoresRepository {
       _guard(() async => MarketingCampaign.fromJson(await _client.post(
             '/stores/$storeId/marketing/campaigns',
             {
-              if (title != null && title.trim().isNotEmpty) 'title': title.trim(),
+              if (title != null && title.trim().isNotEmpty)
+                'title': title.trim(),
               'objective': objective,
               'product_ids': productIds,
               'platforms': platforms,
-              if (audience != null && audience.trim().isNotEmpty) 'audience': audience.trim(),
+              if (audience != null && audience.trim().isNotEmpty)
+                'audience': audience.trim(),
               'tone': tone,
               'language': language,
               if (instructions != null && instructions.trim().isNotEmpty)
@@ -575,7 +657,8 @@ class StoresRepository {
             },
           ) as Map<String, dynamic>));
 
-  Future<Result<MarketingCampaign>> regenerateCampaign(String storeId, String campaignId) =>
+  Future<Result<MarketingCampaign>> regenerateCampaign(
+          String storeId, String campaignId) =>
       _guard(() async => MarketingCampaign.fromJson(await _client.post(
           '/stores/$storeId/marketing/campaigns/$campaignId/regenerate',
           const {}) as Map<String, dynamic>));
@@ -601,7 +684,8 @@ class StoresRepository {
 
   Future<Result<void>> deleteCampaign(String storeId, String campaignId) =>
       _guard(() async {
-        await _client.delete('/stores/$storeId/marketing/campaigns/$campaignId');
+        await _client
+            .delete('/stores/$storeId/marketing/campaigns/$campaignId');
       });
 
   /// Records that the seller downloaded or shared a creative. These are
@@ -615,7 +699,10 @@ class StoresRepository {
       _guard(() async {
         await _client.post(
           '/stores/$storeId/marketing/campaigns/$campaignId/events',
-          {'kind': kind, if (platform != null && platform.isNotEmpty) 'platform': platform},
+          {
+            'kind': kind,
+            if (platform != null && platform.isNotEmpty) 'platform': platform
+          },
         );
       });
 
@@ -641,34 +728,40 @@ class StoresRepository {
               'group': group,
               'limit': limit.toString(),
               'offset': offset.toString(),
-              if (search != null && search.trim().isNotEmpty) 'q': search.trim(),
+              if (search != null && search.trim().isNotEmpty)
+                'q': search.trim(),
             },
           ) as Map<String, dynamic>));
 
   /// The counts behind the Orders tab, and the owner's unread updates.
   Future<Result<StoreOrdersOverview>> getStoreOrdersOverview(String storeId) =>
-      _guard(() async => StoreOrdersOverview.fromJson(
-          await _client.get('/stores/$storeId/orders/summary') as Map<String, dynamic>));
+      _guard(() async => StoreOrdersOverview.fromJson(await _client
+          .get('/stores/$storeId/orders/summary') as Map<String, dynamic>));
 
   /// One order, as the caller (its store or its buyer) may see it.
-  Future<Result<StoreOrder>> getOrder(String orderId) => _guard(() async =>
-      StoreOrder.fromJson(await _client.get('/orders/$orderId') as Map<String, dynamic>));
+  Future<Result<StoreOrder>> getOrder(String orderId) =>
+      _guard(() async => StoreOrder.fromJson(
+          await _client.get('/orders/$orderId') as Map<String, dynamic>));
 
   /// Marks this order's updates read in the caller's own feed. Best-effort.
   Future<Result<int>> markOrderUpdatesRead(String orderId) => _guard(() async {
-        final data = await _client.post('/orders/notifications/read', {'order_id': orderId});
+        final data = await _client
+            .post('/orders/notifications/read', {'order_id': orderId});
         return ((data as Map?)?['marked'] as num?)?.toInt() ?? 0;
       });
 
-  Future<Result<StoreOrder>> _orderAction(String orderId, StoreOrderAction action,
+  Future<Result<StoreOrder>> _orderAction(
+          String orderId, StoreOrderAction action,
           [Map<String, dynamic> body = const {}]) =>
-      _guard(() async => StoreOrder.fromJson(
-          await _client.post('/orders/$orderId/${action.path}', body) as Map<String, dynamic>));
+      _guard(() async => StoreOrder.fromJson(await _client.post(
+          '/orders/$orderId/${action.path}', body) as Map<String, dynamic>));
 
   /// Accepts the request as the buyer asked it, optionally with a delivery
   /// charge (in cents) and handover details. The buyer confirms next.
   Future<Result<StoreOrder>> acceptOrder(String orderId,
-          {int? deliveryFeeMinor, String? sellerNote, String? fulfilmentNote}) =>
+          {int? deliveryFeeMinor,
+          String? sellerNote,
+          String? fulfilmentNote}) =>
       _orderAction(orderId, StoreOrderAction.accept, {
         if (deliveryFeeMinor != null) 'delivery_fee_minor': deliveryFeeMinor,
         if (_filled(sellerNote)) 'seller_note': sellerNote!.trim(),
@@ -693,7 +786,8 @@ class StoresRepository {
 
   /// Declines, with the reason the buyer is shown.
   Future<Result<StoreOrder>> declineOrder(String orderId, String reason) =>
-      _orderAction(orderId, StoreOrderAction.decline, {'reason': reason.trim()});
+      _orderAction(
+          orderId, StoreOrderAction.decline, {'reason': reason.trim()});
 
   /// Cancels: the store must say why; a buyer may.
   Future<Result<StoreOrder>> cancelOrder(String orderId, {String? reason}) =>
@@ -724,7 +818,8 @@ class StoresRepository {
   Future<Result<StoreOrder>> confirmOrder(String orderId, int revision) =>
       _orderAction(orderId, StoreOrderAction.confirm, {'revision': revision});
 
-  Future<Result<StoreOrder>> rejectOrderProposal(String orderId, {String? note}) =>
+  Future<Result<StoreOrder>> rejectOrderProposal(String orderId,
+          {String? note}) =>
       _orderAction(orderId, StoreOrderAction.rejectProposal, {
         if (_filled(note)) 'note': note!.trim(),
       });
@@ -733,13 +828,15 @@ class StoresRepository {
       _orderAction(orderId, StoreOrderAction.confirmReceived);
 
   Future<Result<StoreOrder>> reportOrderProblem(String orderId, String note) =>
-      _orderAction(orderId, StoreOrderAction.reportProblem, {'note': note.trim()});
+      _orderAction(
+          orderId, StoreOrderAction.reportProblem, {'note': note.trim()});
 
   /// Records what the caller says happened with the payment. It is their
   /// report, labelled as theirs; BROKA does not see or verify payments.
   Future<Result<StoreOrder>> reportOrderPayment(String orderId,
           {required String kind, String? reference, String? note}) =>
-      _guard(() async => StoreOrder.fromJson(await _client.post('/orders/$orderId/payment-reports', {
+      _guard(() async => StoreOrder.fromJson(
+              await _client.post('/orders/$orderId/payment-reports', {
             'kind': kind,
             if (_filled(reference)) 'reference': reference!.trim(),
             if (_filled(note)) 'note': note!.trim(),
@@ -759,13 +856,15 @@ class StoresRepository {
             {
               if (tracked != null) 'stock_tracked': tracked,
               if (quantity != null) 'quantity': quantity,
-              if (temporarilyUnavailable != null) 'temporarily_unavailable': temporarilyUnavailable,
+              if (temporarilyUnavailable != null)
+                'temporarily_unavailable': temporarilyUnavailable,
             },
           ) as Map<String, dynamic>));
 
   /// Takes new order requests again, or pauses them with [note] for buyers
   /// ("Back on Monday"). Orders already sent carry on either way.
-  Future<Result<Store>> setAcceptingOrders(String storeId, bool accepting, {String? note}) =>
+  Future<Result<Store>> setAcceptingOrders(String storeId, bool accepting,
+          {String? note}) =>
       updateStore(storeId, {
         'accepting_orders': accepting,
         if (!accepting) 'orders_pause_note': (note ?? '').trim(),
@@ -791,6 +890,86 @@ class StoresRepository {
               if (text != null) 'text': text,
               'language': language,
               'tone': tone,
+            },
+          ) as Map<String, dynamic>));
+
+  // ── AI Marketing Sidekick ────────────────────────────────────────────────
+  //
+  // The answer is built on the server from this store's live listings and
+  // recent campaigns; the app sends the question, the chosen platform or
+  // products, and the recent turns it is holding in memory. Nothing here is
+  // posted, published or paid for.
+
+  Future<Result<SidekickReply>> sidekickChat(
+    String storeId, {
+    required String message,
+    String? platform,
+    List<String> productIds = const [],
+    String? objective,
+    String language = 'en',
+    List<({String role, String text})> history = const [],
+  }) =>
+      _guard(() async => SidekickReply.fromJson(await _client.post(
+            '/stores/$storeId/marketing/sidekick',
+            {
+              'message': message.trim(),
+              if (platform != null) 'platform': platform,
+              'product_ids': productIds,
+              if (objective != null) 'objective': objective,
+              'language': language,
+              'history': [
+                for (final turn in history)
+                  {'role': turn.role, 'text': turn.text},
+              ],
+            },
+          ) as Map<String, dynamic>));
+
+  /// The platform playbook plus a caption starter from a live product.
+  Future<Result<PlatformGuide>> getPlatformGuide(
+          String storeId, String platform) =>
+      _guard(() async => PlatformGuide.fromJson(await _client
+              .get('/stores/$storeId/marketing/platforms/$platform/guide')
+          as Map<String, dynamic>));
+
+  /// A concept, script or storyboard to film. The server labels it a script;
+  /// no video is generated.
+  Future<Result<VideoScript>> generateVideoScript(
+    String storeId, {
+    String platform = 'tiktok',
+    String kind = 'script',
+    List<String> productIds = const [],
+    String language = 'en',
+  }) =>
+      _guard(() async => VideoScript.fromJson(await _client.post(
+            '/stores/$storeId/marketing/video-script',
+            {
+              'platform': platform,
+              'kind': kind,
+              'product_ids': productIds,
+              'language': language,
+            },
+          ) as Map<String, dynamic>));
+
+  /// Meta Ads guidance in KES. Deterministic and read-only: it creates no
+  /// campaign, and the seller finishes in Meta Ads Manager.
+  Future<Result<AdsPlan>> getAdsPlan(
+    String storeId, {
+    String? productId,
+    String objective = 'traffic',
+    int? budgetKes,
+    String? audience,
+    String? location,
+  }) =>
+      _guard(() async => AdsPlan.fromJson(await _client.post(
+            '/stores/$storeId/marketing/ads-plan',
+            {
+              if (productId != null) 'product_id': productId,
+              'objective': objective,
+              if (budgetKes != null) 'budget_kes': budgetKes,
+              if (audience != null && audience.trim().isNotEmpty)
+                'audience': audience.trim(),
+              if (location != null && location.trim().isNotEmpty)
+                'location': location.trim(),
             },
           ) as Map<String, dynamic>));
 }

@@ -20,8 +20,9 @@ from api.core.client_ip import client_ip
 from api.core.config import settings
 from api.core.idempotency import IdempotencyResult, idempotency_guard
 from api.core.rate_limit import (
-    marketing_event_limiter, marketing_generation_limiter, otp_request_limiter,
-    otp_verify_limiter, store_counter_limiter, store_name_check_limiter, stk_limiter,
+    marketing_event_limiter, marketing_generation_limiter, marketing_sidekick_limiter,
+    otp_request_limiter, otp_verify_limiter, store_counter_limiter,
+    store_name_check_limiter, stk_limiter,
 )
 from api.database import OtpPurpose, get_db
 from api.domains.reviews.router import PublicReviewOut, ReviewSummaryOut
@@ -29,6 +30,7 @@ from api.security import get_current_user, get_current_user_optional
 from . import billing as store_billing
 from . import stats as store_stats
 from .marketing import MarketingService
+from .marketing_sidekick import MarketingSidekickService
 from .service import StoreService
 
 logger = logging.getLogger(__name__)
@@ -304,6 +306,45 @@ class CopywriterIn(BaseModel):
     text: Optional[str] = Field(default=None, max_length=2200)
     language: Literal["en", "sw"] = "en"
     tone: Literal["friendly", "professional", "bold", "playful", "premium"] = "friendly"
+
+
+class SidekickTurnIn(BaseModel):
+    """One earlier turn the app sends back so the Sidekick does not ask for
+    the same detail twice. Held by the app for the session, not stored."""
+    role: Literal["user", "assistant"]
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class SidekickIn(BaseModel):
+    message: str = Field(min_length=2, max_length=1200)
+    # A platform the seller is asking about; None lets the Sidekick recommend
+    # one from the store's own catalogue. Products named here are validated
+    # against this store's live listings - never trusted as facts.
+    platform: Optional[Literal["whatsapp", "instagram", "tiktok", "facebook", "x"]] = None
+    product_ids: List[str] = Field(default_factory=list, max_length=6)
+    objective: Optional[Literal[
+        "new_store", "product", "new_stock", "discount", "awareness",
+        "seasonal", "storefront", "enquiries",
+    ]] = None
+    language: Literal["en", "sw"] = "en"
+    history: List[SidekickTurnIn] = Field(default_factory=list, max_length=12)
+
+
+class VideoScriptIn(BaseModel):
+    platform: Literal["tiktok", "instagram", "facebook"] = "tiktok"
+    kind: Literal["concept", "script", "storyboard", "voice_over"] = "script"
+    product_ids: List[str] = Field(default_factory=list, max_length=1)
+    language: Literal["en", "sw"] = "en"
+
+
+class AdsPlanIn(BaseModel):
+    """Meta Ads guidance input. This creates nothing at Meta: the service
+    answers with a checklist and the seller finishes in Ads Manager."""
+    product_id: Optional[str] = None
+    objective: Literal["awareness", "traffic", "engagement", "leads", "sales"] = "traffic"
+    budget_kes: Optional[int] = Field(default=None, ge=100, le=1_000_000)
+    audience: Optional[str] = Field(default=None, max_length=160)
+    location: Optional[str] = Field(default=None, max_length=120)
 
 
 def _client_key(request: Request, current_user: Optional[dict]) -> str:
@@ -935,6 +976,71 @@ async def copy_suggestions(
     Nothing is written to the listing - the seller must save any change."""
     await marketing_generation_limiter.check_and_record(current_user["id"])
     return await MarketingService(db).copy_suggestions(
+        store_id, current_user["id"], body.model_dump(),
+    )
+
+
+@router.post("/{store_id}/marketing/sidekick")
+async def sidekick_chat(
+    store_id: str,
+    body: SidekickIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """A practical answer for this seller's own store and products.
+
+    The reply is built from the store and its live listings on the server
+    (never from prices in the body) and checked for claims the catalogue does
+    not support. Owner only. Rate-limited because a configured provider call
+    costs real money.
+    """
+    await marketing_sidekick_limiter.check_and_record(current_user["id"])
+    return await MarketingSidekickService(db).chat(
+        store_id, current_user["id"], body.model_dump(),
+    )
+
+
+@router.get("/{store_id}/marketing/platforms/{platform}/guide")
+async def platform_marketing_guide(
+    store_id: str,
+    platform: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The platform's playbook plus a caption starter built from one of the
+    seller's live products. Static guidance, so no provider call and no
+    generation limit."""
+    return await MarketingSidekickService(db).platform_guide(
+        store_id, current_user["id"], platform,
+    )
+
+
+@router.post("/{store_id}/marketing/video-script")
+async def video_script(
+    store_id: str,
+    body: VideoScriptIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """A concept, script or storyboard for the seller to film. Never a video
+    file, and the answer says so."""
+    await marketing_sidekick_limiter.check_and_record(current_user["id"])
+    return await MarketingSidekickService(db).video_script(
+        store_id, current_user["id"], body.model_dump(),
+    )
+
+
+@router.post("/{store_id}/marketing/ads-plan")
+async def meta_ads_plan(
+    store_id: str,
+    body: AdsPlanIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Guided Meta Ads setup in KES. Deterministic on purpose: it is a
+    checklist the seller completes in Meta Ads Manager, and BROKA must never
+    pretend a campaign exists."""
+    return await MarketingSidekickService(db).ads_plan(
         store_id, current_user["id"], body.model_dump(),
     )
 
