@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-399 endpoints served by `backend/main.py`. **Auth** is read from each
+403 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 94, optional 7, public 72, token 6, user 220.
+Counts: admin 94, optional 7, public 72, token 6, user 224.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -393,48 +393,52 @@ Counts: admin 94, optional 7, public 72, token 6, user 220.
 | POST | `/sms/dlr` | public | `mobitech_dlr` (backend/api/routers/sms.py:60) |
 | POST | `/sms/texin/dlr` | public | `texin_dlr` (backend/api/routers/sms.py:98) |
 | GET | `/store/{slug}` | public | `store_public_page` (backend/api/domains/stores/web.py:243) |
-| GET | `/stores` | optional | `list_stores` (backend/api/domains/stores/router.py:332) |
-| POST | `/stores` | user | `create_store` (backend/api/domains/stores/router.py:319) |
-| POST | `/stores/billing/callback` | public | `store_billing_callback` (backend/api/domains/stores/router.py:454) |
-| POST | `/stores/billing/callback/{secret}` | public | `store_billing_callback_secured` (backend/api/domains/stores/router.py:462) |
-| POST | `/stores/email/request-code` | user | `request_business_email_code` (backend/api/domains/stores/router.py:387) |
-| POST | `/stores/email/verify` | user | `verify_business_email_code` (backend/api/domains/stores/router.py:406) |
-| GET | `/stores/mine` | user | `get_my_store` (backend/api/domains/stores/router.py:366) |
-| GET | `/stores/name-available` | user | `name_available` (backend/api/domains/stores/router.py:375) |
-| GET | `/stores/slug/{slug}` | optional | `get_store_by_slug` (backend/api/domains/stores/router.py:423) |
-| GET | `/stores/{store_id}` | optional | `get_store` (backend/api/domains/stores/router.py:471) |
-| PATCH | `/stores/{store_id}` | user | `update_store` (backend/api/domains/stores/router.py:485) |
-| DELETE | `/stores/{store_id}` | user | `delete_store` (backend/api/domains/stores/router.py:509) |
-| GET | `/stores/{store_id}/billing` | user | `get_store_billing` (backend/api/domains/stores/router.py:520) |
-| POST | `/stores/{store_id}/billing/pay` | user | `pay_store_billing` (backend/api/domains/stores/router.py:534) |
-| GET | `/stores/{store_id}/billing/payments/{payment_id}` | user | `store_billing_payment_status` (backend/api/domains/stores/router.py:558) |
-| POST | `/stores/{store_id}/campaign/{token}/event` | public | `attribute_campaign_event` (backend/api/domains/stores/router.py:789) |
-| POST | `/stores/{store_id}/cart-events` | optional | `record_cart_event` (backend/api/domains/stores/router.py:731) |
-| GET | `/stores/{store_id}/categories` | public | `get_store_categories` (backend/api/domains/stores/router.py:632) |
+| GET | `/stores` | optional | `list_stores` (backend/api/domains/stores/router.py:373) |
+| POST | `/stores` | user | `create_store` (backend/api/domains/stores/router.py:360) |
+| POST | `/stores/billing/callback` | public | `store_billing_callback` (backend/api/domains/stores/router.py:495) |
+| POST | `/stores/billing/callback/{secret}` | public | `store_billing_callback_secured` (backend/api/domains/stores/router.py:503) |
+| POST | `/stores/email/request-code` | user | `request_business_email_code` (backend/api/domains/stores/router.py:428) |
+| POST | `/stores/email/verify` | user | `verify_business_email_code` (backend/api/domains/stores/router.py:447) |
+| GET | `/stores/mine` | user | `get_my_store` (backend/api/domains/stores/router.py:407) |
+| GET | `/stores/name-available` | user | `name_available` (backend/api/domains/stores/router.py:416) |
+| GET | `/stores/slug/{slug}` | optional | `get_store_by_slug` (backend/api/domains/stores/router.py:464) |
+| GET | `/stores/{store_id}` | optional | `get_store` (backend/api/domains/stores/router.py:512) |
+| PATCH | `/stores/{store_id}` | user | `update_store` (backend/api/domains/stores/router.py:526) |
+| DELETE | `/stores/{store_id}` | user | `delete_store` (backend/api/domains/stores/router.py:550) |
+| GET | `/stores/{store_id}/billing` | user | `get_store_billing` (backend/api/domains/stores/router.py:561) |
+| POST | `/stores/{store_id}/billing/pay` | user | `pay_store_billing` (backend/api/domains/stores/router.py:575) |
+| GET | `/stores/{store_id}/billing/payments/{payment_id}` | user | `store_billing_payment_status` (backend/api/domains/stores/router.py:599) |
+| POST | `/stores/{store_id}/campaign/{token}/event` | public | `attribute_campaign_event` (backend/api/domains/stores/router.py:830) |
+| POST | `/stores/{store_id}/cart-events` | optional | `record_cart_event` (backend/api/domains/stores/router.py:772) |
+| GET | `/stores/{store_id}/categories` | public | `get_store_categories` (backend/api/domains/stores/router.py:673) |
 | POST | `/stores/{store_id}/enquiries` | user | `send_enquiry` (backend/api/domains/store_orders/router.py:458) |
-| POST | `/stores/{store_id}/follow` | user | `follow_store` (backend/api/domains/stores/router.py:764) |
-| DELETE | `/stores/{store_id}/follow` | user | `unfollow_store` (backend/api/domains/stores/router.py:777) |
-| GET | `/stores/{store_id}/insights` | user | `get_store_insights` (backend/api/domains/stores/router.py:955) |
-| GET | `/stores/{store_id}/listings` | public | `get_store_listings` (backend/api/domains/stores/router.py:568) |
-| GET | `/stores/{store_id}/manage/listings` | user | `get_owner_listings` (backend/api/domains/stores/router.py:596) |
-| POST | `/stores/{store_id}/manage/listings/bulk` | user | `bulk_listing_action` (backend/api/domains/stores/router.py:618) |
+| POST | `/stores/{store_id}/follow` | user | `follow_store` (backend/api/domains/stores/router.py:805) |
+| DELETE | `/stores/{store_id}/follow` | user | `unfollow_store` (backend/api/domains/stores/router.py:818) |
+| GET | `/stores/{store_id}/insights` | user | `get_store_insights` (backend/api/domains/stores/router.py:1061) |
+| GET | `/stores/{store_id}/listings` | public | `get_store_listings` (backend/api/domains/stores/router.py:609) |
+| GET | `/stores/{store_id}/manage/listings` | user | `get_owner_listings` (backend/api/domains/stores/router.py:637) |
+| POST | `/stores/{store_id}/manage/listings/bulk` | user | `bulk_listing_action` (backend/api/domains/stores/router.py:659) |
 | PATCH | `/stores/{store_id}/manage/listings/{listing_id}/stock` | user | `set_listing_stock` (backend/api/domains/store_orders/router.py:440) |
-| GET | `/stores/{store_id}/marketing/campaigns` | user | `list_campaigns` (backend/api/domains/stores/router.py:812) |
-| POST | `/stores/{store_id}/marketing/campaigns` | user | `create_campaign` (backend/api/domains/stores/router.py:827) |
-| GET | `/stores/{store_id}/marketing/campaigns/{campaign_id}` | user | `get_campaign` (backend/api/domains/stores/router.py:843) |
-| PATCH | `/stores/{store_id}/marketing/campaigns/{campaign_id}` | user | `update_campaign` (backend/api/domains/stores/router.py:855) |
-| DELETE | `/stores/{store_id}/marketing/campaigns/{campaign_id}` | user | `delete_campaign` (backend/api/domains/stores/router.py:868) |
-| PATCH | `/stores/{store_id}/marketing/campaigns/{campaign_id}/creatives/{creative_id}` | user | `update_creative` (backend/api/domains/stores/router.py:895) |
-| POST | `/stores/{store_id}/marketing/campaigns/{campaign_id}/events` | user | `record_campaign_event` (backend/api/domains/stores/router.py:912) |
-| POST | `/stores/{store_id}/marketing/campaigns/{campaign_id}/regenerate` | user | `regenerate_campaign` (backend/api/domains/stores/router.py:880) |
-| POST | `/stores/{store_id}/marketing/copy` | user | `copy_suggestions` (backend/api/domains/stores/router.py:928) |
+| POST | `/stores/{store_id}/marketing/ads-plan` | user | `meta_ads_plan` (backend/api/domains/stores/router.py:1034) |
+| GET | `/stores/{store_id}/marketing/campaigns` | user | `list_campaigns` (backend/api/domains/stores/router.py:853) |
+| POST | `/stores/{store_id}/marketing/campaigns` | user | `create_campaign` (backend/api/domains/stores/router.py:868) |
+| GET | `/stores/{store_id}/marketing/campaigns/{campaign_id}` | user | `get_campaign` (backend/api/domains/stores/router.py:884) |
+| PATCH | `/stores/{store_id}/marketing/campaigns/{campaign_id}` | user | `update_campaign` (backend/api/domains/stores/router.py:896) |
+| DELETE | `/stores/{store_id}/marketing/campaigns/{campaign_id}` | user | `delete_campaign` (backend/api/domains/stores/router.py:909) |
+| PATCH | `/stores/{store_id}/marketing/campaigns/{campaign_id}/creatives/{creative_id}` | user | `update_creative` (backend/api/domains/stores/router.py:936) |
+| POST | `/stores/{store_id}/marketing/campaigns/{campaign_id}/events` | user | `record_campaign_event` (backend/api/domains/stores/router.py:953) |
+| POST | `/stores/{store_id}/marketing/campaigns/{campaign_id}/regenerate` | user | `regenerate_campaign` (backend/api/domains/stores/router.py:921) |
+| POST | `/stores/{store_id}/marketing/copy` | user | `copy_suggestions` (backend/api/domains/stores/router.py:969) |
+| GET | `/stores/{store_id}/marketing/platforms/{platform}/guide` | user | `platform_marketing_guide` (backend/api/domains/stores/router.py:1004) |
+| POST | `/stores/{store_id}/marketing/sidekick` | user | `sidekick_chat` (backend/api/domains/stores/router.py:984) |
+| POST | `/stores/{store_id}/marketing/video-script` | user | `video_script` (backend/api/domains/stores/router.py:1019) |
 | GET | `/stores/{store_id}/orders` | user | `store_orders` (backend/api/domains/store_orders/router.py:402) |
 | GET | `/stores/{store_id}/orders/summary` | user | `store_orders_summary` (backend/api/domains/store_orders/router.py:423) |
-| GET | `/stores/{store_id}/reviews` | optional | `get_store_reviews` (backend/api/domains/stores/router.py:638) |
-| POST | `/stores/{store_id}/share` | optional | `record_share` (backend/api/domains/stores/router.py:712) |
-| GET | `/stores/{store_id}/stats` | user | `get_store_stats` (backend/api/domains/stores/router.py:943) |
-| POST | `/stores/{store_id}/status` | user | `set_store_status` (backend/api/domains/stores/router.py:499) |
-| POST | `/stores/{store_id}/visit` | optional | `record_visit` (backend/api/domains/stores/router.py:656) |
+| GET | `/stores/{store_id}/reviews` | optional | `get_store_reviews` (backend/api/domains/stores/router.py:679) |
+| POST | `/stores/{store_id}/share` | optional | `record_share` (backend/api/domains/stores/router.py:753) |
+| GET | `/stores/{store_id}/stats` | user | `get_store_stats` (backend/api/domains/stores/router.py:1049) |
+| POST | `/stores/{store_id}/status` | user | `set_store_status` (backend/api/domains/stores/router.py:540) |
+| POST | `/stores/{store_id}/visit` | optional | `record_visit` (backend/api/domains/stores/router.py:697) |
 | POST | `/stt/assemblyai-token` | user | `assemblyai_token` (backend/api/routers/stt.py:275) |
 | POST | `/stt/deepgram-token` | user | `deepgram_token` (backend/api/routers/stt.py:183) |
 | POST | `/stt/transcribe` | user | `transcribe` (backend/api/routers/stt.py:76) |
@@ -656,6 +660,7 @@ Counts: admin 94, optional 7, public 72, token 6, user 220.
 - `categories.py` — A store's category: one of BROKA's top-level categories.
 - `insights.py` — What a store owner actually needs to know — the store dashboard's data.
 - `marketing.py` — The AI Marketing Studio: campaign configuration, platform-specific content generation, saved drafts, tracked links and measured attribution.
+- `marketing_sidekick.py` — The AI Marketing Sidekick: practical marketing guidance for a seller's own store, and the guided tools that turn advice into action.
 - `media.py` — Store Media — small abstraction over Store.logo_url / Store.photos.
 - `naming.py` — Store link names: the `clanix` in https://broka.co.ke/store/clanix.
 - `opening_hours.py` — Structured opening hours for a physical store.
@@ -1018,7 +1023,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-182 files in `backend/tests/`.
+183 files in `backend/tests/`.
 
 - `test_admin_additions.py` — Admin additions: SMS cost hook, timeseries, detail reads, users search.
 - `test_admin_alerts.py` — Admin alerts: event-driven creation, dedup, transitions, SSE smoke.
@@ -1114,6 +1119,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_listing_stock.py` — BROKA - Listing stock, sold-out listings, and deleting a listing Run: pytest backend/tests/test_listing_stock.py -v
 - `test_listings.py` — BROKA - Listings Endpoint Tests Run: pytest backend/tests/test_listings.py -v
 - `test_log_redaction.py` — Ordinary logs must not become a second store of credentials or receipts.
+- `test_marketing_sidekick.py` — The AI Marketing Sidekick, platform playbooks, video scripts and Meta Ads guidance.
 - `test_media_assets.py` — Image assets: processing, storage, upload, and what listings and stores do with them (Online Stores phase 1).
 - `test_media_cleanup.py` — Uploads nothing ever used are removed; everything else is kept.
 - `test_media_hardening.py` — Image processing and the media backfill under hostile or broken input.
@@ -1407,6 +1413,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `data/store_cart.dart` — A store's cart, kept on the phone.
 - `data/store_share.dart` — Sharing a store's link.
 - `domain/kenya_locations.dart` — Kenya's 47 counties and their subcounties, for location pickers.
+- `domain/models/marketing_sidekick.dart` — BROKA — AI Marketing Sidekick models.
 - `domain/models/store.dart` — BROKA — Store domain model
 - `domain/models/store_billing.dart` — BROKA — Store billing domain model
 - `domain/models/store_campaign.dart` — BROKA — AI Marketing Studio models
@@ -1684,6 +1691,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `listing_publish_test.dart` — Publishing a listing from the sell wizard (LISTING_POSTING_REVIEW.md).
 - `listing_search_test.dart` — Home's search: listings only, and the bugs the old SearchDelegate had.
 - `listing_unavailable_test.dart` — A listing a buyer marked unavailable (2026-11-12, backend listings/sold_out.py): it was out of every list, the seller's own dashboard inclu…
+- `marketing_sidekick_test.dart` — The Marketing Studio's four areas, driven through the real repository and fake transport.
 - `marketing_studio_test.dart` — The Marketing Studio's last step: a generated poster leaves the phone through the share sheet, and the server hears about it once - as a sa…
 - `menu_test.dart` — The Menu tab (formerly Profile), and the Profile and Settings screens it opens.
 - `message_sync_test.dart` — The offline sync on the phone (MessageSyncService, 2026-11-12).
