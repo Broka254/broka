@@ -14,6 +14,18 @@ import 'package:flutter/foundation.dart';
 
 typedef MarketingAssetImage = ({String? thumb, String? medium, String? large});
 
+/// A KES amount with thousands separators, so a budget reads as money rather
+/// than a raw number. Used by the ads plan and its summary.
+String kesLabel(int amount) {
+  final digits = amount.abs().toString();
+  final grouped = StringBuffer();
+  for (var i = 0; i < digits.length; i++) {
+    if (i > 0 && (digits.length - i) % 3 == 0) grouped.write(',');
+    grouped.write(digits[i]);
+  }
+  return '${amount < 0 ? '-' : ''}KES $grouped';
+}
+
 MarketingAssetImage? _imageFrom(Object? value) {
   if (value is! Map) return null;
   return (
@@ -343,35 +355,80 @@ class AdsObjectiveOption {
   final String label;
   final String when;
 
-  const AdsObjectiveOption(
-      {required this.value, required this.label, this.when = ''});
+  /// True for objectives whose optimisation depends on conversion tracking the
+  /// BROKA storefront does not have. The screen says so instead of implying it.
+  final bool needsTracking;
+
+  const AdsObjectiveOption({
+    required this.value,
+    required this.label,
+    this.when = '',
+    this.needsTracking = false,
+  });
 
   static AdsObjectiveOption fromJson(Map<String, dynamic> json) =>
       AdsObjectiveOption(
         value: json['value'] as String? ?? '',
         label: json['label'] as String? ?? '',
         when: json['when'] as String? ?? '',
+        needsTracking: json['needs_tracking'] as bool? ?? false,
       );
 }
 
+/// The seller's advertising budget, or the honest absence of one.
+///
+/// [specified] is true only when the seller typed the amount. BROKA never
+/// derives a budget from a product's price, so an unspecified budget keeps
+/// null amounts and a null total rather than a made-up recommendation.
 class AdsBudget {
-  final int dailyKes;
+  final bool specified;
+  final int? dailyKes;
+  final int? totalKes;
   final int trialDays;
-  final int totalKes;
   final String note;
 
   const AdsBudget({
-    required this.dailyKes,
+    this.specified = false,
+    this.dailyKes,
+    this.totalKes,
     this.trialDays = 5,
-    this.totalKes = 0,
     this.note = '',
   });
 
+  String? get dailyLabel => dailyKes == null ? null : kesLabel(dailyKes!);
+
+  String? get totalLabel => totalKes == null ? null : kesLabel(totalKes!);
+
   static AdsBudget fromJson(Map<String, dynamic> json) => AdsBudget(
-        dailyKes: (json['daily_kes'] as num?)?.toInt() ?? 0,
+        specified: json['specified'] as bool? ?? false,
+        dailyKes: (json['daily_kes'] as num?)?.toInt(),
+        totalKes: (json['total_kes'] as num?)?.toInt(),
         trialDays: (json['trial_days'] as num?)?.toInt() ?? 5,
-        totalKes: (json['total_kes'] as num?)?.toInt() ?? 0,
         note: json['note'] as String? ?? '',
+      );
+}
+
+/// What Meta can and cannot measure for this store. BROKA has no pixel or
+/// Conversions API connection, so [websitePurchasesMeasured] is false.
+class AdsTracking {
+  final bool websitePurchasesMeasured;
+  final bool setupRequired;
+  final String summary;
+  final List<String> steps;
+
+  const AdsTracking({
+    this.websitePurchasesMeasured = false,
+    this.setupRequired = true,
+    this.summary = '',
+    this.steps = const [],
+  });
+
+  static AdsTracking fromJson(Map<String, dynamic> json) => AdsTracking(
+        websitePurchasesMeasured:
+            json['website_purchases_measured'] as bool? ?? false,
+        setupRequired: json['setup_required'] as bool? ?? true,
+        summary: json['summary'] as String? ?? '',
+        steps: _strings(json['steps']),
       );
 }
 
@@ -412,6 +469,7 @@ class AdsPlan {
   final String audience;
   final String location;
   final AdsBudget budget;
+  final AdsTracking tracking;
   final List<AdsStage> stages;
   final String managerUrl;
   final bool campaignCreated;
@@ -426,7 +484,8 @@ class AdsPlan {
     this.objectiveOptions = const [],
     this.audience = '',
     this.location = '',
-    this.budget = const AdsBudget(dailyKes: 0),
+    this.budget = const AdsBudget(),
+    this.tracking = const AdsTracking(),
     this.stages = const [],
     this.managerUrl = '',
     this.campaignCreated = false,
@@ -449,7 +508,11 @@ class AdsPlan {
         budget: json['budget'] is Map
             ? AdsBudget.fromJson(
                 (json['budget'] as Map).cast<String, dynamic>())
-            : const AdsBudget(dailyKes: 0),
+            : const AdsBudget(),
+        tracking: json['tracking'] is Map
+            ? AdsTracking.fromJson(
+                (json['tracking'] as Map).cast<String, dynamic>())
+            : const AdsTracking(),
         stages: [
           for (final s in json['stages'] as List? ?? const [])
             if (s is Map) AdsStage.fromJson(s.cast<String, dynamic>()),
