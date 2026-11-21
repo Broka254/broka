@@ -175,6 +175,7 @@ if _settings.is_test:
     store_name_check_limiter = _make_limiter("store_name_check", limit=1000, window_seconds=60)
     store_counter_limiter    = _make_limiter("store_counter",    limit=1000, window_seconds=60)
     marketing_generation_limiter = _make_limiter("marketing_generate", limit=1000, window_seconds=3600)
+    marketing_sidekick_limiter   = _make_limiter("marketing_sidekick", limit=1000, window_seconds=3600)
     marketing_event_limiter      = _make_limiter("marketing_event", limit=1000, window_seconds=60)
     listing_create_limiter       = _make_limiter("listing_create",     limit=1000, window_seconds=3600)
     listing_create_daily_limiter = _make_limiter("listing_create_day", limit=100000, window_seconds=86400)
@@ -261,6 +262,12 @@ ai_chat_limiter  = _make_limiter("ai_chat",  limit=20, window_seconds=60)
 # campaign work and bounded for everyone else. Share/download events are
 # cheap but still caller-controlled, so they get their own ceiling.
 marketing_generation_limiter = _make_limiter("marketing_generate", limit=10, window_seconds=3600)
+# The Sidekick is a conversation, not a campaign: a seller may ask several
+# follow-up questions while working out what to post, and each answer is a
+# paid provider call. 40 an hour covers a real planning session without
+# letting a script spend the month's model budget. Keyed by the signed-in
+# owner, never by anything in the body.
+marketing_sidekick_limiter   = _make_limiter("marketing_sidekick", limit=40, window_seconds=3600)
 marketing_event_limiter      = _make_limiter("marketing_event", limit=120, window_seconds=60)
 
 # Zeno-drafted SMS to the other party in a thread
